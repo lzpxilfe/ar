@@ -1746,11 +1746,34 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         progress.show()
         # Run viewshed for each point
         temp_outputs = []
-        # [v1.5.19] Iron Hand: Force results to full DEM extent at every single step
-        ext = dem_layer.extent()
-        # GDAL PROJWIN format: [xmin, ymax, xmax, ymin]
-        projwin = [ext.xMinimum(), ext.yMaximum(), ext.xMaximum(), ext.yMinimum()]
-        target_extent = f"{ext.xMinimum()},{ext.yMinimum()},{ext.xMaximum()},{ext.yMaximum()}"
+        # [v1.5.65] Smart Analysis Extent Optimization
+        # Instead of using the FULL DEM extent (which can be massive), 
+        # use an extent that covers all observer points + max_dist.
+        
+        # 1. Calculate bounding box of all points in DEM CRS
+        total_obs_extent = QgsRectangle()
+        total_obs_extent.setMinimal()
+        
+        for pt, p_crs in points:
+            pt_dem = self.transform_point(pt, p_crs, dem_layer.crs())
+            total_obs_extent.combineExtentWith(pt_dem.x(), pt_dem.y())
+        
+        # 2. Expand by max_dist
+        smart_ext = QgsRectangle(
+            total_obs_extent.xMinimum() - max_dist,
+            total_obs_extent.yMinimum() - max_dist,
+            total_obs_extent.xMaximum() + max_dist,
+            total_obs_extent.yMaximum() + max_dist
+        )
+        
+        # 3. Intersect with DEM extent to stay within bounds
+        dem_ext = dem_layer.extent()
+        final_ext = smart_ext.intersect(dem_ext)
+        
+        if final_ext.isEmpty(): # Fallback to dem_ext if something went wrong
+            final_ext = dem_ext
+            
+        target_extent = f"{final_ext.xMinimum()},{final_ext.yMinimum()},{final_ext.xMaximum()},{final_ext.yMaximum()}"
         res = dem_layer.rasterUnitsPerPixelX()
 
         for i, (point, p_crs) in enumerate(points):
