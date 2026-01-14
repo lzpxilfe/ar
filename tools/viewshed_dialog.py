@@ -531,20 +531,22 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     
     def set_line_from_tool(self, points, is_closed=False):
         """Set a user-drawn line for line viewshed analysis"""
-            # Store the drawn line points and closure state
-            self.drawn_line_points = points
-            self.is_line_closed = is_closed
-            self.observer_point = points[0]
-            
-            # [v1.5.85] Maintain vertex visibility on the map
-            self.point_marker.reset(QgsWkbTypes.LineGeometry)
-            for pt in points:
-                self.point_marker.addPoint(pt)
-            if is_closed:
-                self.point_marker.addPoint(points[0])
-            
-            self.lblSelectedPoint.setText(f"선택된 경로: {len(points)}개 정점 {'(폐곡선)' if is_closed else '(개곡선)'}")
-            self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
+        if not points: return
+        
+        # Store the drawn line points and closure state
+        self.drawn_line_points = points
+        self.is_line_closed = is_closed
+        self.observer_point = points[0]
+        
+        # [v1.5.85] Maintain vertex visibility on the map
+        self.point_marker.reset(QgsWkbTypes.LineGeometry)
+        for pt in points:
+            self.point_marker.addPoint(pt)
+        if is_closed:
+            self.point_marker.addPoint(points[0])
+        
+        self.lblSelectedPoint.setText(f"선택된 경로: {len(points)}개 정점 {'(폐곡선)' if is_closed else '(개곡선)'}")
+        self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
     
     def cleanup_temp_files(self, file_paths):
         """Safely remove temporary processing files"""
