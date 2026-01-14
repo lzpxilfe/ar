@@ -1823,25 +1823,45 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 
                 num_viewsheds = len(temp_outputs)
                 
-                # Step 1: Convert all viewsheds to binary (255 -> 1, else -> 0)
+                # Step 1: Convert all viewsheds to binary (255 -> 1, else -> 0) AND expand to DEM extent
                 binary_outputs = []
                 for idx, vs_path in enumerate(temp_outputs):
                     progress.setValue(idx)
+                    progress.setLabelText(f"이진 변환 및 확장 중 ({idx+1}/{len(temp_outputs)})...")
                     QtWidgets.QApplication.processEvents()
                     if progress.wasCanceled():
                         break
                     
                     bin_path = os.path.join(tempfile.gettempdir(), f'archt_bin_{idx}_{uuid.uuid4().hex[:8]}.tif')
+                    full_bin_path = os.path.join(tempfile.gettempdir(), f'archt_fullbin_{idx}_{uuid.uuid4().hex[:8]}.tif')
                     try:
+                        # Step 1a: Convert to binary
                         processing.run("gdal:rastercalculator", {
                             'INPUT_A': vs_path,
                             'BAND_A': 1,
                             'FORMULA': '(A == 255) * 1',
-                            'RTYPE': 1,  # Int16 - small and fast
+                            'RTYPE': 1,  # Int16
                             'OUTPUT': bin_path
                         })
+                        
+                        # Step 1b: Expand to full DEM extent with NoData=0 (so invisible areas = 0, not NoData)
                         if os.path.exists(bin_path):
-                            binary_outputs.append(bin_path)
+                            processing.run("gdal:warpreproject", {
+                                'INPUT': bin_path,
+                                'TARGET_EXTENT': target_extent,
+                                'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
+                                'NODATA': 0,  # Key: NoData becomes 0 so it doesn't break the sum
+                                'TARGET_RESOLUTION': res,
+                                'RESAMPLING': 0,  # Nearest Neighbor
+                                'DATA_TYPE': 1,   # Int16
+                                'OUTPUT': full_bin_path
+                            })
+                            if os.path.exists(full_bin_path):
+                                binary_outputs.append(full_bin_path)
+                                try: os.remove(bin_path)
+                                except: pass
+                            else:
+                                binary_outputs.append(bin_path)  # Fallback to non-expanded
                     except Exception as e:
                         print(f"Binary conversion failed for {idx}: {e}")
                         continue
