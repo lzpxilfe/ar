@@ -1817,130 +1817,102 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if len(temp_outputs) == 1:
                 shutil.copy(temp_outputs[0], final_output)
             else:
-                # Bit-flag Based Cumulative Viewshed (A + (B>0)*2^idx)
-                progress.setLabelText("결과 통합 중 (비트맵 합산)...")
+                # [v1.5.62] SIMPLIFIED: Use gdal rasteradd/merge for faster cumulative summation
+                progress.setLabelText("결과 통합 중 (래스터 합산)...")
+                QtWidgets.QApplication.processEvents()
+                
                 num_viewsheds = len(temp_outputs)
                 
-                # Point limit for bit-flags (max 31 to fit in 32-bit int)
-                if num_viewsheds > 31:
-                    self.iface.messageBar().pushMessage("경고", "관측점이 31개를 초과하여 상위 점들은 합산되지 않을 수 있습니다.", level=1)
-                
-                # Initialize accumulator with first viewshed (bit 0 = 1)
-                acc_raster = os.path.join(tempfile.gettempdir(), f'archt_acc_0_{uuid.uuid4().hex[:8]}.tif')
-                
-                try:
-                    # [v1.5.22] Use warpreproject for extent expansion, NOT translate
-                    temp_acc = os.path.join(tempfile.gettempdir(), f'archt_acc_init_{uuid.uuid4().hex[:8]}.tif')
-                    processing.run("gdal:rastercalculator", {
-                        'INPUT_A': temp_outputs[0],
-                        'BAND_A': 1,
-                        'FORMULA': '(A < 0) * -9999 + (A >= 0) * (A == 255) * 1.0',
-                        'EXTENT': target_extent,
-                        'RTYPE': 5, # Float32
-                        'OUTPUT': temp_acc
-                    })
-                    processing.run("gdal:warpreproject", {
-                        'INPUT': temp_acc,
-                        'TARGET_EXTENT': target_extent,
-                        'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                        'NODATA': -9999,
-                        'TARGET_RESOLUTION': res,
-                        'RESAMPLING': 0,
-                        'DATA_TYPE': 5,
-                        'OUTPUT': acc_raster
-                    })
-                except Exception as e:
-                    # Fallback: warp directly
-                    processing.run("gdal:warpreproject", {
-                        'INPUT': temp_outputs[0],
-                        'TARGET_EXTENT': target_extent,
-                        'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                        'NODATA': -9999,
-                        'TARGET_RESOLUTION': res,
-                        'RESAMPLING': 0,
-                        'DATA_TYPE': 5,
-                        'OUTPUT': acc_raster
-                    })
-                
-                if not os.path.exists(acc_raster):
-                    raise Exception("합산 초기 결과 파일이 생성되지 않았습니다")
+                # Step 1: Convert all viewsheds to binary (255 -> 1, else -> 0)
+                binary_outputs = []
+                for idx, vs_path in enumerate(temp_outputs):
+                    progress.setValue(idx)
+                    QtWidgets.QApplication.processEvents()
+                    if progress.wasCanceled():
+                        break
                     
-                temp_outputs.append(acc_raster)
-                
-                # Use only the original viewshed outputs for merging
-                viewshed_results = temp_outputs[:num_viewsheds]
-                
-                for idx in range(1, min(len(viewshed_results), 31)):
-                    next_raster = viewshed_results[idx]
-                    sum_output = os.path.join(tempfile.gettempdir(), f'archt_sum_{idx}_{uuid.uuid4().hex[:8]}.tif')
-                    
-                    # Bit-flag logic: Result = A + (B>0) * 2^idx
-                    weight = 2 ** idx
-                    
+                    bin_path = os.path.join(tempfile.gettempdir(), f'archt_bin_{idx}_{uuid.uuid4().hex[:8]}.tif')
                     try:
-                        # Improved Venn-preserving formula:
-                        # 1. If both A and B are NoData (-9999), result is -9999.
-                        # 2. Otherwise, treat NoData as 0 and sum flags.
-                        formula = (
-                            f'( (A < 0) * (B < 0) * -9999 ) + '
-                            f'( logical_and(A >= 0, A < 9999) * A + (B == 255) * {weight} ) * '
-                            f'( 1 - logical_and(A < 0, B < 0) )'
-                        )
-                        
-                        # [v1.5.22] Iron Hand: Use warpreproject for extent expansion
-                        temp_sum = os.path.join(tempfile.gettempdir(), f'archt_sum_tmp_{idx}_{uuid.uuid4().hex[:8]}.tif')
-                        result = processing.run("gdal:rastercalculator", {
-                            'INPUT_A': acc_raster,
+                        processing.run("gdal:rastercalculator", {
+                            'INPUT_A': vs_path,
                             'BAND_A': 1,
-                            'INPUT_B': next_raster,
-                            'BAND_B': 1,
-                            'FORMULA': formula,
-                            'EXTENT': target_extent,
-                            'RTYPE': 5, # Float32
-                            'OUTPUT': temp_sum
+                            'FORMULA': '(A == 255) * 1',
+                            'RTYPE': 1,  # Int16 - small and fast
+                            'OUTPUT': bin_path
                         })
-                        actual_tmp = result.get('OUTPUT', temp_sum) if result else temp_sum
-                        
-                        processing.run("gdal:warpreproject", {
-                            'INPUT': actual_tmp,
-                            'TARGET_EXTENT': target_extent,
-                            'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                            'NODATA': -9999,
-                            'TARGET_RESOLUTION': res,
-                            'RESAMPLING': 0,
-                            'DATA_TYPE': 5,
-                            'OUTPUT': sum_output
-                        })
-                        
-                        if os.path.exists(sum_output):
-                            acc_raster = sum_output
-                            temp_outputs.append(acc_raster)
-                        else:
-                            print(f"Warning: Output {idx} not found")
-                            continue
-                    except Exception as ex:
-                        print(f"Error in rastercalculator {idx}: {ex}")
+                        if os.path.exists(bin_path):
+                            binary_outputs.append(bin_path)
+                    except Exception as e:
+                        print(f"Binary conversion failed for {idx}: {e}")
                         continue
                 
-                if not os.path.exists(acc_raster):
-                    raise Exception(f"누적 합산 파일이 존재하지 않습니다: {acc_raster}")
+                if not binary_outputs:
+                    raise Exception("이진 변환 실패")
+                
+                # Step 2: Use rasteralgebra to sum all binaries in one go
+                progress.setLabelText(f"최종 합산 중 ({len(binary_outputs)}개 래스터)...")
+                QtWidgets.QApplication.processEvents()
+                
+                if len(binary_outputs) == 1:
+                    shutil.copy(binary_outputs[0], final_output)
+                else:
+                    # Use gdal:merge with PCT_FIRST off (sums overlapping values)
+                    # Build formula dynamically: A + B + C + ...
+                    letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
                     
-                # [v1.5.21] REAL FINAL FIX: Use warpreproject, NOT translate!
-                # gdal:translate can only CLIP, not EXPAND. warpreproject can add NoData padding.
-                try:
-                    processing.run("gdal:warpreproject", {
-                        'INPUT': acc_raster,
-                        'TARGET_EXTENT': target_extent,
-                        'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                        'NODATA': -9999,
-                        'TARGET_RESOLUTION': res,
-                        'RESAMPLING': 0,  # Nearest Neighbor
-                        'DATA_TYPE': 5,   # Float32
-                        'OUTPUT': final_output
-                    })
-                except Exception as e:
-                    print(f"Final warp failed: {e}")
-                    shutil.copy(acc_raster, final_output)
+                    if len(binary_outputs) <= 26:
+                        # Direct formula approach for small counts
+                        formula_parts = [letters[i] for i in range(len(binary_outputs))]
+                        formula = ' + '.join(formula_parts)
+                        
+                        calc_params = {'FORMULA': formula, 'RTYPE': 1, 'OUTPUT': final_output}
+                        for i, bp in enumerate(binary_outputs):
+                            calc_params[f'INPUT_{letters[i]}'] = bp
+                            calc_params[f'BAND_{letters[i]}'] = 1
+                        
+                        try:
+                            processing.run("gdal:rastercalculator", calc_params)
+                        except Exception as e:
+                            print(f"Multi-raster formula failed: {e}")
+                            # Fallback: sequential pairwise sum
+                            acc = binary_outputs[0]
+                            for i in range(1, len(binary_outputs)):
+                                QtWidgets.QApplication.processEvents()
+                                tmp_out = os.path.join(tempfile.gettempdir(), f'archt_acc_{i}_{uuid.uuid4().hex[:8]}.tif')
+                                processing.run("gdal:rastercalculator", {
+                                    'INPUT_A': acc, 'BAND_A': 1,
+                                    'INPUT_B': binary_outputs[i], 'BAND_B': 1,
+                                    'FORMULA': 'A + B',
+                                    'RTYPE': 1,
+                                    'OUTPUT': tmp_out
+                                })
+                                if os.path.exists(tmp_out):
+                                    acc = tmp_out
+                            shutil.copy(acc, final_output)
+                    else:
+                        # Sequential for large counts
+                        acc = binary_outputs[0]
+                        for i in range(1, len(binary_outputs)):
+                            progress.setValue(i)
+                            QtWidgets.QApplication.processEvents()
+                            if progress.wasCanceled():
+                                break
+                            tmp_out = os.path.join(tempfile.gettempdir(), f'archt_acc_{i}_{uuid.uuid4().hex[:8]}.tif')
+                            processing.run("gdal:rastercalculator", {
+                                'INPUT_A': acc, 'BAND_A': 1,
+                                'INPUT_B': binary_outputs[i], 'BAND_B': 1,
+                                'FORMULA': 'A + B',
+                                'RTYPE': 1,
+                                'OUTPUT': tmp_out
+                            })
+                            if os.path.exists(tmp_out):
+                                acc = tmp_out
+                        shutil.copy(acc, final_output)
+                
+                # Clean up binary temps
+                for bp in binary_outputs:
+                    try: os.remove(bp)
+                    except: pass
     
             
             
