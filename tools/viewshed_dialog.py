@@ -136,26 +136,21 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.spinRefraction.setToolTip("대기 굴절 계수 (Refraction Coefficient)\n보통 0.13 사용 (표준 대기 상태)")
         self.spinRefraction.setEnabled(self.chkRefraction.isChecked())
         
-        # Try to find the layout containing chkRefraction and add the spinbox
-        if self.chkRefraction.parent():
-            layout = self.chkRefraction.parent().layout()
-            if layout:
-                idx = layout.indexOf(self.chkRefraction)
-                if idx >= 0:
-                    layout.insertWidget(idx + 1, self.spinRefraction)
-                    # [v1.5.95] Explicit scientific basis labels
-                    self.lblScienceBasis = QtWidgets.QLabel(self)
-                    self.lblScienceBasis.setText("<font size='2' color='#444'><b>[근거]</b> 곡률: h'=h-d²/2R | 굴절: k=0.13(표준)</font>")
-                    self.lblScienceBasis.setToolTip("지구 곡률 보정(R=6,371km) 및 대기 굴절(k) 보정 공식입니다.")
-                    layout.addWidget(self.lblScienceBasis)
+        # [v1.5.96] Correctly inject Refraction UI into QGridLayout
+        if hasattr(self, 'gridLayout_2'):
+            layout = self.gridLayout_2
+            # Move chkRefraction to col 0 (original was colspan 2)
+            layout.removeWidget(self.chkRefraction)
+            layout.addWidget(self.chkRefraction, 5, 0)
+            # Add spinbox to col 1
+            layout.addWidget(self.spinRefraction, 5, 1)
             
-            # [v1.5.95] Add scientific basis label
+            # Add scientific basis label to a new row
             self.lblScienceHelp = QtWidgets.QLabel(self)
-            self.lblScienceHelp.setText("<font size='2' color='#555'>💡 h' = h - (1-k)d²/2R (k=0.13)</font>")
-            self.lblScienceHelp.setToolTip("지구 곡률 및 대기 굴절 보정 공식 (R=6,371km)")
-            if layout:
-                layout.addWidget(self.lblScienceHelp)
-        
+            self.lblScienceHelp.setText("<font size='2' color='#444'><b>[근거]</b> 곡률: h'=h-d²/2R | 굴절: k=0.13(표준)</font>")
+            self.lblScienceHelp.setToolTip("지구 곡률 보정(R=6,371km) 및 대기 굴절(k) 보정 공식입니다.")
+            layout.addWidget(self.lblScienceHelp, 6, 0, 1, 2)
+            
         self.chkRefraction.toggled.connect(self.spinRefraction.setEnabled)
         
         # [v1.5.90] Code-level UI overrides for terminology and defaults
