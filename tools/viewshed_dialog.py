@@ -531,24 +531,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     
     def set_line_from_tool(self, points, is_closed=False):
         """Set a user-drawn line for line viewshed analysis"""
-        if len(points) >= 2:
             # Store the drawn line points and closure state
             self.drawn_line_points = points
             self.is_line_closed = is_closed
             self.observer_point = points[0]
             
-            # Visualize the line (using appropriate geometry for closed loops)
+            # [v1.5.85] Maintain vertex visibility on the map
+            self.point_marker.reset(QgsWkbTypes.LineGeometry)
+            for pt in points:
+                self.point_marker.addPoint(pt)
             if is_closed:
-                self.point_marker.reset(QgsWkbTypes.LineGeometry)
-                for pt in points:
-                    self.point_marker.addPoint(pt)
-                self.point_marker.addPoint(points[0]) # Close the loop
-            else:
-                self.point_marker.reset(QgsWkbTypes.LineGeometry)
-                for pt in points:
-                    self.point_marker.addPoint(pt)
+                self.point_marker.addPoint(points[0])
             
-            self.lblSelectedPoint.setText(f"{'폐곡선' if is_closed else '선'} 입력됨: {len(points)}개 점")
+            self.lblSelectedPoint.setText(f"선택된 경로: {len(points)}개 정점 {'(폐곡선)' if is_closed else '(개곡선)'}")
             self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
     
     def cleanup_temp_files(self, file_paths):
@@ -1642,12 +1637,33 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.show()
             return
 
-        # Limit points to avoid crash
-        MAX_POINTS = 50
-        if len(points) > MAX_POINTS:
-            self.iface.messageBar().pushMessage("알림", f"관측점이 너무 많아 {MAX_POINTS}개로 제한하여 분석합니다.", level=1)
-            step = len(points) // MAX_POINTS
-            points = points[::step][:MAX_POINTS]
+        # [v1.5.85] Robust point management for cumulative analysis
+        total_needed = len(points)
+        MAX_POINTS = 50 
+        
+        if total_needed > MAX_POINTS:
+            from qgis.PyQt.QtWidgets import QMessageBox
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("관측점 개수 경고")
+            msg.setText(f"⚠️ 전체 분석에 {total_needed}개의 관측점이 포함되어 있습니다.\n"
+                       f"성능을 위해 기본적으로 {MAX_POINTS}개로 제한됩니다.")
+            msg.setInformativeText(f"분석 시간이 매우 오래 걸릴 수 있습니다.\n"
+                                  f"{MAX_POINTS}개로 축소하여 진행하시겠습니까?\n\n"
+                                  f"(Yes: {MAX_POINTS}개로 축소, No: 전체 진행, Cancel: 취소)")
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Yes)
+            
+            res_msg = msg.exec_()
+            if res_msg == QMessageBox.Cancel:
+                self.show()
+                return
+            elif res_msg == QMessageBox.Yes:
+                step = len(points) // MAX_POINTS
+                points = points[::step][:MAX_POINTS]
+                self.iface.messageBar().pushMessage("알림", f"관측점이 {len(points)}개로 샘플링되었습니다.", level=1)
+            else:
+                self.iface.messageBar().pushMessage("경고", f"{total_needed}개 전체 점에 대해 분석을 시작합니다. QGIS가 일시적으로 응답하지 않을 수 있습니다.", level=1)
 
         # Setup progress dialog
         progress = QtWidgets.QProgressDialog("다중점 가시권 분석 중...", "취소", 0, len(points), self)
