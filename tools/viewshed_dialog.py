@@ -1643,22 +1643,27 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 c_row = (target_ymax - pt_dem.y()) / dem_yres
                 rad_pix = max_dist / dem_xres
                 
-                # Circular mask for THIS observer
+                # Circular mask for THIS observer (still needed for final boundary)
                 point_mask = ((c_full - c_col)**2 + (r_full - c_row)**2 <= rad_pix**2)
-                circular_mask |= point_mask # Building union for NoData finalization
+                circular_mask |= point_mask 
                 
-                # Grid Alignment Check (Warp output should already match t_height, t_width)
+                # Grid Alignment Check
                 v_h, v_w = vs_data.shape
                 h_overlap = min(target_height, v_h)
                 w_overlap = min(target_width, v_w)
                 
-                # Robust Visibility Detection: Not 0, Not NoData
-                vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5) & point_mask[:h_overlap, :w_overlap]
+                # Robust Visibility Detection
+                # [v1.6.03] In Union Mode, rely on GDAL's native output (already masked by distance)
+                # to avoid clipping due to slight grid misalignments.
+                if union_mode:
+                    vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5)
+                else:
+                    vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5) & point_mask[:h_overlap, :w_overlap]
+                
                 if vs_nodata is not None:
                     vis_mask &= (vs_data[:h_overlap, :w_overlap] != vs_nodata)
                 
                 if union_mode:
-                    # Binary Union: Set to 1 if visible (Logical OR)
                     cumulative[:h_overlap, :w_overlap][vis_mask] = 1
                 else:
                     cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add

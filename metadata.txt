@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.0
 description=「지식은 전유물이 아닙니다」— 고고학자와 문화유산 연구자를 위한 종합 분석 도구
-version=1.6.02
+version=1.6.03
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
