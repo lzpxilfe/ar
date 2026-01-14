@@ -1849,65 +1849,44 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 if not binary_outputs:
                     raise Exception("이진 변환 실패")
                 
-                # Step 2: Use rasteralgebra to sum all binaries in one go
+                # Step 2: Sequential pairwise sum (most reliable approach)
                 progress.setLabelText(f"최종 합산 중 ({len(binary_outputs)}개 래스터)...")
                 QtWidgets.QApplication.processEvents()
                 
                 if len(binary_outputs) == 1:
                     shutil.copy(binary_outputs[0], final_output)
                 else:
-                    # Use gdal:merge with PCT_FIRST off (sums overlapping values)
-                    # Build formula dynamically: A + B + C + ...
-                    letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                    
-                    if len(binary_outputs) <= 26:
-                        # Direct formula approach for small counts
-                        formula_parts = [letters[i] for i in range(len(binary_outputs))]
-                        formula = ' + '.join(formula_parts)
+                    # Sequential pairwise sum: A + B, then result + C, etc.
+                    acc = binary_outputs[0]
+                    for i in range(1, len(binary_outputs)):
+                        progress.setValue(i)
+                        progress.setLabelText(f"합산 중 ({i+1}/{len(binary_outputs)})...")
+                        QtWidgets.QApplication.processEvents()
+                        if progress.wasCanceled():
+                            break
                         
-                        calc_params = {'FORMULA': formula, 'RTYPE': 1, 'OUTPUT': final_output}
-                        for i, bp in enumerate(binary_outputs):
-                            calc_params[f'INPUT_{letters[i]}'] = bp
-                            calc_params[f'BAND_{letters[i]}'] = 1
-                        
+                        tmp_out = os.path.join(tempfile.gettempdir(), f'archt_sum_{i}_{uuid.uuid4().hex[:8]}.tif')
                         try:
-                            processing.run("gdal:rastercalculator", calc_params)
-                        except Exception as e:
-                            print(f"Multi-raster formula failed: {e}")
-                            # Fallback: sequential pairwise sum
-                            acc = binary_outputs[0]
-                            for i in range(1, len(binary_outputs)):
-                                QtWidgets.QApplication.processEvents()
-                                tmp_out = os.path.join(tempfile.gettempdir(), f'archt_acc_{i}_{uuid.uuid4().hex[:8]}.tif')
-                                processing.run("gdal:rastercalculator", {
-                                    'INPUT_A': acc, 'BAND_A': 1,
-                                    'INPUT_B': binary_outputs[i], 'BAND_B': 1,
-                                    'FORMULA': 'A + B',
-                                    'RTYPE': 1,
-                                    'OUTPUT': tmp_out
-                                })
-                                if os.path.exists(tmp_out):
-                                    acc = tmp_out
-                            shutil.copy(acc, final_output)
-                    else:
-                        # Sequential for large counts
-                        acc = binary_outputs[0]
-                        for i in range(1, len(binary_outputs)):
-                            progress.setValue(i)
-                            QtWidgets.QApplication.processEvents()
-                            if progress.wasCanceled():
-                                break
-                            tmp_out = os.path.join(tempfile.gettempdir(), f'archt_acc_{i}_{uuid.uuid4().hex[:8]}.tif')
                             processing.run("gdal:rastercalculator", {
                                 'INPUT_A': acc, 'BAND_A': 1,
                                 'INPUT_B': binary_outputs[i], 'BAND_B': 1,
                                 'FORMULA': 'A + B',
-                                'RTYPE': 1,
+                                'RTYPE': 1,  # Int16
                                 'OUTPUT': tmp_out
                             })
                             if os.path.exists(tmp_out):
                                 acc = tmp_out
+                            else:
+                                print(f"Warning: Sum output {i} not created")
+                        except Exception as e:
+                            print(f"Sum {i} failed: {e}")
+                            continue
+                    
+                    # Copy final accumulated result
+                    if os.path.exists(acc):
                         shutil.copy(acc, final_output)
+                    else:
+                        raise Exception("누적 합산 결과 파일이 생성되지 않았습니다")
                 
                 # Clean up binary temps
                 for bp in binary_outputs:
