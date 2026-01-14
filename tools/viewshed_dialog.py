@@ -1504,161 +1504,131 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             print(f"Profiler error: {e}")
     
-    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points=None, max_dist=None, is_count_mode=False):
+    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points=None, max_dist=None, is_count_mode=False, custom_extent=None):
         """Combine multiple viewshed rasters using NumPy for reliable cumulative analysis.
         
         Args:
-            dem_layer: QgsRasterLayer - Reference DEM for extent and resolution
-            viewshed_files: list of file paths to individual viewshed results
-            output_path: str - Output path for combined raster
-            observer_points: list of (QgsPointXY, crs) tuples - Observer point locations
-            max_dist: float - Maximum viewshed distance in meters
-            is_count_mode: bool - If True, values are simple counts (0, 1, 2...). 
-                                  If False, values are bit-flags (1, 2, 4...).
+            dem_layer: QgsRasterLayer - Reference DEM for resolution/projection
+            viewshed_files: list of paths to individual results
+            output_path: str - Target path for result
+            observer_points: list of points for circular masking
+            max_dist: radius for circular masking
+            is_count_mode: True for count, False for bit-flags
+            custom_extent: QgsRectangle for Smart Extent processing
             
         Returns:
             bool: True if successful
         """
         try:
-            # Open DEM to get reference extent and resolution
+            # Open DEM to get base parameters
             dem_ds = gdal.Open(dem_layer.source(), gdal.GA_ReadOnly)
-            if not dem_ds:
-                raise Exception("DEM 래스터를 열 수 없습니다")
+            if not dem_ds: return False
             
-            dem_gt = dem_ds.GetGeoTransform()  # (xmin, xres, 0, ymax, 0, -yres)
+            dem_gt = dem_ds.GetGeoTransform()
             dem_proj = dem_ds.GetProjection()
-            dem_width = dem_ds.RasterXSize
-            dem_height = dem_ds.RasterYSize
-            
-            # Calculate DEM extent
-            dem_xmin = dem_gt[0]
-            dem_xmax = dem_gt[0] + dem_width * dem_gt[1]
-            dem_ymax = dem_gt[3]
-            dem_ymin = dem_gt[3] + dem_height * dem_gt[5]  # Note: yres is negative
             dem_xres = dem_gt[1]
             dem_yres = abs(dem_gt[5])
             
-            # Initialize cumulative array with zeros (no visibility)
-            # Using float32 to handle large bit flags and NoData
-            cumulative = np.zeros((dem_height, dem_width), dtype=np.float32)
-            # Track which pixels have been analyzed (at least one viewshed covers them)
-            coverage = np.zeros((dem_height, dem_width), dtype=np.bool_)
-            
-            # Create circular mask for all observer points (union of circles)
-            circular_mask = np.zeros((dem_height, dem_width), dtype=np.bool_)
-            
-            if observer_points and max_dist:
-                for pt, pt_crs in observer_points:
-                    # Transform point to DEM CRS if needed
-                    if pt_crs != dem_layer.crs():
-                        transform = QgsCoordinateTransform(pt_crs, dem_layer.crs(), QgsProject.instance())
-                        pt_dem = transform.transform(pt)
-                    else:
-                        pt_dem = pt
-                    
-                    # Calculate pixel coordinates for center
-                    center_col = (pt_dem.x() - dem_xmin) / dem_xres
-                    center_row = (dem_ymax - pt_dem.y()) / dem_yres
-                    radius_pixels = max_dist / dem_xres  # Assume square pixels
-                    
-                    # Create coordinate grids for distance calculation
-                    rows, cols = np.ogrid[:dem_height, :dem_width]
-                    dist_sq = (cols - center_col)**2 + (rows - center_row)**2
-                    
-                    # Mark pixels within radius as part of circular mask
-                    circular_mask |= (dist_sq <= radius_pixels**2)
+            # 1. Determine Target Grid (Full or Smart)
+            if custom_extent:
+                # Use Smart Extent boundaries snapped to DEM grid
+                target_xmin = dem_gt[0] + math.floor((custom_extent.xMinimum() - dem_gt[0]) / dem_xres) * dem_xres
+                target_ymax = dem_gt[3] - math.floor((dem_gt[3] - custom_extent.yMaximum()) / dem_yres) * dem_yres
+                target_xmax = dem_gt[0] + math.ceil((custom_extent.xMaximum() - dem_gt[0]) / dem_xres) * dem_xres
+                target_ymin = dem_gt[3] - math.ceil((dem_gt[3] - custom_extent.yMinimum()) / dem_yres) * dem_yres
+                
+                target_width = int(round((target_xmax - target_xmin) / dem_xres))
+                target_height = int(round((target_ymax - target_ymin) / dem_yres))
             else:
-                # No circular masking - use full extent
-                circular_mask[:] = True
+                target_width = dem_ds.RasterXSize
+                target_height = dem_ds.RasterYSize
+                target_xmin, target_ymax = dem_gt[0], dem_gt[3]
+                target_xmax = target_xmin + target_width * dem_xres
+                target_ymin = target_ymax - target_height * dem_yres
+
+            # Initialize Arrays
+            cumulative = np.zeros((target_height, target_width), dtype=np.float32)
+            coverage = np.zeros((target_height, target_width), dtype=np.bool_)
+            circular_mask = np.zeros((target_height, target_width), dtype=np.bool_)
             
-            # Process each viewshed
+            # 2. Create optimized Circular Mask (Union of all observer circles)
+            if observer_points and max_dist:
+                rows, cols = np.ogrid[:target_height, :target_width]
+                for pt, pt_crs in observer_points:
+                    pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
+                    center_col = (pt_dem.x() - target_xmin) / dem_xres
+                    center_row = (target_ymax - pt_dem.y()) / dem_yres
+                    radius_pixels = max_dist / dem_xres
+                    circular_mask |= ((cols - center_col)**2 + (rows - center_row)**2 <= radius_pixels**2)
+            else:
+                circular_mask[:] = True
+                
+            # 3. Process each viewshed using NumPy Vectorization
             for idx, vs_file in enumerate(viewshed_files):
-                if not os.path.exists(vs_file):
-                    continue
-                    
+                if not os.path.exists(vs_file): continue
+                
                 vs_ds = gdal.Open(vs_file, gdal.GA_ReadOnly)
-                if not vs_ds:
-                    continue
+                if not vs_ds: continue
                 
                 vs_gt = vs_ds.GetGeoTransform()
-                vs_width = vs_ds.RasterXSize
-                vs_height = vs_ds.RasterYSize
                 vs_band = vs_ds.GetRasterBand(1)
                 vs_nodata = vs_band.GetNoDataValue()
                 vs_data = vs_band.ReadAsArray().astype(np.float32)
                 
-                # Calculate viewshed extent
-                vs_xmin = vs_gt[0]
-                vs_ymax = vs_gt[3]
-                vs_xres = vs_gt[1]
-                vs_yres = abs(vs_gt[5])
+                # Weighing: Count (1) or Bit-Flag (1, 2, 4...)
+                val_to_add = 1 if is_count_mode else (2 ** min(idx, 30))
                 
-                # Calculate offset in DEM array coordinates
-                # Pixel position = (coord - origin) / resolution
-                col_offset = int(round((vs_xmin - dem_xmin) / dem_xres))
-                row_offset = int(round((dem_ymax - vs_ymax) / dem_yres))
+                # Calculate offsets relative to Target Grid
+                col_offset = int(round((vs_gt[0] - target_xmin) / dem_xres))
+                row_offset = int(round((target_ymax - vs_gt[3]) / dem_yres))
                 
-                # Value for this viewshed
-                if is_count_mode:
-                    val_to_add = 1
-                else:
-                    val_to_add = 2 ** min(idx, 30)  # Cap at 30 to prevent overflow
-
+                vs_height, vs_width = vs_data.shape
                 
-                # Copy visible pixels to cumulative array
-                for row in range(vs_height):
-                    dem_row = row_offset + row
-                    if dem_row < 0 or dem_row >= dem_height:
-                        continue
-                    for col in range(vs_width):
-                        dem_col = col_offset + col
-                        if dem_col < 0 or dem_col >= dem_width:
-                            continue
-                        
-                        # Skip if outside circular mask
-                        if not circular_mask[dem_row, dem_col]:
-                            continue
-                        
-                        val = vs_data[row, col]
-                        # Skip NoData
-                        if vs_nodata is not None and val == vs_nodata:
-                            continue
-                        if np.isnan(val) or val < 0:
-                            continue
-                            
-                        # Mark as covered
-                        coverage[dem_row, dem_col] = True
-                        
-                        # gdal:viewshed output: 255 = visible, 0 = not visible
-                        if val == 255:
-                            cumulative[dem_row, dem_col] += val_to_add
-
+                # Slicing with boundary safety
+                r_start, r_end = max(0, row_offset), min(target_height, row_offset + vs_height)
+                c_start, c_end = max(0, col_offset), min(target_width, col_offset + vs_width)
                 
-                vs_ds = None  # Close dataset
-            
-            # Set NoData for uncovered areas AND areas outside circular mask
+                vs_r_start = max(0, -row_offset)
+                vs_c_start = max(0, -col_offset)
+                vs_r_end = vs_r_start + (r_end - r_start)
+                vs_c_end = vs_c_start + (c_end - c_start)
+                
+                if r_end > r_start and c_end > c_start:
+                    target_slice = cumulative[r_start:r_end, c_start:c_end]
+                    vs_slice = vs_data[vs_r_start:vs_r_end, vs_c_start:vs_c_end]
+                    mask_slice = circular_mask[r_start:r_end, c_start:c_end]
+                    
+                    # Visible (255) AND inside circle
+                    visible_mask = (vs_slice == 255) & mask_slice
+                    if vs_nodata is not None: visible_mask &= (vs_slice != vs_nodata)
+                    
+                    target_slice[visible_mask] += val_to_add
+                    coverage[r_start:r_end, c_start:c_end] |= mask_slice
+                
+                vs_ds = None 
+                
+            # 4. Final NoData masking
             nodata_value = -9999
             cumulative[~coverage] = nodata_value
             cumulative[~circular_mask] = nodata_value
             
-            # Create output GeoTIFF
+            # Save Result
             driver = gdal.GetDriverByName('GTiff')
-            out_ds = driver.Create(output_path, dem_width, dem_height, 1, gdal.GDT_Float32)
-            out_ds.SetGeoTransform(dem_gt)
+            out_ds = driver.Create(output_path, target_width, target_height, 1, gdal.GDT_Float32)
+            out_ds.SetGeoTransform((target_xmin, dem_xres, 0, target_ymax, 0, -dem_yres))
             out_ds.SetProjection(dem_proj)
-            
-            out_band = out_ds.GetRasterBand(1)
-            out_band.SetNoDataValue(nodata_value)
-            out_band.WriteArray(cumulative)
-            out_band.FlushCache()
-            
-            out_ds = None  # Close and save
+            band = out_ds.GetRasterBand(1)
+            band.SetNoDataValue(nodata_value)
+            band.WriteArray(cumulative)
+            out_ds = None
             dem_ds = None
-            
             return True
             
         except Exception as e:
             print(f"NumPy viewshed combine error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
             return False
     
     def run_multi_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction):
@@ -1849,106 +1819,31 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{int(time.time())}.tif')
         
         try:
-            if len(temp_outputs) == 1:
-                shutil.copy(temp_outputs[0], final_output)
-            else:
-                # [v1.5.62] SIMPLIFIED: Use gdal rasteradd/merge for faster cumulative summation
-                progress.setLabelText("결과 통합 중 (래스터 합산)...")
+                # [v1.5.68] Optimized Cumulative Viewshed Merge
+                # Restore Bit-Flags and Circular Masking using NumPy
+                progress.setLabelText("결과 통합 중 (고성능 NumPy)...")
                 QtWidgets.QApplication.processEvents()
                 
-                num_viewsheds = len(temp_outputs)
+                # Use is_count_mode check if we want simple counts, 
+                # but user requested bit-flags for archaeological analysis.
+                is_count = self.chkCountOnly.isChecked() if hasattr(self, 'chkCountOnly') else False
                 
-                # Step 1: Convert all viewsheds to binary (255 -> 1, else -> 0) AND expand to DEM extent
-                binary_outputs = []
-                for idx, vs_path in enumerate(temp_outputs):
-                    progress.setValue(idx)
-                    progress.setLabelText(f"이진 변환 및 확장 중 ({idx+1}/{len(temp_outputs)})...")
-                    QtWidgets.QApplication.processEvents()
-                    if progress.wasCanceled():
-                        break
-                    
-                    bin_path = os.path.join(tempfile.gettempdir(), f'archt_bin_{idx}_{uuid.uuid4().hex[:8]}.tif')
-                    full_bin_path = os.path.join(tempfile.gettempdir(), f'archt_fullbin_{idx}_{uuid.uuid4().hex[:8]}.tif')
-                    try:
-                        # Step 1a: Convert to binary
-                        processing.run("gdal:rastercalculator", {
-                            'INPUT_A': vs_path,
-                            'BAND_A': 1,
-                            'FORMULA': '(A == 255) * 1',
-                            'RTYPE': 1,  # Int16
-                            'OUTPUT': bin_path
-                        })
-                        
-                        # Step 1b: Expand to full DEM extent with NoData=0 (so invisible areas = 0, not NoData)
-                        if os.path.exists(bin_path):
-                            processing.run("gdal:warpreproject", {
-                                'INPUT': bin_path,
-                                'TARGET_EXTENT': target_extent,
-                                'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                                'NODATA': 0,  # Key: NoData becomes 0 so it doesn't break the sum
-                                'TARGET_RESOLUTION': res,
-                                'RESAMPLING': 0,  # Nearest Neighbor
-                                'DATA_TYPE': 1,   # Int16
-                                'OUTPUT': full_bin_path
-                            })
-                            if os.path.exists(full_bin_path):
-                                binary_outputs.append(full_bin_path)
-                                temp_outputs.append(full_bin_path) # Track for cleanup
-                                try: os.remove(bin_path)
-                                except: pass
-                            else:
-                                binary_outputs.append(bin_path)
-                                temp_outputs.append(bin_path) # Track for cleanup
-                    except Exception as e:
-                        print(f"Binary conversion failed for {idx}: {e}")
-                        continue
+                success = self.combine_viewsheds_numpy(
+                    dem_layer=dem_layer,
+                    viewshed_files=temp_outputs,
+                    output_path=final_output,
+                    observer_points=points, # List of (pt, crs)
+                    max_dist=max_dist,
+                    is_count_mode=is_count,
+                    custom_extent=final_ext # Smart Extent
+                )
                 
-                if not binary_outputs:
-                    raise Exception("이진 변환 실패")
+                if not success or not os.path.exists(final_output):
+                    raise Exception("누적 가시권 결과 생성 실패 (NumPy)")
                 
-                # Step 2: Sequential pairwise sum (most reliable approach)
-                progress.setLabelText(f"최종 합산 중 ({len(binary_outputs)}개 래스터)...")
-                QtWidgets.QApplication.processEvents()
-                
-                if len(binary_outputs) == 1:
-                    shutil.copy(binary_outputs[0], final_output)
-                else:
-                    # Sequential pairwise sum: A + B, then result + C, etc.
-                    acc = binary_outputs[0]
-                    for i in range(1, len(binary_outputs)):
-                        progress.setValue(i)
-                        progress.setLabelText(f"합산 중 ({i+1}/{len(binary_outputs)})...")
-                        QtWidgets.QApplication.processEvents()
-                        if progress.wasCanceled():
-                            break
-                        
-                        tmp_out = os.path.join(tempfile.gettempdir(), f'archt_sum_{i}_{uuid.uuid4().hex[:8]}.tif')
-                        try:
-                            processing.run("gdal:rastercalculator", {
-                                'INPUT_A': acc, 'BAND_A': 1,
-                                'INPUT_B': binary_outputs[i], 'BAND_B': 1,
-                                'FORMULA': 'A + B',
-                                'RTYPE': 1,  # Int16
-                                'OUTPUT': tmp_out
-                            })
-                            if os.path.exists(tmp_out):
-                                acc = tmp_out
-                                temp_outputs.append(acc) # Track for cleanup
-                            else:
-                                print(f"Warning: Sum output {i} not created")
-                        except Exception as e:
-                            print(f"Sum {i} failed: {e}")
-                            continue
-                    
-                    # Copy final accumulated result
-                    if os.path.exists(acc):
-                        shutil.copy(acc, final_output)
-                    else:
-                        raise Exception("누적 합산 결과 파일이 생성되지 않았습니다")
-                
-                # Clean up binary temps
-                for bp in binary_outputs:
-                    try: os.remove(bp)
+                # Clean up intermediate vs files
+                for vs in temp_outputs:
+                    try: os.remove(vs)
                     except: pass
     
             
