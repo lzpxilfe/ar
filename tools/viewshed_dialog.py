@@ -1910,6 +1910,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             is_line_mode = self.radioLineViewshed.isChecked()
             is_union_mode = is_line_mode or len(points) > 20
             
+            mode_str = "합집합(Union)" if is_union_mode else "누적(Cumulative)"
+            self.iface.messageBar().pushMessage("분석 시작", f"모드: {mode_str}, 점 개수: {len(points)}", level=0)
+            
             # viewshed_results is already [(idx, filepath), ...] as needed by combine_viewsheds_numpy
             success = self.combine_viewsheds_numpy(
                 dem_layer=dem_layer,
