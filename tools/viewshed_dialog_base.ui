@@ -362,6 +362,77 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="groupLineOptions">
+     <property name="title">
+      <string>경로 분석 옵션 (Line/Multi/Buffer 모드용)</string>
+     </property>
+     <property name="enabled">
+      <bool>false</bool>
+     </property>
+     <layout class="QFormLayout" name="formLayout_Line">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblLineInterval">
+        <property name="text">
+         <string>관측점 샘플링 간격(m):</string>
+        </property>
+        <property name="toolTip">
+         <string>라인을 따라 관측점을 생성할 간격입니다. 작을수록 정밀하지만 느려집니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="spinLineInterval">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>10000</number>
+        </property>
+        <property name="value">
+         <number>50</number>
+        </property>
+        <property name="suffix">
+         <string>m</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblLineMaxPoints">
+        <property name="text">
+         <string>최대 분석 점수:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="spinLineMaxPoints">
+        <property name="maximum">
+         <number>10000</number>
+        </property>
+        <property name="value">
+         <number>200</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblLayerHint">
+     <property name="text">
+      <string>💡 레이어 선택 시: 포인트 피처의 위치에서 가시권을 계산합니다.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+     <property name="styleSheet">
+      <string>color: #666; font-style: italic; padding: 3px;</string>
+     </property>
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QGroupBox" name="groupMultiOptions">
      <property name="title">
       <string>고급 옵션 (다중 분석용)</string>
