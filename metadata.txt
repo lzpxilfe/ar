@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.0
 description=한국 고고학자 및 문화유산 연구자를 위한 종합 분석 도구
-version=1.5.60
+version=1.5.61
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3

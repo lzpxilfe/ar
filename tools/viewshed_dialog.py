@@ -1750,7 +1750,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         ext = dem_layer.extent()
         # GDAL PROJWIN format: [xmin, ymax, xmax, ymin]
         projwin = [ext.xMinimum(), ext.yMaximum(), ext.xMaximum(), ext.yMinimum()]
-        target_extent = f"{ext.xMinimum()},{ext.xMaximum()},{ext.yMinimum()},{ext.yMaximum()}"
+        target_extent = f"{ext.xMinimum()},{ext.yMinimum()},{ext.xMaximum()},{ext.yMaximum()}"
         res = dem_layer.rasterUnitsPerPixelX()
 
         for i, (point, p_crs) in enumerate(points):
