@@ -1775,6 +1775,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
         target_extent = f"{final_ext.xMinimum()},{final_ext.yMinimum()},{final_ext.xMaximum()},{final_ext.yMaximum()}"
         res = dem_layer.rasterUnitsPerPixelX()
+        
+        # Diagnostic Log
+        self.iface.messageBar().pushMessage(
+            "분석 정보", 
+            f"스마트 범위 적용: {final_ext.width():.1f}x{final_ext.height():.1f}m (전체 대비 { (final_ext.area()/dem_ext.area())*100:.1f}%)", 
+            level=0
+        )
 
         for i, (point, p_crs) in enumerate(points):
             if progress.wasCanceled():
@@ -1796,8 +1803,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     'OBSERVER_HEIGHT': obs_height,
                     'TARGET_HEIGHT': tgt_height,
                     'MAX_DISTANCE': max_dist,
+                    'CC': 1 if curvature else 0,  # Curvature Correction
+                    'IV': 0.13 if refraction else 0, # Refraction
                     'OUTPUT': output_raw
                 })
+                
+                if os.path.exists(output_raw):
+                    temp_outputs.append(output_raw) # Track for cleanup
                 
                 if os.path.exists(output_raw):
                     # [v1.5.19] Expander 1: Warp raw viewshed to FULL landscape immediately
@@ -1881,10 +1893,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                             })
                             if os.path.exists(full_bin_path):
                                 binary_outputs.append(full_bin_path)
+                                temp_outputs.append(full_bin_path) # Track for cleanup
                                 try: os.remove(bin_path)
                                 except: pass
                             else:
-                                binary_outputs.append(bin_path)  # Fallback to non-expanded
+                                binary_outputs.append(bin_path)
+                                temp_outputs.append(bin_path) # Track for cleanup
                     except Exception as e:
                         print(f"Binary conversion failed for {idx}: {e}")
                         continue
@@ -1919,6 +1933,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                             })
                             if os.path.exists(tmp_out):
                                 acc = tmp_out
+                                temp_outputs.append(acc) # Track for cleanup
                             else:
                                 print(f"Warning: Sum output {i} not created")
                         except Exception as e:
