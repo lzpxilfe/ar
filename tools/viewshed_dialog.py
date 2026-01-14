@@ -1667,7 +1667,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     vis_mask &= (vs_data[:h_overlap, :w_overlap] != vs_nodata)
                 
                 if union_mode:
-                    cumulative[:h_overlap, :w_overlap][vis_mask] = 1
+                    # Binary Union: Set to 255 if visible (Standard GDAL Viewshed Value)
+                    cumulative[:h_overlap, :w_overlap][vis_mask] = 255
                 else:
                     cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add
                     
