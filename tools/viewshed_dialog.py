@@ -1694,6 +1694,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             level=0
         )
 
+        temp_outputs = []
         viewshed_results = []
         for i, (point, p_crs) in enumerate(points):
             if progress.wasCanceled():
