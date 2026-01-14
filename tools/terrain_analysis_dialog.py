@@ -30,6 +30,7 @@ from qgis.core import (
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
 import processing
+from .utils import restore_ui_focus, push_message
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
 # No external plugins or libraries (like numpy, matplotlib) are required.
@@ -225,17 +226,19 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
     def run_analysis(self):
         dem_layer = self.cmbDemLayer.currentLayer()
         if not dem_layer:
-            self.iface.messageBar().pushMessage("오류", "DEM 래스터를 선택해주세요", level=2)
+            push_message(self.iface, "오류", "DEM 래스터를 선택해주세요", level=2)
+            restore_ui_focus(self)
             return
         
         has_any = any([self.chkSlope.isChecked(), self.chkAspect.isChecked(),
                        self.chkTRI.isChecked(), self.chkTPI.isChecked(), 
                        self.chkRoughness.isChecked(), self.chkSlopePosition.isChecked()])
         if not has_any:
-            self.iface.messageBar().pushMessage("오류", "분석 유형을 선택해주세요", level=2)
+            push_message(self.iface, "오류", "분석 유형을 선택해주세요", level=2)
+            restore_ui_focus(self)
             return
         
-        self.iface.messageBar().pushMessage("처리 중", "지형 분석 실행 중...", level=0)
+        push_message(self.iface, "처리 중", "지형 분석 실행 중...", level=0)
         self.hide()
         QtWidgets.QApplication.processEvents()
         
@@ -313,17 +316,19 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.run_slope_position_analysis(dem_source, slope_threshold, tpi_low, tpi_high, results)
             
             if results:
-                self.iface.messageBar().pushMessage("완료", f"분석 완료: {', '.join(results)}", level=0)
+                push_message(self.iface, "완료", f"분석 완료: {', '.join(results)}", level=0)
                 success = True
                 self.accept()
             else:
-                self.iface.messageBar().pushMessage("오류", "분석 결과가 없습니다.", level=2)
+                push_message(self.iface, "오류", "분석 결과가 없습니다.", level=2)
+                restore_ui_focus(self)
                 
         except Exception as e:
-            self.iface.messageBar().pushMessage("오류", f"처리 중 오류: {str(e)}", level=2)
+            push_message(self.iface, "오류", f"처리 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
         finally:
             if not success:
-                self.show()
+                restore_ui_focus(self)
     
     def run_tpi_analysis(self, dem_source, radius, threshold, results):
         """Run TPI analysis with user-specified radius and classification threshold

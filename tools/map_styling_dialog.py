@@ -35,6 +35,7 @@ from qgis.core import (
     QgsSingleBandGrayRenderer, QgsHillshadeRenderer, QgsContrastEnhancement,
     QgsRasterBandStats, QgsLayerTreeLayer
 )
+from .utils import restore_ui_focus, push_message
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'map_styling_dialog_base.ui'))
@@ -88,8 +89,10 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
         dem_layer = self.cmbDemLayer.currentLayer()
 
         if not source_layers and not (self.chkDemStyling.isChecked() and dem_layer):
-            QtWidgets.QMessageBox.warning(self, "오류", "시각화를 적용할 레이어를 선택해주세요.")
+            push_message(self.iface, "오류", "시각화를 적용할 레이어를 선택해주세요.", level=2)
+            restore_ui_focus(self)
             return
+
 
         try:
             results = []
@@ -161,15 +164,16 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
 
             # Final message
             if results:
-                self.iface.messageBar().pushMessage(
-                    "시각화 완료", f"통합 레이어가 생성되었습니다: {', '.join(results)}", level=0
-                )
+                push_message(self.iface, "시각화 완료", f"통합 레이어가 생성되었습니다: {', '.join(results)}", level=0)
                 self.accept()
             else:
-                QtWidgets.QMessageBox.information(self, "정보", "선택한 레이어들에서 해당하는 데이터를 찾을 수 없습니다.")
+                push_message(self.iface, "정보", "선택한 레이어들에서 해당하는 데이터를 찾을 수 없습니다.", level=1)
+                restore_ui_focus(self)
                 
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "오류", f"스타일 적용 중 오류: {str(e)}")
+            push_message(self.iface, "오류", f"스타일 적용 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
+
 
     def style_dem_background(self, source_raster):
         """Create a 3-layer styled background group from a single DEM"""

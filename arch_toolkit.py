@@ -15,7 +15,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from qgis.PyQt.QtCore import QSettings, QTranslator, qVersion, QCoreApplication, Qt
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMenu, QToolButton, QMessageBox
 
@@ -120,12 +120,14 @@ class ArchToolkit:
 
     def unload(self):
         # Remove from menu
-        for action in self.actions[:-1]:
+        for action in self.actions:
             self.iface.removePluginMenu(self.menu_name, action)
             
-        # Remove toolbar
+        # Remove toolbar cleanly from mainWindow
         if self.toolbar:
-            del self.toolbar
+            self.iface.mainWindow().removeToolBar(self.toolbar)
+            self.toolbar.deleteLater()
+            self.toolbar = None
 
     def run_dem_tool(self):
         try:

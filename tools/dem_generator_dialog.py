@@ -25,6 +25,7 @@ from qgis.PyQt.QtGui import QIcon
 import processing
 import time
 import tempfile
+from .utils import restore_ui_focus, push_message
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -217,7 +218,8 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         
         selected_codes = self.get_selected_layer_codes()
         if not selected_codes:
-            self.iface.messageBar().pushMessage("오류", "최소 하나의 레이어를 선택해주세요", level=2)
+            push_message(self.iface, "오류", "최소 하나의 레이어를 선택해주세요", level=2)
+            restore_ui_focus(self)
             return
         
         query = '"Layer" IN (' + ','.join([f"'{code}'" for code in selected_codes]) + ')'
@@ -238,16 +240,12 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
                     loaded_count += 1
                     
             except Exception as e:
-                self.iface.messageBar().pushMessage("경고", f"{os.path.basename(dxf_path)} 로드 실패", level=1)
+                push_message(self.iface, "경고", f"{os.path.basename(dxf_path)} 로드 실패", level=1)
         
         self.populate_layers()
         
         if loaded_count > 0:
-            self.iface.messageBar().pushMessage(
-                "성공", 
-                f"{loaded_count}개 DXF 로드 완료: 총 {total_features}개 피처", 
-                level=0
-            )
+            push_message(self.iface, "성공", f"{loaded_count}개 DXF 로드 완료: 총 {total_features}개 피처", level=0)
     
     def populate_scales(self):
         self.cmbScale.clear()
@@ -297,10 +295,12 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         pixel_size = self.spinPixelSize.value()
         
         if not selected_layers:
-            self.iface.messageBar().pushMessage("오류", "레이어를 체크해주세요", level=2)
+            push_message(self.iface, "오류", "레이어를 체크해주세요", level=2)
+            restore_ui_focus(self)
             return
         if not output_path:
-            self.iface.messageBar().pushMessage("오류", "출력 파일 경로를 지정해주세요", level=2)
+            push_message(self.iface, "오류", "출력 파일 경로를 지정해주세요", level=2)
+            restore_ui_focus(self)
             return
 
         method_name = self.cmbInterpolation.currentText()
@@ -323,9 +323,9 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         # Notify if bridge points were excluded
         excluded = len(selected_codes) - len(filtered_codes)
         if excluded > 0:
-            self.iface.messageBar().pushMessage("알림", f"교량/구조물 표고점 {excluded}개 유형 자동 제외됨", level=0)
+            push_message(self.iface, "알림", f"교량/구조물 표고점 {excluded}개 유형 자동 제외됨", level=0)
         
-        self.iface.messageBar().pushMessage("처리 중", f"{len(selected_layers)}개 레이어 병합 중...", level=0)
+        push_message(self.iface, "처리 중", f"{len(selected_layers)}개 레이어 병합 중...", level=0)
         self.hide()
         QtWidgets.QApplication.processEvents()
         
@@ -345,8 +345,8 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
                 merged_layer = selected_layers[0]
             
             if not merged_layer or not merged_layer.isValid():
-                self.iface.messageBar().pushMessage("오류", "레이어 병합에 실패했습니다.", level=2)
-                self.show()
+                push_message(self.iface, "오류", "레이어 병합에 실패했습니다.", level=2)
+                restore_ui_focus(self)
                 return
             
             # Step 2: Apply query filter
@@ -385,7 +385,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             if method_param is not None:
                 params['METHOD'] = method_param
             
-            self.iface.messageBar().pushMessage("처리 중", "TIN 보간 실행 중...", level=0)
+            push_message(self.iface, "처리 중", "TIN 보간 실행 중...", level=0)
             QtWidgets.QApplication.processEvents()
             
             # Step 4: Run TIN interpolation
@@ -394,15 +394,15 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             # Add result to map
             if result and os.path.exists(output_path):
                 self.iface.addRasterLayer(output_path, "생성된 DEM")
-                self.iface.messageBar().pushMessage("완료", f"DEM 생성 완료! ({len(selected_layers)}개 레이어 병합)", level=0)
+                push_message(self.iface, "완료", f"DEM 생성 완료! ({len(selected_layers)}개 레이어 병합)", level=0)
                 self.accept()
             else:
-                self.iface.messageBar().pushMessage("오류", "DEM이 생성되지 않았습니다.", level=2)
-                self.show()
+                push_message(self.iface, "오류", "DEM이 생성되지 않았습니다.", level=2)
+                restore_ui_focus(self)
             
         except Exception as e:
-            self.iface.messageBar().pushMessage("오류", f"처리 중 오류: {str(e)}", level=2)
-            self.show()
+            push_message(self.iface, "오류", f"처리 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
 
 
 

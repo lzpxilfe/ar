@@ -33,6 +33,7 @@ from qgis.core import (
     QgsLineSymbol, QgsSingleSymbolRenderer
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
+from .utils import restore_ui_focus, push_message
 
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -427,9 +428,9 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         """Start drawing profile line on map"""
         dem_layer = self.cmbDemLayer.currentLayer()
         if not dem_layer:
-            QMessageBox.warning(self, "오류", "DEM 래스터를 선택해주세요")
+            push_message(self.iface, "오류", "DEM 래스터를 선택해주세요", level=2)
+            restore_ui_focus(self)
             return
-        
         self.points = []
         self.rubber_band.reset()
         
@@ -438,9 +439,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self.map_tool = ProfileLineTool(self.canvas, self)
         self.canvas.setMapTool(self.map_tool)
         
-        self.iface.messageBar().pushMessage(
-            "지형 단면", "지도에서 시작점과 끝금을 클릭하세요 (2번)", level=0
-        )
+        push_message(self.iface, "지형 단면", "지도에서 시작점과 끝점을 클릭하세요 (2번)", level=0)
         self.hide()
     
     def add_point(self, point):
@@ -454,10 +453,9 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
     def calculate_profile(self):
         dem_layer = self.cmbDemLayer.currentLayer()
         if not dem_layer or len(self.points) < 2:
-            self.iface.messageBar().pushMessage("오류", "DEM 레이어가 선택되지 않았거나 점이 부족합니다.", level=2)
-            self.show()
+            push_message(self.iface, "오류", "DEM 레이어가 선택되지 않았거나 점이 부족합니다.", level=2)
+            restore_ui_focus(self)
             return
-        
         try:
             start = self.points[0]
             end = self.points[1]
@@ -466,11 +464,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             self.profile_data = []
             total_distance = start.distance(end)
             
-            self.iface.messageBar().pushMessage(
-                "단면 분석", 
-                f"시작점에서 끝점까지 {total_distance:.1f}m, {num_samples}개 샘플 추출 중...", 
-                level=0
-            )
+            push_message(self.iface, "단면 분석", f"시작점에서 끝점까지 {total_distance:.1f}m, {num_samples}개 샘플 추출 중...", level=0)
             
             valid_samples = 0
             for i in range(num_samples + 1):
@@ -515,25 +509,16 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.rubber_band.hide()
                 self.canvas.refresh()
                 
-                self.iface.messageBar().pushMessage(
-                    "단면 완료", 
-                    f"{valid_samples}개 유효 샘플 추출 완료!", 
-                    level=0
-                )
+                push_message(self.iface, "단면 완료", f"{valid_samples}개 유효 샘플 추출 완료!", level=0)
             else:
-                self.iface.messageBar().pushMessage(
-                    "경고", 
-                    "유효한 고도 데이터를 추출하지 못했습니다. DEM 범위를 확인하세요.", 
-                    level=1
-                )
+                push_message(self.iface, "경고", "유효한 고도 데이터를 추출하지 못했습니다. DEM 범위를 확인하세요.", level=1)
             
         except Exception as e:
-            self.iface.messageBar().pushMessage("오류", f"계산 실패: {str(e)}", level=2)
+            push_message(self.iface, "오류", f"계산 실패: {str(e)}", level=2)
         finally:
             if self.original_tool:
                 self.canvas.setMapTool(self.original_tool)
-            self.show()
-
+            restore_ui_focus(self)
     def get_or_create_profile_layer(self):
         """Get or create a memory layer to store profile lines"""
         layer_name = "Terrain Profile Lines"

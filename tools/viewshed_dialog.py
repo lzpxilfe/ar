@@ -37,9 +37,7 @@ from qgis.gui import (
 )
 from qgis.PyQt.QtGui import QTextDocument
 
-import processing
-import numpy as np
-from osgeo import gdal
+from .utils import transform_point, cleanup_files, restore_ui_focus, push_message
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -520,13 +518,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         return points_with_crs
 
-    def transform_point(self, point, src_crs, dest_crs):
-        """Transform point from source CRS to destination CRS"""
-        if src_crs == dest_crs:
-            return point
-        transform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
-        return transform.transform(point)
-
     def start_point_selection(self):
         """Start point or line selection on map depending on mode"""
         # NO project modification here!
@@ -634,15 +625,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lblSelectedPoint.setText(f"선택된 경로: {len(points)}개 정점 {'(폐곡선)' if is_closed else '(개곡선)'}")
         self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
     
-    def cleanup_temp_files(self, file_paths):
-        """Safely remove temporary processing files"""
-        for path in file_paths:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except Exception as e:
-                print(f"Cleanup error: {e}")
-    
     def run_analysis(self):
         """Run the selected viewshed analysis"""
         dem_layer = self.cmbDemLayer.currentLayer()
@@ -728,7 +710,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if pts: center, _ = pts[0]
 
         if not center:
-            self.iface.messageBar().pushMessage("오류", "중심점을 선택해주세요", level=2)
+            push_message(self.iface, "오류", "중심점을 선택해주세요", level=2)
+            restore_ui_focus(self)
             return
 
         # Transform to DEM CRS for accurate distance calculations
@@ -950,10 +933,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         """Run single point viewshed analysis with circular masking"""
         points_info = self.get_context_point_and_crs()
         if not points_info:
-            self.iface.messageBar().pushMessage("오류", "관측점을 선택해주세요", level=2)
-            self.show()
-            self.raise_()
-            self.activateWindow()
+            push_message(self.iface, "오류", "관측점을 선택해주세요", level=2)
+            restore_ui_focus(self)
             return
             
         # [v1.5.97] Hide dialog only when processing starts
@@ -1050,10 +1031,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 else:
                     raise Exception("결과 레이어 로드 실패")
         except Exception as e:
-            self.iface.messageBar().pushMessage("오류", f"분석 중 오류: {str(e)}", level=2)
-            self.show()
+            push_message(self.iface, "오류", f"분석 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
         finally:
-            self.cleanup_temp_files([raw_output])
+            cleanup_files([raw_output])
     
     def run_line_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run viewshed along a line/polygon perimeter"""
@@ -1129,8 +1110,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     points.append((pt.asPoint(), canvas_crs))
         
         if not points:
-            self.iface.messageBar().pushMessage("오류", "라인에서 포인트를 생성할 수 없습니다", level=2)
-            self.show()
+            push_message(self.iface, "오류", "라인에서 포인트를 생성할 수 없습니다", level=2)
+            restore_ui_focus(self)
             return
 
         # Unique run ID
@@ -1172,9 +1153,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.iface.messageBar().pushMessage("알림", f"관측점을 {max_limit}개로 제한하여 분석합니다.", level=1)
             else:
                 # Cancel
-                self.show()
-                self.raise_()
-                self.activateWindow()
+                restore_ui_focus(self)
                 return
 
         # [v1.5.97] Hide dialog only AFTER all warnings are cleared
@@ -1338,11 +1317,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 )
                 self.accept()
             else:
-                self.iface.messageBar().pushMessage("오류", "병합 결과 래스터 로드 실패", level=2)
-                self.show()
+                push_message(self.iface, "오류", "병합 결과 래스터 로드 실패", level=2)
+                restore_ui_focus(self)
         except Exception as e:
-            self.iface.messageBar().pushMessage("오류", f"통합 과정 오류: {str(e)}", level=2)
-            self.show()
+            push_message(self.iface, "오류", f"통합 과정 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
         finally:
             if 'progress' in locals():
                 progress.close()
@@ -1410,8 +1389,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 })
         
         if len(profile_data) < 2:
-            self.iface.messageBar().pushMessage("오류", "지형 데이터를 샘플링할 수 없습니다", level=2)
-            self.show()
+            push_message(self.iface, "오류", "지형 데이터를 샘플링할 수 없습니다", level=2)
+            restore_ui_focus(self)
             return
         
         # Observer and target elevations (with height added)
@@ -1737,10 +1716,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                                     points.append((pt, obs_layer.crs()))
         
         if not points or len(points) < 1:
-            self.iface.messageBar().pushMessage(
-                "오류", "관측점이 최소 1개 이상 필요합니다", level=2
-            )
-            self.show()
+            push_message(self.iface, "오류", "관측점이 최소 1개 이상 필요합니다", level=2)
+            restore_ui_focus(self)
             return
 
         # [v1.5.85] Robust point management for cumulative analysis
@@ -1899,9 +1876,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 raise Exception("누적 가시권 결과 생성 실패 (NumPy)")
             
             # Clean up intermediate vs files
-            for vs in temp_outputs:
-                try: os.remove(vs)
-                except: pass
+            cleanup_files(temp_outputs)
     
             
             
@@ -1933,15 +1908,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
                 self.accept()
             else:
-                self.iface.messageBar().pushMessage("오류", "결과 레이어 로드 실패", level=2)
-                self.show()
+                push_message(self.iface, "오류", "결과 레이어 로드 실패", level=2)
+                restore_ui_focus(self)
         except Exception as e:
-            self.iface.messageBar().pushMessage("오류", f"병합 중 오류: {str(e)}", level=2)
-            self.show()
+            push_message(self.iface, "오류", f"병합 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
         finally:
-            self.cleanup_temp_files(temp_outputs)
             if 'progress' in locals():
                 progress.close()
+            cleanup_files(temp_outputs)
     
     def apply_frequency_style(self, layer, max_count):
         """Apply a standard color ramp (Viridis-like) for frequency count analysis"""
