@@ -476,10 +476,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 markers = self.result_marker_map[lid]
                 for m in markers:
                     try:
-                        self.canvas.scene().removeItem(m) # For rubberbands, this is safer than reset() sometimes
-                    except:
-                        try: m.reset(QgsWkbTypes.PointGeometry)
-                        except: pass
+                        if m:
+                            m.hide() # Force hide first
+                            m.reset(QgsWkbTypes.PointGeometry) # Clear geometry
+                            if self.canvas and self.canvas.scene():
+                                self.canvas.scene().removeItem(m) # Remove from scene
+                    except Exception as e:
+                        print(f"Marker cleanup error: {e}")
                 del self.result_marker_map[lid]
                 
             # 2. Clean up Text Annotations (Labels) [v1.6.02]
