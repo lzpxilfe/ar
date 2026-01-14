@@ -2,43 +2,16 @@
 name=ArchToolkit
 qgisMinimumVersion=3.0
 description=한국 고고학자 및 문화유산 연구자를 위한 종합 분석 도구
-version=1.5.69
+version=1.5.70
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
 repository=https://github.com/lzpxilfe/ar.git
-license_v3=http://www.gnu.org/licenses/gpl-3.0.html
-
-about=ArchToolkit은 한국 고고학 연구 환경에 최적화된 다양한 분석 및 시각화 기능을 제공하는 QGIS 플러그인입니다.
-    
-    * 가시권 분석 (Viewshed Analysis)
-      - 단일/다중/라인 따라 가시권 분석
-      - 히구치(Higuchi) 거리대 적용 (근경/중경/원경)
-      - 가시선(Line of Sight) 분석
-    
-    * 도면 시각화 (Layer Styler)
-      - 수치지도(DXF) 도로/하천/건물 자동 분류 및 스타일링
-      - DEM 배경 3단 렌더링 (고도+그레이+음영)
-    
-    * DEM 자동 생성
-      - 등고선/포인트/브레이크라인을 이용한 고해상도 DEM 생성
-    
-    * 지형 단면 (Terrain Profile)
-      - 고해상도 그래프 및 CSV/JPG 내보내기
-
-tracker=https://github.com/balguljang2/ArchToolkit/issues
-repository=https://github.com/balguljang2/ArchToolkit
-homepage=https://github.com/balguljang2/ArchToolkit
-
-icon=icon.png
-experimental=True
-deprecated=False
-
+tracker=https://github.com/lzpxilfe/ar/issues
+homepage=https://github.com/lzpxilfe/ar
 category=Analysis
-tags=archaeology,dem,topography,고고학,수치지형도,등고선,지형분석,발굴조사,문화유산
-changelog=
-    1.5.24 - [Fix] 누적가시권 분석 NumPy/GDAL 기반 재구현: 잘림 현상 및 표시 오류 수정
-    0.9.11 - [Update] 지형분석 매개변수 조절 기능: TPI 반경/임계값, 지형분류 경사도/TPI 임계값 설정 가능
-    0.9.9 - [Update] 도면 시각화 도구 고도화: DEM 3중 스타일링 및 자동 그룹화 추가
-    0.9.8 - [Update] 도면 시각화 도구: 다중 레이어 병합 처리 및 건물 폴리곤화 강화
-    0.9.0 - [Major Update] 전문 지형 단면 도구 추가, 5종 지형 분석 및 지형 분류 기능 고도화, 시각화/내보내기 강화
+tags=archaeology,dem,topography,고고학,발굴
+icon=icon.png
+experimental=false
+deprecated=false
+about=ArchToolkit은 한국 고고학 연구 환경에 최적화된 다양한 분석 및 시각화 기능을 제공하는 QGIS 플러그인입니다. 가시권 분석, 도면 시각화, DEM 생성 등 다양한 기능을 제공합니다.
