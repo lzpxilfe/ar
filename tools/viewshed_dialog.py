@@ -1807,32 +1807,32 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{int(time.time())}.tif')
         
         try:
-                # [v1.5.68] Optimized Cumulative Viewshed Merge
-                # Restore Bit-Flags and Circular Masking using NumPy
-                progress.setLabelText("결과 통합 중 (고성능 NumPy)...")
-                QtWidgets.QApplication.processEvents()
-                
-                # Use is_count_mode check if we want simple counts, 
-                # but user requested bit-flags for archaeological analysis.
-                is_count = self.chkCountOnly.isChecked() if hasattr(self, 'chkCountOnly') else False
-                
-                success = self.combine_viewsheds_numpy(
-                    dem_layer=dem_layer,
-                    viewshed_files=temp_outputs,
-                    output_path=final_output,
-                    observer_points=points, # List of (pt, crs)
-                    max_dist=max_dist,
-                    is_count_mode=is_count,
-                    custom_extent=final_ext # Smart Extent
-                )
-                
-                if not success or not os.path.exists(final_output):
-                    raise Exception("누적 가시권 결과 생성 실패 (NumPy)")
-                
-                # Clean up intermediate vs files
-                for vs in temp_outputs:
-                    try: os.remove(vs)
-                    except: pass
+            # [v1.5.68] Optimized Cumulative Viewshed Merge
+            # Restore Bit-Flags and Circular Masking using NumPy
+            progress.setLabelText("결과 통합 중 (고성능 NumPy)...")
+            QtWidgets.QApplication.processEvents()
+            
+            # Use is_count_mode check if we want simple counts, 
+            # but user requested bit-flags for archaeological analysis.
+            is_count = self.chkCountOnly.isChecked() if hasattr(self, 'chkCountOnly') else False
+            
+            success = self.combine_viewsheds_numpy(
+                dem_layer=dem_layer,
+                viewshed_files=temp_outputs,
+                output_path=final_output,
+                observer_points=points, # List of (pt, crs)
+                max_dist=max_dist,
+                is_count_mode=is_count,
+                custom_extent=final_ext # Smart Extent
+            )
+            
+            if not success or not os.path.exists(final_output):
+                raise Exception("누적 가시권 결과 생성 실패 (NumPy)")
+            
+            # Clean up intermediate vs files
+            for vs in temp_outputs:
+                try: os.remove(vs)
+                except: pass
     
             
             
