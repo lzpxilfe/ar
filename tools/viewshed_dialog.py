@@ -671,15 +671,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         self.iface.messageBar().pushMessage("처리 중", "가시권 분석 실행 중...", level=0)
         
-        # 1. Automatically disable labels on the source layer if active
-        if self.radioFromLayer.isChecked():
-            obs_layer = self.cmbObserverLayer.currentLayer()
-            if obs_layer:
-                obs_layer.setLabelsEnabled(False)
-                obs_layer.triggerRepaint()
-        
-        self.hide()
-        QtWidgets.QApplication.processEvents()
+        # [v1.5.97] REMOVED global self.hide() from here. 
+        # It is now moved into each specialized run_* method to avoid freezes during warnings.
         
         try:
             if self.radioSinglePoint.isChecked():
@@ -959,7 +952,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if not points_info:
             self.iface.messageBar().pushMessage("오류", "관측점을 선택해주세요", level=2)
             self.show()
+            self.raise_()
+            self.activateWindow()
             return
+            
+        # [v1.5.97] Hide dialog only when processing starts
+        self.hide()
+        QtWidgets.QApplication.processEvents()
 
         point, src_crs = points_info[0] # Take first one for single viewshed
         
@@ -1149,31 +1148,28 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if total_needed > max_limit:
             cutoff_dist = max_limit * interval
             # Show warning dialog with specific numbers
-            from qgis.PyQt.QtWidgets import QMessageBox
-            msg = QMessageBox()
-            msg.setIcon(QMessageBox.Warning)
-            msg.setWindowTitle("관측점 개수 경고")
-            msg.setText(f"⚠️ 전체 분석에 {total_needed}개의 관측점이 필요하지만,\n"
-                       f"현재 최대 {max_limit}개로 제한되어 있습니다.\n\n"
-                       f"→ 이대로 진행하면 전체 경로 중 시작점에서 약 {cutoff_dist/1000:.1f}km 지점에서 분석이 중단(끊김)됩니다!")
-            msg.setInformativeText(f"💡 해결 방법:\n"
-                                  f"• 최대 분석 점수 제한을 {total_needed}개 이상으로 늘리거나\n"
-                                  f"• 샘플링 간격을 늘려 점 개수를 조절하세요.\n\n"
-                                  f"제한된 범위까지만 분석을 진행하시겠습니까?")
-            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-            msg.setDefaultButton(QMessageBox.No)
-            
-            if msg.exec_() == QMessageBox.No:
+            res_msg = msg.exec_()
+            if res_msg == QMessageBox.No:
+                # Proceed with ALL points (Slow)
+                self.iface.messageBar().pushMessage("경고", f"{total_needed}개 전체 점에 대해 분석을 시작합니다. 처리 중 QGIS가 응답하지 않을 수 있습니다.", level=1)
+            elif res_msg == QMessageBox.Yes:
+                # Proceed with limited points (Safe)
+                step = len(points) // max_limit
+                points = points[::step][:max_limit]
+                self.iface.messageBar().pushMessage("알림", f"관측점을 {max_limit}개로 제한하여 분석합니다.", level=1)
+            else:
+                # Cancel
                 self.show()
+                self.raise_()
+                self.activateWindow()
                 return
-            
-            # User chose to proceed - truncate points
-            step = len(points) // max_limit
-            points = points[::step][:max_limit]
-            self.iface.messageBar().pushMessage("알림", f"관측점을 {max_limit}개로 제한하여 분석합니다.", level=1)
+
+        # [v1.5.97] Hide dialog only AFTER all warnings are cleared
+        self.hide()
+        QtWidgets.QApplication.processEvents()
 
         # Setup progress dialog
-        progress = QtWidgets.QProgressDialog("가시권 분석 수행 중... (0%)", "취소", 0, len(points), self)
+        progress = QtWidgets.QProgressDialog("가시권 분석 수행 중...", "취소", 0, len(points), self)
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.show()
 
@@ -1753,13 +1749,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             res_msg = msg.exec_()
             if res_msg == QMessageBox.Cancel:
                 self.show()
+                self.raise_()
+                self.activateWindow()
                 return
             elif res_msg == QMessageBox.Yes:
                 step = len(points) // MAX_POINTS
                 points = points[::step][:MAX_POINTS]
                 self.iface.messageBar().pushMessage("알림", f"관측점이 {len(points)}개로 샘플링되었습니다.", level=1)
             else:
-                self.iface.messageBar().pushMessage("경고", f"{total_needed}개 전체 점에 대해 분석을 시작합니다. QGIS가 일시적으로 응답하지 않을 수 있습니다.", level=1)
+                self.iface.messageBar().pushMessage("경고", f"{total_needed}개 전체 점에 대해 분석을 시작합니다. 처리 중 QGIS가 응답하지 않을 수 있습니다.", level=1)
+
+        # [v1.5.97] Hide dialog ONLY after all warnings and user decisions
+        self.hide()
+        QtWidgets.QApplication.processEvents()
 
         # Setup progress dialog
         progress = QtWidgets.QProgressDialog("다중점 가시권 분석 중...", "취소", 0, len(points), self)
