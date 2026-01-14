@@ -1586,8 +1586,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     vs_slice = vs_data[vs_r_start:vs_r_end, vs_c_start:vs_c_end]
                     mask_slice = circular_mask[r_start:r_end, c_start:c_end]
                     
-                    # Visible (255) AND inside circle
-                    visible_mask = (vs_slice == 255) & mask_slice
+                    # Visible (usually 1 or 255) AND inside circle
+                    visible_mask = (vs_slice > 0) & mask_slice
                     if vs_nodata is not None: visible_mask &= (vs_slice != vs_nodata)
                     
                     target_slice[visible_mask] += val_to_add
