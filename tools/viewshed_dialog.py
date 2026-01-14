@@ -1655,9 +1655,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 h_overlap = min(target_height, v_h)
                 w_overlap = min(target_width, v_w)
                 
-                # Robust Visibility Detection
-                # [v1.6.03] In Union Mode, rely on GDAL's native output (already masked by distance)
-                # to avoid clipping due to slight grid misalignments.
+                # [v1.6.09] In Union Mode, we rely on GDAL's native distance clipping.
+                # We do NOT use point_mask to clip visibility, preventing grid-alignment bugs.
                 if union_mode:
                     vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5)
                 else:
@@ -1667,17 +1666,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     vis_mask &= (vs_data[:h_overlap, :w_overlap] != vs_nodata)
                 
                 if union_mode:
-                    # Binary Union: Set to 255 if visible (Standard GDAL Viewshed Value)
+                    # Set to 255 (Visible)
                     cumulative[:h_overlap, :w_overlap][vis_mask] = 255
                 else:
                     cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add
                     
                 vs_ds = None
             
-            # 4. Final NoData masking (Strictly outside of all circles)
-            # 4. Final NoData masking (Strictly outside of all circles)
-            nodata_value = -9999
-            cumulative[~circular_mask] = nodata_value
+            # 4. Final NoData masking
+            # [v1.6.09] CRITICAL: In Union Mode, skip final masking. 
+            # Circular_mask can be slightly misaligned with rasters, causing 'half-circle' clipping.
+            # Style (255=Green, 0=Transparent/Pink) will handle the aesthetics.
+            if not union_mode:
+                nodata_value = -9999
+                cumulative[~circular_mask] = nodata_value
             
             # Save Result
             driver = gdal.GetDriverByName('GTiff')
@@ -1770,7 +1772,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # [v1.5.85] Robust point management for cumulative analysis
         total_needed = len(points)
-        MAX_POINTS = 50 
+        MAX_POINTS = 500 
         
         if total_needed > MAX_POINTS:
             from qgis.PyQt.QtWidgets import QMessageBox
@@ -1816,8 +1818,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             total_obs_ext.combineExtentWith(pt_dem.x(), pt_dem.y())
         
         smart_ext = QgsRectangle(
-            total_obs_ext.xMinimum() - max_dist, total_obs_ext.yMinimum() - max_dist,
-            total_obs_ext.xMaximum() + max_dist, total_obs_ext.yMaximum() + max_dist
+            total_obs_ext.xMinimum() - max_dist * 1.2, total_obs_ext.yMinimum() - max_dist * 1.2,
+            total_obs_ext.xMaximum() + max_dist * 1.2, total_obs_ext.yMaximum() + max_dist * 1.2
         )
         final_ext = smart_ext.intersect(dem_layer.extent())
         if final_ext.isEmpty(): final_ext = dem_layer.extent()
