@@ -1539,15 +1539,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             coverage = np.zeros((target_height, target_width), dtype=np.bool_)
             circular_mask = np.zeros((target_height, target_width), dtype=np.bool_)
             
-            # 2. Create optimized Circular Mask (Union of all observer circles)
+            # 2. Pre-calculate the Union Circle Mask for final NoData clipping
             if observer_points and max_dist:
-                rows, cols = np.ogrid[:target_height, :target_width]
+                rows_grid, cols_grid = np.ogrid[:target_height, :target_width]
                 for pt, pt_crs in observer_points:
                     pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
-                    center_col = (pt_dem.x() - target_xmin) / dem_xres
-                    center_row = (target_ymax - pt_dem.y()) / dem_yres
-                    radius_pixels = max_dist / dem_xres
-                    circular_mask |= ((cols - center_col)**2 + (rows - center_row)**2 <= radius_pixels**2)
+                    c_col = (pt_dem.x() - target_xmin) / dem_xres
+                    c_row = (target_ymax - pt_dem.y()) / dem_yres
+                    rad_pix = max_dist / dem_xres
+                    circular_mask |= ((cols_grid - c_col)**2 + (rows_grid - c_row)**2 <= rad_pix**2)
             else:
                 circular_mask[:] = True
                 
@@ -1582,16 +1582,29 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_c_end = vs_c_start + (c_end - c_start)
                 
                 if r_end > r_start and c_end > c_start:
+                    # LOCAL MESHGRID for the slice (memory efficient and strict per-point)
+                    s_rows, s_cols = np.ogrid[r_start:r_end, c_start:c_end]
+                    
+                    # Get the observer point for THIS specific viewshed
+                    pt, pt_crs = observer_points[pt_idx]
+                    pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
+                    c_col = (pt_dem.x() - target_xmin) / dem_xres
+                    c_row = (target_ymax - pt_dem.y()) / dem_yres
+                    rad_pix = max_dist / dem_xres
+                    
+                    # Strict mask for THIS observer only
+                    point_mask = ((s_cols - c_col)**2 + (s_rows - c_row)**2 <= rad_pix**2)
+                    
                     target_slice = cumulative[r_start:r_end, c_start:c_end]
                     vs_slice = vs_data[vs_r_start:vs_r_end, vs_c_start:vs_c_end]
-                    mask_slice = circular_mask[r_start:r_end, c_start:c_end]
                     
-                    # Visible (usually 1 or 255) AND inside circle
-                    visible_mask = (vs_slice > 0) & mask_slice
-                    if vs_nodata is not None: visible_mask &= (vs_slice != vs_nodata)
+                    # Visible check: > 0.5 to ignore Warp noise, within ITS OWN circle
+                    visible_mask = (vs_slice > 0.5) & point_mask
+                    if vs_nodata is not None: 
+                        visible_mask &= (vs_slice != vs_nodata)
                     
                     target_slice[visible_mask] += val_to_add
-                    coverage[r_start:r_end, c_start:c_end] |= mask_slice
+                    coverage[r_start:r_end, c_start:c_end] |= point_mask
                 
                 vs_ds = None 
                 
