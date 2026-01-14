@@ -1,8 +1,8 @@
 [general]
 name=ArchToolkit
 qgisMinimumVersion=3.0
-description=한국 고고학자 및 문화유산 연구자를 위한 종합 분석 도구
-version=1.6.00
+description=「지식은 전유물이 아닙니다」— 고고학자와 문화유산 연구자를 위한 종합 분석 도구
+version=1.6.01
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -14,4 +14,4 @@ tags=archaeology,dem,topography,고고학,발굴
 icon=icon.png
 experimental=false
 deprecated=false
-about=ArchToolkit은 한국 고고학 연구 환경에 최적화된 다양한 분석 및 시각화 기능을 제공하는 QGIS 플러그인입니다. 가시권 분석, 도면 시각화, DEM 생성 등 다양한 기능을 제공합니다.
+about=「지식은 전유물이 아닙니다」— ArchToolkit은 한국 고고학 연구 환경에 최적화된 종합 분석 플러그인입니다. 가시권 분석(히구치 거리대), 도면 자동 스타일링, DEM 생성, 지형 단면, 경사도/TPI/TRI 분석 등 고고학자와 문화유산 연구자가 연구에만 집중할 수 있도록 돕는 도구를 제공합니다. 누구나 자유롭게 사용하고, 수정하며, 공유할 수 있습니다.
