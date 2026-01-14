@@ -842,12 +842,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             text_format.setSize(10)
             text_format.setColor(QColor(255, 0, 0)) # Red text
             
-            # Buffer around text for readability
+            # Buffer around text for readability (Essential for topological maps)
             from qgis.core import QgsTextBufferSettings
             buffer_settings = QgsTextBufferSettings()
             buffer_settings.setEnabled(True)
-            buffer_settings.setSize(1)
-            buffer_settings.setColor(QColor(255, 255, 255))
+            buffer_settings.setSize(1.2) # Slightly larger buffer
+            buffer_settings.setColor(QColor(255, 255, 255, 230)) # Dense white buffer
             text_format.setBuffer(buffer_settings)
             
             label_settings = QgsPalLayerSettings()
@@ -1782,9 +1782,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if viewshed_layer.isValid():
                 self.apply_cumulative_style(viewshed_layer, len(points))
                 
-                # If manual selection, create persistent observer layer
-                if not self.radioFromLayer.isChecked():
-                    self.create_observer_layer("누적가시권_관측점", points)
+                # [v1.5.80] Always create a numbered observer layer for cumulative analysis.
+                # This ensures Point 1, 2, 3... are clearly visible and match the legend V(1,2).
+                self.create_observer_layer("누적가시권_관측점", points)
                 
                 QgsProject.instance().addMapLayer(viewshed_layer)
                 self.last_result_layer_id = viewshed_layer.id()
