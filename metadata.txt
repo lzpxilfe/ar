@@ -2,10 +2,11 @@
 name=ArchToolkit
 qgisMinimumVersion=3.0
 description=한국 고고학자 및 문화유산 연구자를 위한 종합 분석 도구
-version=1.5.68
+version=1.5.69
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
+repository=https://github.com/lzpxilfe/ar.git
 license_v3=http://www.gnu.org/licenses/gpl-3.0.html
 
 about=ArchToolkit은 한국 고고학 연구 환경에 최적화된 다양한 분석 및 시각화 기능을 제공하는 QGIS 플러그인입니다.
