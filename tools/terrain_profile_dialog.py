@@ -454,6 +454,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
     def calculate_profile(self):
         dem_layer = self.cmbDemLayer.currentLayer()
         if not dem_layer or len(self.points) < 2:
+            self.iface.messageBar().pushMessage("오류", "DEM 레이어가 선택되지 않았거나 점이 부족합니다.", level=2)
             self.show()
             return
         
@@ -465,6 +466,13 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             self.profile_data = []
             total_distance = start.distance(end)
             
+            self.iface.messageBar().pushMessage(
+                "단면 분석", 
+                f"시작점에서 끝점까지 {total_distance:.1f}m, {num_samples}개 샘플 추출 중...", 
+                level=0
+            )
+            
+            valid_samples = 0
             for i in range(num_samples + 1):
                 fraction = i / num_samples
                 x = start.x() + fraction * (end.x() - start.x())
@@ -476,8 +484,14 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 )
                 
                 if result.isValid():
-                    value = result.results().get(1, None)
-                    if value is not None:
+                    # Try band 1 first, then any available band
+                    results_dict = result.results()
+                    value = results_dict.get(1, None)
+                    if value is None and results_dict:
+                        # Fallback: get first available band value
+                        value = list(results_dict.values())[0]
+                    
+                    if value is not None and value != dem_layer.dataProvider().sourceNoDataValue(1):
                         dist = fraction * total_distance
                         self.profile_data.append({
                             'distance': dist,
@@ -485,6 +499,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                             'x': x,
                             'y': y
                         })
+                        valid_samples += 1
             
             if self.profile_data:
                 self.chart.set_data(self.profile_data)
@@ -499,6 +514,18 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.rubber_band.reset(QgsWkbTypes.LineGeometry)
                 self.rubber_band.hide()
                 self.canvas.refresh()
+                
+                self.iface.messageBar().pushMessage(
+                    "단면 완료", 
+                    f"{valid_samples}개 유효 샘플 추출 완료!", 
+                    level=0
+                )
+            else:
+                self.iface.messageBar().pushMessage(
+                    "경고", 
+                    "유효한 고도 데이터를 추출하지 못했습니다. DEM 범위를 확인하세요.", 
+                    level=1
+                )
             
         except Exception as e:
             self.iface.messageBar().pushMessage("오류", f"계산 실패: {str(e)}", level=2)
