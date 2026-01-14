@@ -1678,6 +1678,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         snap_xmax = dem_ext.xMinimum() + math.ceil((final_ext.xMaximum() - dem_ext.xMinimum()) / res) * res
         snap_ymin = dem_ext.yMaximum() - math.ceil((dem_ext.yMaximum() - final_ext.yMinimum()) / res) * res
         
+        target_rect = QgsRectangle(snap_xmin, snap_ymin, snap_xmax, snap_ymax)
         target_extent_str = f"{snap_xmin},{snap_ymin},{snap_xmax},{snap_ymax}"
         t_width = int(round((snap_xmax - snap_xmin) / res))
         t_height = int(round((snap_ymax - snap_ymin) / res))
@@ -1716,9 +1717,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     temp_outputs.append(output_raw)
                     full_vs = os.path.join(tempfile.gettempdir(), f'archt_fullvs_{i}_{uuid.uuid4().hex[:8]}.tif')
                     try:
+                        # Use QgsRectangle for more robust extent interpretation across QGIS versions
                         processing.run("gdal:warpreproject", {
                             'INPUT': output_raw, 
-                            'TARGET_EXTENT': target_extent_str, # Use snapped extent
+                            'TARGET_EXTENT': target_rect, 
                             'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
                             'NODATA': -9999, 'TARGET_RESOLUTION': res, 'RESAMPLING': 0, 'DATA_TYPE': 5, 'OUTPUT': full_vs
                         })
@@ -1734,8 +1736,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         progress.setValue(len(points))
         
-        if not temp_outputs:
-            self.iface.messageBar().pushMessage("오류", "가시권 분석 실패", level=2)
+        if not viewshed_results:
+            self.iface.messageBar().pushMessage("오류", "유효한 가시권 분석 결과를 생성하지 못했습니다. 보간 또는 범위 설정을 확인하세요.", level=2)
             self.show()
             return
         
