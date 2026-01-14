@@ -1650,36 +1650,38 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 point_mask = ((c_full - c_col)**2 + (r_full - c_row)**2 <= rad_pix**2)
                 circular_mask |= point_mask 
                 
-                # Grid Alignment Check
+                # [v1.6.10] Robust Alignment Fix: Use file GeoTransform to calculate correct offset.
+                # This prevents the 'Top-Left' shift bug in cumulative analysis.
+                vs_gt = vs_ds.GetGeoTransform()
+                ox = int(round((vs_gt[0] - target_xmin) / dem_xres))
+                oy = int(round((target_ymax - vs_gt[3]) / dem_yres))
+                
                 v_h, v_w = vs_data.shape
-                h_overlap = min(target_height, v_h)
-                w_overlap = min(target_width, v_w)
+                # Map source viewshed into the target cumulative grid
+                t_r1, t_r2 = max(0, oy), min(target_height, oy + v_h)
+                t_c1, t_c2 = max(0, ox), min(target_width, ox + v_w)
+                s_r1, s_c1 = max(0, -oy), max(0, -ox)
+                s_r2, s_c2 = s_r1 + (t_r2 - t_r1), s_c1 + (t_c2 - t_c1)
                 
-                # [v1.6.09] In Union Mode, we rely on GDAL's native distance clipping.
-                # We do NOT use point_mask to clip visibility, preventing grid-alignment bugs.
-                if union_mode:
-                    vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5)
-                else:
-                    vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5) & point_mask[:h_overlap, :w_overlap]
-                
-                if vs_nodata is not None:
-                    vis_mask &= (vs_data[:h_overlap, :w_overlap] != vs_nodata)
-                
-                if union_mode:
-                    # Set to 255 (Visible)
-                    cumulative[:h_overlap, :w_overlap][vis_mask] = 255
-                else:
-                    cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add
+                if t_r2 > t_r1 and t_c2 > t_c1:
+                    window_data = vs_data[s_r1:s_r2, s_c1:s_c2]
+                    vis_mask = (window_data > 0.5)
+                    if vs_nodata is not None:
+                        vis_mask &= (window_data != vs_nodata)
+                    
+                    if union_mode:
+                        cumulative[t_r1:t_r2, t_c1:t_c2][vis_mask] = 255
+                    else:
+                        # In cumulative mode, only add if within theoretical circle for consistency
+                        local_point_mask = point_mask[t_r1:t_r2, t_c1:t_c2]
+                        vis_mask &= local_point_mask
+                        cumulative[t_r1:t_r2, t_c1:t_c2][vis_mask] += val_to_add
                     
                 vs_ds = None
             
-            # 4. Final NoData masking
-            # [v1.6.09] CRITICAL: In Union Mode, skip final masking. 
-            # Circular_mask can be slightly misaligned with rasters, causing 'half-circle' clipping.
-            # Style (255=Green, 0=Transparent/Pink) will handle the aesthetics.
-            if not union_mode:
-                nodata_value = -9999
-                cumulative[~circular_mask] = nodata_value
+            # 4. Final NoData masking (Strictly outside of all circles for buffer-shape aesthetics)
+            nodata_value = -9999
+            cumulative[~circular_mask] = nodata_value
             
             # Save Result
             driver = gdal.GetDriverByName('GTiff')
@@ -1869,25 +1871,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     'OBSERVER_HEIGHT': obs_height, 'TARGET_HEIGHT': tgt_height, 'MAX_DISTANCE': max_dist,
                     'CC': 1 if curvature else 0, 'IV': refraction_coeff if refraction else 0, 'OUTPUT': output_raw
                 })
-                
                 if os.path.exists(output_raw):
                     temp_outputs.append(output_raw)
-                    full_vs = os.path.join(tempfile.gettempdir(), f'archt_fullvs_{i}_{uuid.uuid4().hex[:8]}.tif')
-                    try:
-                        # Use QgsRectangle for more robust extent interpretation across QGIS versions
-                        processing.run("gdal:warpreproject", {
-                            'INPUT': output_raw, 
-                            'TARGET_EXTENT': target_rect, 
-                            'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                            'NODATA': -9999, 'TARGET_RESOLUTION': res, 'RESAMPLING': 0, 'DATA_TYPE': 5, 'OUTPUT': full_vs
-                        })
-                        if os.path.exists(full_vs):
-                            temp_outputs.append(full_vs)
-                            viewshed_results.append((i, full_vs)) # Explicitly track which point this is
-                            try: os.remove(output_raw)
-                            except: pass
-                    except:
-                        pass
+                    # [v1.6.10] Speed & Robustness: Pass the raw viewshed directly.
+                    # Alignment will be handled in combine_viewsheds_numpy using GeoTransforms.
+                    viewshed_results.append((i, output_raw))
             except:
                 continue
         
