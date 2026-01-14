@@ -134,18 +134,30 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btnRun.clicked.connect(self.run_analysis)
         self.btnClose.clicked.connect(self.reject)
         
-        # Advanced settings toggle - hidden by default
-        self.widgetAdvanced.setVisible(False)
+        # Advanced settings toggle - EXPANDED by default (user request)
+        self.widgetAdvanced.setVisible(True)
+        self.btnAdvanced.setText("⚙ 고급 설정 ▲")
         self.btnAdvanced.clicked.connect(self.toggle_advanced)
+        
+        # Auto-SD checkbox connection (if exists)
+        if hasattr(self, 'chkAutoSD'):
+            self.chkAutoSD.stateChanged.connect(self.on_auto_sd_changed)
+    
+    def on_auto_sd_changed(self, state):
+        """Enable/disable manual TPI threshold inputs based on auto-SD checkbox"""
+        auto_mode = state == 2  # Qt.Checked
+        self.spinTPILow.setEnabled(not auto_mode)
+        self.spinTPIHigh.setEnabled(not auto_mode)
+        self.spinTPIThreshold.setEnabled(not auto_mode)
     
     def toggle_advanced(self):
         """Toggle visibility of advanced settings"""
         is_visible = self.widgetAdvanced.isVisible()
         self.widgetAdvanced.setVisible(not is_visible)
         if is_visible:
-            self.btnAdvanced.setText("⚙️ 고급 설정 ▼")
+            self.btnAdvanced.setText("⚙ 고급 설정 ▼")
         else:
-            self.btnAdvanced.setText("⚙️ 고급 설정 ▲")
+            self.btnAdvanced.setText("⚙ 고급 설정 ▲")
     
     def get_selected_classification(self):
         if self.radioKorean.isChecked():
@@ -453,12 +465,31 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.iface.messageBar().pushMessage("경고", "TPI/Slope 생성 실패", level=1)
                 return
             
-            # 4. Use gdal_calc.py for classification with user thresholds
+            # 3.5 AUTO-SD CALCULATION (Weiss 2001 standard approach)
+            # Calculate TPI statistics to use 1 SD as threshold
+            use_auto_sd = hasattr(self, 'chkAutoSD') and self.chkAutoSD.isChecked()
+            if use_auto_sd:
+                tpi_layer = QgsRasterLayer(tpi_path, "TPI_temp")
+                if tpi_layer.isValid():
+                    provider = tpi_layer.dataProvider()
+                    stats = provider.bandStatistics(1)
+                    tpi_sd = stats.stdDev
+                    tpi_mean = stats.mean
+                    # Weiss (2001): use 1 SD as threshold
+                    tpi_low = -tpi_sd
+                    tpi_high = tpi_sd
+                    self.iface.messageBar().pushMessage(
+                        "자동 SD", 
+                        f"TPI 통계: 평균={tpi_mean:.2f}, 표준편차={tpi_sd:.2f} → 임계값 ±{tpi_sd:.2f} 적용",
+                        level=0
+                    )
+            
+            # 4. Use gdal_calc.py for classification with thresholds
             output_path = os.path.join(tempfile.gettempdir(), 'archtoolkit_landform.tif')
             
-            # Calculate intermediate thresholds
-            tpi_mid_low = tpi_low / 2   # e.g., -0.5 when tpi_low = -1.0
-            tpi_mid_high = tpi_high / 2  # e.g., 0.5 when tpi_high = 1.0
+            # Calculate intermediate thresholds (Weiss 2001: 0.5 SD boundaries)
+            tpi_mid_low = tpi_low / 2   # -0.5 SD
+            tpi_mid_high = tpi_high / 2  # +0.5 SD
             
             # Classification: 1=Valley, 2=Lower, 3=Flat, 4=Mid, 5=Upper, 6=Ridge
             # Using user-defined thresholds

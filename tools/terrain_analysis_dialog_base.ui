@@ -164,12 +164,28 @@
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_Advanced">
       <item>
+       <widget class="QCheckBox" name="chkAutoSD">
+        <property name="text">
+         <string>✅ 자동 표준편차(SD) 적용 (Weiss 2001 권장)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;자동 표준편차(SD) 계산&lt;/b&gt;&lt;hr/&gt;Weiss(2001)의 원래 방법론에 따라 TPI 래스터의 표준편차를 자동 계산하여 임계값으로 사용합니다.&lt;br/&gt;&lt;br/&gt;• TPI &lt; -1 SD → 골짜기&lt;br/&gt;• TPI &gt; +1 SD → 능선&lt;br/&gt;• -0.5 SD ~ +0.5 SD + 완경사 → 평지&lt;br/&gt;&lt;br/&gt;&lt;b&gt;체크 해제 시:&lt;/b&gt; 아래 수동 임계값을 사용합니다.&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="QLabel" name="lblAdvancedInfo">
         <property name="text">
-         <string>※ 아래 기본값은 원저자들의 연구에서 권장하는 표준 설정입니다.</string>
+         <string>※ 아래는 원저자 권장 기본값입니다. 튜닝 시: 중간사면↓ = TPI 범위↑ 또는 경사도 임계↑</string>
         </property>
         <property name="styleSheet">
-         <string>color: #0066cc; font-style: italic; padding: 3px;</string>
+         <string>color: #0066cc; font-style: italic; padding: 3px; font-size: 9pt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
         </property>
        </widget>
       </item>
