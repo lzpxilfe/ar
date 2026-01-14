@@ -1497,7 +1497,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         Args:
             dem_layer: QgsRasterLayer - Reference DEM for resolution/projection
-            viewshed_files: list of paths to individual results
+            viewshed_files: list of (index, path) tuples
             output_path: str - Target path for result
             observer_points: list of points for circular masking
             max_dist: radius for circular masking
@@ -1552,7 +1552,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 circular_mask[:] = True
                 
             # 3. Process each viewshed using NumPy Vectorization
-            for idx, vs_file in enumerate(viewshed_files):
+            for pt_idx, vs_file in viewshed_files:
                 if not os.path.exists(vs_file): continue
                 
                 vs_ds = gdal.Open(vs_file, gdal.GA_ReadOnly)
@@ -1563,8 +1563,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_nodata = vs_band.GetNoDataValue()
                 vs_data = vs_band.ReadAsArray().astype(np.float32)
                 
-                # Weighing: Count (1) or Bit-Flag (1, 2, 4...)
-                val_to_add = 1 if is_count_mode else (2 ** min(idx, 30))
+                # Weighing using the explicit point index
+                val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
                 # Calculate offsets relative to Target Grid
                 col_offset = int(round((vs_gt[0] - target_xmin) / dem_xres))
@@ -1597,7 +1597,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 
             # 4. Final NoData masking
             nodata_value = -9999
-            cumulative[~coverage] = nodata_value
+            # Only set NoData OUTSIDE circles. 
+            # Areas inside circles but not visible remain 0 (Invisible).
             cumulative[~circular_mask] = nodata_value
             
             # Save Result
@@ -1741,6 +1742,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             level=0
         )
 
+        viewshed_results = []
         for i, (point, p_crs) in enumerate(points):
             if progress.wasCanceled():
                 break
@@ -1748,51 +1750,31 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             QtWidgets.QApplication.processEvents()
             
             output_raw = os.path.join(tempfile.gettempdir(), f'archt_vs_raw_{i}_{uuid.uuid4().hex[:8]}.tif')
-            
-            # Transform point to DEM CRS
             pt_dem = self.transform_point(point, p_crs, dem_layer.crs())
             
             try:
-                # 1. Run viewshed (Raw)
                 processing.run("gdal:viewshed", {
-                    'INPUT': dem_layer.source(),
-                    'BAND': 1,
-                    'OBSERVER': f"{pt_dem.x()},{pt_dem.y()}",
-                    'OBSERVER_HEIGHT': obs_height,
-                    'TARGET_HEIGHT': tgt_height,
-                    'MAX_DISTANCE': max_dist,
-                    'CC': 1 if curvature else 0,  # Curvature Correction
-                    'IV': 0.13 if refraction else 0, # Refraction
-                    'OUTPUT': output_raw
+                    'INPUT': dem_layer.source(), 'BAND': 1, 'OBSERVER': f"{pt_dem.x()},{pt_dem.y()}",
+                    'OBSERVER_HEIGHT': obs_height, 'TARGET_HEIGHT': tgt_height, 'MAX_DISTANCE': max_dist,
+                    'CC': 1 if curvature else 0, 'IV': 0.13 if refraction else 0, 'OUTPUT': output_raw
                 })
                 
                 if os.path.exists(output_raw):
-                    temp_outputs.append(output_raw) # Track for cleanup
-                
-                if os.path.exists(output_raw):
-                    # [v1.5.19] Expander 1: Warp raw viewshed to FULL landscape immediately
+                    temp_outputs.append(output_raw)
                     full_vs = os.path.join(tempfile.gettempdir(), f'archt_fullvs_{i}_{uuid.uuid4().hex[:8]}.tif')
                     try:
                         processing.run("gdal:warpreproject", {
-                            'INPUT': output_raw,
-                            'TARGET_EXTENT': target_extent,
-                            'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
-                            'NODATA': -9999,
-                            'TARGET_RESOLUTION': res,
-                            'RESAMPLING': 0, # Nearest Neighbor
-                            'DATA_TYPE': 5,  # Float32
-                            'OUTPUT': full_vs
+                            'INPUT': output_raw, 'TARGET_EXTENT': target_extent, 'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
+                            'NODATA': -9999, 'TARGET_RESOLUTION': res, 'RESAMPLING': 0, 'DATA_TYPE': 5, 'OUTPUT': full_vs
                         })
                         if os.path.exists(full_vs):
                             temp_outputs.append(full_vs)
+                            viewshed_results.append((i, full_vs)) # Explicitly track which point this is
                             try: os.remove(output_raw)
                             except: pass
-                        else:
-                            temp_outputs.append(output_raw)
-                    except Exception as warp_err:
-                        print(f"Warp failed for point {i}: {warp_err}")
-                        temp_outputs.append(output_raw)
-            except Exception as ex:
+                    except:
+                        pass
+            except:
                 continue
         
         progress.setValue(len(points))
@@ -1818,12 +1800,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             success = self.combine_viewsheds_numpy(
                 dem_layer=dem_layer,
-                viewshed_files=temp_outputs,
+                viewshed_files=viewshed_results, # List of (index, path)
                 output_path=final_output,
-                observer_points=points, # List of (pt, crs)
+                observer_points=points,
                 max_dist=max_dist,
                 is_count_mode=is_count,
-                custom_extent=final_ext # Smart Extent
+                custom_extent=final_ext
             )
             
             if not success or not os.path.exists(final_output):
