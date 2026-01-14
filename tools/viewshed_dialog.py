@@ -66,6 +66,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.los_click_count = 0
         self.last_result_layer_id = None
         self.result_marker_map = {} # layer_id -> [markers]
+        self.result_annotation_map = {} # layer_id -> [annotations] [v1.6.02]
         self.label_layer = None # Core reference to prevent GC issues
 
         
@@ -247,9 +248,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Store for cleanup
             self.point_labels.append(item)
+            return item
             
         except Exception as e:
             print(f"Canvas labeling error: {e}")
+            return None
             
     def _get_or_create_label_layer(self):
         """DEPRECATED: Diverted to _add_point_to_label_canvas for stability. 
@@ -466,19 +469,29 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.radioFromLayer.setChecked(True)
 
     def on_layers_removed(self, layer_ids):
-        """Clean up markers if the corresponding analysis layer is removed"""
+        """Clean up markers and annotations if the corresponding analysis layer is removed"""
         for lid in layer_ids:
+            # 1. Clean up RubberBands (Red Dots)
             if lid in self.result_marker_map:
-                for marker in self.result_marker_map[lid]:
+                markers = self.result_marker_map[lid]
+                for m in markers:
                     try:
-                        marker.hide()
-                        marker.reset(QgsWkbTypes.PointGeometry)
-                        # Explicitly remove from canvas to be safe
-                        if self.canvas and self.canvas.scene():
-                            self.canvas.scene().removeItem(marker)
+                        self.canvas.scene().removeItem(m) # For rubberbands, this is safer than reset() sometimes
                     except:
-                        pass
+                        try: m.reset(QgsWkbTypes.PointGeometry)
+                        except: pass
                 del self.result_marker_map[lid]
+                
+            # 2. Clean up Text Annotations (Labels) [v1.6.02]
+            if lid in self.result_annotation_map:
+                annotations = self.result_annotation_map[lid]
+                for item in annotations:
+                    try:
+                        if item and self.canvas.scene():
+                            self.canvas.scene().removeItem(item)
+                    except Exception as e:
+                        print(f"Annotation cleanup error: {e}")
+                del self.result_annotation_map[lid]
         
         if self.last_result_layer_id in layer_ids:
             self.reset_selection()
@@ -1579,7 +1592,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             print(f"Profiler error: {e}")
     
-    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info):
+    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info, union_mode=False):
         """Highly optimized cumulative viewshed merging with unified grid alignment.
         """
         try:
@@ -1612,7 +1625,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_nodata = vs_band.GetNoDataValue()
                 vs_data = vs_band.ReadAsArray().astype(np.float32)
                 
-                val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
+                if union_mode:
+                    val_to_add = 0 # Not used in loop, logic is different
+                else:
+                    val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
                 # STRICT per-point circular masking
                 # Safety check: ensure pt_idx is valid
@@ -1641,7 +1657,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 if vs_nodata is not None:
                     vis_mask &= (vs_data[:h_overlap, :w_overlap] != vs_nodata)
                 
-                cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add
+                if union_mode:
+                    # Binary Union: Set to 1 if visible (Logical OR)
+                    cumulative[:h_overlap, :w_overlap][vis_mask] = 1
+                else:
+                    cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add
+                    
                 vs_ds = None
             
             # 4. Final NoData masking (Strictly outside of all circles)
@@ -1688,6 +1709,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.radioFromLayer.isChecked():
             obs_layer = self.cmbObserverLayer.currentLayer()
             if obs_layer:
+                # [v1.6.02] Auto-hide labels to reduce clutter
+                try: obs_layer.setLabelsEnabled(False)
+                except: pass
+                
                 # Use selection if exists
                 selected_features = obs_layer.selectedFeatures()
                 target_features = selected_features if selected_features else obs_layer.getFeatures()
@@ -1870,6 +1895,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             progress.setLabelText("결과 통합 중 (NumPy)...")
             QtWidgets.QApplication.processEvents()
             
+            # [v1.6.02] Determine Union Mode (Binary Visibility)
+            # If Line Viewshed or > 20 points, use Union Mode (0/1) instead of bit-flags
+            is_line_mode = self.radioLineViewshed.isChecked()
+            is_union_mode = is_line_mode or len(points) > 20
+            
             # viewshed_results is already [(idx, filepath), ...] as needed by combine_viewsheds_numpy
             success = self.combine_viewsheds_numpy(
                 dem_layer=dem_layer,
@@ -1878,7 +1908,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 observer_points=points,
                 max_dist=max_dist,
                 is_count_mode=False,
-                grid_info=grid_info
+                grid_info=grid_info,
+                union_mode=is_union_mode
             )
             
             if not success or not os.path.exists(final_output):
@@ -1894,7 +1925,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             viewshed_layer = QgsRasterLayer(final_output, layer_name)
             
             if viewshed_layer.isValid():
-                self.apply_cumulative_style(viewshed_layer, len(points))
+                # Apply result style
+                if is_union_mode:
+                    self.apply_viewshed_style(viewshed_layer)
+                else:
+                    self.apply_cumulative_style(viewshed_layer, len(points))
                 
                 # [v1.5.80] Always create a numbered observer layer for cumulative analysis.
                 # This ensures Point 1, 2, 3... are clearly visible and match the legend V(1,2).
@@ -1906,8 +1941,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 # Ensure label layer is on top
                 self.update_layer_order()
                 
-                # Link markers
-                self.link_current_marker_to_layer(viewshed_layer.id(), points)
+                # Link markers and annotations [v1.6.02]
+                current_annotations = list(self.point_labels)
+                self.link_current_marker_to_layer(viewshed_layer.id(), points, annotations=current_annotations)
+                self.point_labels = [] # Ownership transferred
                 
                 self.iface.messageBar().pushMessage(
                     "완료", 
@@ -2189,12 +2226,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         layer.setOpacity(0.7)
         layer.triggerRepaint()
 
-    def link_current_marker_to_layer(self, layer_id, active_points_with_crs=None):
-        """Register point markers to be cleaned up when layer_id is removed.
+    def link_current_marker_to_layer(self, layer_id, active_points_with_crs=None, annotations=None):
+        """Register point markers and annotations to be cleaned up when layer_id is removed.
         Ensures points are transformed to Canvas CRS for visibility.
         """
         result_marker = QgsRubberBand(self.canvas, QgsWkbTypes.PointGeometry)
         result_marker.setColor(QColor(255, 0, 0, 200)) # Semi-transparent red
+        # ... (rest of rubberband setup is same, skipping lines for brevity if possible, but replace needs context)
         result_marker.setWidth(2)
         result_marker.setIconSize(4) # Small dots
         result_marker.setIcon(QgsRubberBand.ICON_CIRCLE)
@@ -2218,6 +2256,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.result_marker_map[layer_id] = []
         self.result_marker_map[layer_id].append(result_marker)
         result_marker.show()
+        
+        # [v1.6.02] Store text annotations
+        if annotations:
+            if layer_id not in self.result_annotation_map:
+                self.result_annotation_map[layer_id] = []
+            self.result_annotation_map[layer_id].extend(annotations)
     
     def accept(self):
         """Close dialog after successful analysis - keep only result markers visible"""
