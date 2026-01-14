@@ -1492,126 +1492,67 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             print(f"Profiler error: {e}")
     
-    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points=None, max_dist=None, is_count_mode=False, custom_extent=None):
-        """Combine multiple viewshed rasters using NumPy for reliable cumulative analysis.
-        
-        Args:
-            dem_layer: QgsRasterLayer - Reference DEM for resolution/projection
-            viewshed_files: list of (index, path) tuples
-            output_path: str - Target path for result
-            observer_points: list of points for circular masking
-            max_dist: radius for circular masking
-            is_count_mode: True for count, False for bit-flags
-            custom_extent: QgsRectangle for Smart Extent processing
-            
-        Returns:
-            bool: True if successful
+    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info):
+        """Highly optimized cumulative viewshed merging with unified grid alignment.
         """
         try:
-            # Open DEM to get base parameters
+            # 1. Get base parameters from grid_info
+            target_xmin = grid_info['xmin']
+            target_ymax = grid_info['ymax']
+            target_width = grid_info['width']
+            target_height = grid_info['height']
+            dem_xres = grid_info['res']
+            dem_yres = grid_info['res']
+            
             dem_ds = gdal.Open(dem_layer.source(), gdal.GA_ReadOnly)
-            if not dem_ds: return False
-            
-            dem_gt = dem_ds.GetGeoTransform()
             dem_proj = dem_ds.GetProjection()
-            dem_xres = dem_gt[1]
-            dem_yres = abs(dem_gt[5])
+            dem_ds = None
             
-            # 1. Determine Target Grid (Full or Smart)
-            if custom_extent:
-                # Use Smart Extent boundaries snapped to DEM grid
-                target_xmin = dem_gt[0] + math.floor((custom_extent.xMinimum() - dem_gt[0]) / dem_xres) * dem_xres
-                target_ymax = dem_gt[3] - math.floor((dem_gt[3] - custom_extent.yMaximum()) / dem_yres) * dem_yres
-                target_xmax = dem_gt[0] + math.ceil((custom_extent.xMaximum() - dem_gt[0]) / dem_xres) * dem_xres
-                target_ymin = dem_gt[3] - math.ceil((dem_gt[3] - custom_extent.yMinimum()) / dem_yres) * dem_yres
-                
-                target_width = int(round((target_xmax - target_xmin) / dem_xres))
-                target_height = int(round((target_ymax - target_ymin) / dem_yres))
-            else:
-                target_width = dem_ds.RasterXSize
-                target_height = dem_ds.RasterYSize
-                target_xmin, target_ymax = dem_gt[0], dem_gt[3]
-                target_xmax = target_xmin + target_width * dem_xres
-                target_ymin = target_ymax - target_height * dem_yres
-
-            # Initialize Arrays
+            # 2. Initialize Arrays
             cumulative = np.zeros((target_height, target_width), dtype=np.float32)
-            coverage = np.zeros((target_height, target_width), dtype=np.bool_)
             circular_mask = np.zeros((target_height, target_width), dtype=np.bool_)
             
-            # 2. Pre-calculate the Union Circle Mask for final NoData clipping
-            if observer_points and max_dist:
-                rows_grid, cols_grid = np.ogrid[:target_height, :target_width]
-                for pt, pt_crs in observer_points:
-                    pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
-                    c_col = (pt_dem.x() - target_xmin) / dem_xres
-                    c_row = (target_ymax - pt_dem.y()) / dem_yres
-                    rad_pix = max_dist / dem_xres
-                    circular_mask |= ((cols_grid - c_col)**2 + (rows_grid - c_row)**2 <= rad_pix**2)
-            else:
-                circular_mask[:] = True
-                
-            # 3. Process each viewshed using NumPy Vectorization
+            # Universal meshgrid for clipping
+            r_full, c_full = np.ogrid[:target_height, :target_width]
+            
+            # 3. Process each viewshed
             for pt_idx, vs_file in viewshed_files:
                 if not os.path.exists(vs_file): continue
-                
                 vs_ds = gdal.Open(vs_file, gdal.GA_ReadOnly)
                 if not vs_ds: continue
                 
-                vs_gt = vs_ds.GetGeoTransform()
                 vs_band = vs_ds.GetRasterBand(1)
                 vs_nodata = vs_band.GetNoDataValue()
                 vs_data = vs_band.ReadAsArray().astype(np.float32)
                 
-                # Weighing using the explicit point index
                 val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
-                # Calculate offsets relative to Target Grid
-                col_offset = int(round((vs_gt[0] - target_xmin) / dem_xres))
-                row_offset = int(round((target_ymax - vs_gt[3]) / dem_yres))
+                # STRICT per-point circular masking
+                pt, pt_crs = observer_points[pt_idx]
+                pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
+                c_col = (pt_dem.x() - target_xmin) / dem_xres
+                c_row = (target_ymax - pt_dem.y()) / dem_yres
+                rad_pix = max_dist / dem_xres
                 
-                vs_height, vs_width = vs_data.shape
+                # Circular mask for THIS observer
+                point_mask = ((c_full - c_col)**2 + (r_full - c_row)**2 <= rad_pix**2)
+                circular_mask |= point_mask # Building union for NoData finalization
                 
-                # Slicing with boundary safety
-                r_start, r_end = max(0, row_offset), min(target_height, row_offset + vs_height)
-                c_start, c_end = max(0, col_offset), min(target_width, col_offset + vs_width)
+                # Grid Alignment Check (Warp output should already match t_height, t_width)
+                v_h, v_w = vs_data.shape
+                h_overlap = min(target_height, v_h)
+                w_overlap = min(target_width, v_w)
                 
-                vs_r_start = max(0, -row_offset)
-                vs_c_start = max(0, -col_offset)
-                vs_r_end = vs_r_start + (r_end - r_start)
-                vs_c_end = vs_c_start + (c_end - c_start)
+                # Robust Visibility Detection: Not 0, Not NoData
+                vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5) & point_mask[:h_overlap, :w_overlap]
+                if vs_nodata is not None:
+                    vis_mask &= (vs_data[:h_overlap, :w_overlap] != vs_nodata)
                 
-                if r_end > r_start and c_end > c_start:
-                    # LOCAL MESHGRID for the slice (memory efficient and strict per-point)
-                    s_rows, s_cols = np.ogrid[r_start:r_end, c_start:c_end]
-                    
-                    # Get the observer point for THIS specific viewshed
-                    pt, pt_crs = observer_points[pt_idx]
-                    pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
-                    c_col = (pt_dem.x() - target_xmin) / dem_xres
-                    c_row = (target_ymax - pt_dem.y()) / dem_yres
-                    rad_pix = max_dist / dem_xres
-                    
-                    # Strict mask for THIS observer only
-                    point_mask = ((s_cols - c_col)**2 + (s_rows - c_row)**2 <= rad_pix**2)
-                    
-                    target_slice = cumulative[r_start:r_end, c_start:c_end]
-                    vs_slice = vs_data[vs_r_start:vs_r_end, vs_c_start:vs_c_end]
-                    
-                    # Visible check: > 0.5 to ignore Warp noise, within ITS OWN circle
-                    visible_mask = (vs_slice > 0.5) & point_mask
-                    if vs_nodata is not None: 
-                        visible_mask &= (vs_slice != vs_nodata)
-                    
-                    target_slice[visible_mask] += val_to_add
-                    coverage[r_start:r_end, c_start:c_end] |= point_mask
-                
-                vs_ds = None 
-                
-            # 4. Final NoData masking
+                cumulative[:h_overlap, :w_overlap][vis_mask] += val_to_add
+                vs_ds = None
+            
+            # 4. Final NoData masking (Strictly outside of all circles)
             nodata_value = -9999
-            # Only set NoData OUTSIDE circles. 
-            # Areas inside circles but not visible remain 0 (Invisible).
             cumulative[~circular_mask] = nodata_value
             
             # Save Result
@@ -1623,14 +1564,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             band.SetNoDataValue(nodata_value)
             band.WriteArray(cumulative)
             out_ds = None
-            dem_ds = None
             return True
-            
         except Exception as e:
-            print(f"NumPy viewshed combine error: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            print(f"NumPy combine error: {e}")
+            import traceback; traceback.print_exc()
             return False
     
     def run_multi_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction):
@@ -1716,37 +1653,39 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         progress = QtWidgets.QProgressDialog("다중점 가시권 분석 중...", "취소", 0, len(points), self)
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.show()
-        # Run viewshed for each point
-        temp_outputs = []
         # [v1.5.65] Smart Analysis Extent Optimization
-        # Instead of using the FULL DEM extent (which can be massive), 
-        # use an extent that covers all observer points + max_dist.
-        
-        # 1. Calculate bounding box of all points in DEM CRS
-        total_obs_extent = QgsRectangle()
-        total_obs_extent.setMinimal()
-        
+        total_obs_ext = QgsRectangle()
+        total_obs_ext.setMinimal()
         for pt, p_crs in points:
             pt_dem = self.transform_point(pt, p_crs, dem_layer.crs())
-            total_obs_extent.combineExtentWith(pt_dem.x(), pt_dem.y())
+            total_obs_ext.combineExtentWith(pt_dem.x(), pt_dem.y())
         
-        # 2. Expand by max_dist
         smart_ext = QgsRectangle(
-            total_obs_extent.xMinimum() - max_dist,
-            total_obs_extent.yMinimum() - max_dist,
-            total_obs_extent.xMaximum() + max_dist,
-            total_obs_extent.yMaximum() + max_dist
+            total_obs_ext.xMinimum() - max_dist, total_obs_ext.yMinimum() - max_dist,
+            total_obs_ext.xMaximum() + max_dist, total_obs_ext.yMaximum() + max_dist
         )
-        
-        # 3. Intersect with DEM extent to stay within bounds
-        dem_ext = dem_layer.extent()
-        final_ext = smart_ext.intersect(dem_ext)
-        
-        if final_ext.isEmpty(): # Fallback to dem_ext if something went wrong
-            final_ext = dem_ext
-            
-        target_extent = f"{final_ext.xMinimum()},{final_ext.yMinimum()},{final_ext.xMaximum()},{final_ext.yMaximum()}"
+        final_ext = smart_ext.intersect(dem_layer.extent())
+        if final_ext.isEmpty(): final_ext = dem_layer.extent()
+
+        # [v1.5.75] Unified Grid Snapping - Calculate ONCE for both Warp and NumPy
         res = dem_layer.rasterUnitsPerPixelX()
+        dem_ext = dem_layer.extent()
+        
+        # Snap the combined analysis extent to the DEM's pixel grid
+        # snap_xmin = dem_origin_x + N * res
+        snap_xmin = dem_ext.xMinimum() + math.floor((final_ext.xMinimum() - dem_ext.xMinimum()) / res) * res
+        snap_ymax = dem_ext.yMaximum() - math.floor((dem_ext.yMaximum() - final_ext.yMaximum()) / res) * res
+        snap_xmax = dem_ext.xMinimum() + math.ceil((final_ext.xMaximum() - dem_ext.xMinimum()) / res) * res
+        snap_ymin = dem_ext.yMaximum() - math.ceil((dem_ext.yMaximum() - final_ext.yMinimum()) / res) * res
+        
+        target_extent_str = f"{snap_xmin},{snap_ymin},{snap_xmax},{snap_ymax}"
+        t_width = int(round((snap_xmax - snap_xmin) / res))
+        t_height = int(round((snap_ymax - snap_ymin) / res))
+        
+        grid_info = {
+            'xmin': snap_xmin, 'ymax': snap_ymax, 'xmax': snap_xmax, 'ymin': snap_ymin,
+            'res': res, 'width': t_width, 'height': t_height
+        }
         
         # Diagnostic Log
         self.iface.messageBar().pushMessage(
@@ -1777,7 +1716,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     full_vs = os.path.join(tempfile.gettempdir(), f'archt_fullvs_{i}_{uuid.uuid4().hex[:8]}.tif')
                     try:
                         processing.run("gdal:warpreproject", {
-                            'INPUT': output_raw, 'TARGET_EXTENT': target_extent, 'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
+                            'INPUT': output_raw, 
+                            'TARGET_EXTENT': target_extent_str, # Use snapped extent
+                            'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
                             'NODATA': -9999, 'TARGET_RESOLUTION': res, 'RESAMPLING': 0, 'DATA_TYPE': 5, 'OUTPUT': full_vs
                         })
                         if os.path.exists(full_vs):
@@ -1813,12 +1754,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             success = self.combine_viewsheds_numpy(
                 dem_layer=dem_layer,
-                viewshed_files=viewshed_results, # List of (index, path)
+                viewshed_files=viewshed_results,
                 output_path=final_output,
                 observer_points=points,
                 max_dist=max_dist,
                 is_count_mode=is_count,
-                custom_extent=final_ext
+                grid_info=grid_info # Unified Grid
             )
             
             if not success or not os.path.exists(final_output):
