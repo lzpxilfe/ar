@@ -1,0 +1,416 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>TerrainAnalysisDialog</class>
+ <widget class="QDialog" name="TerrainAnalysisDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>560</width>
+    <height>720</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>ArchToolkit: 지형 분석 (커서를 대면 도움말 표시)</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupDem">
+     <property name="title">
+      <string>1. DEM 래스터 선택</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_2">
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupAnalysis">
+     <property name="title">
+      <string>2. 분석 유형 선택</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Analysis">
+      <item>
+       <widget class="QCheckBox" name="chkSlope">
+        <property name="text">
+         <string>경사도 (Slope) - 지형의 기울기</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;경사도 분석 (Slope Analysis)&lt;/b&gt;&lt;hr/&gt;지표면의 기울기를 도(°) 단위로 계산합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;알고리즘:&lt;/b&gt; Horn (1981) 3×3 gradient algorithm&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 유적 입지 분석의 가장 기본적인 지표&lt;br/&gt;• 주거지, 경작지 적합성 평가&lt;br/&gt;• 방어시설 접근성 분석&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkAspect">
+        <property name="text">
+         <string>사면방향 (Aspect) - 8방위 45° 간격</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;사면방향 분석 (Aspect Analysis)&lt;/b&gt;&lt;hr/&gt;사면이 향하는 방향을 8방위(N, NE, E, SE, S, SW, W, NW)로 분류합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;알고리즘:&lt;/b&gt; GDAL Aspect (방위각 0~360°)&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 일조량 분석 (남향 선호 경향)&lt;br/&gt;• 배수 방향 및 수계 분석&lt;br/&gt;• 풍향에 따른 방어 입지 분석&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkTPI">
+        <property name="text">
+         <string>TPI (Weiss 2001) - 능선/평지/골짜기 분류</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;TPI (Topographic Position Index)&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Weiss, A. (2001). Topographic Position and Landforms Analysis. ESRI User Conference.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;해당 셀의 고도와 주변 평균 고도의 차이를 계산합니다.&lt;br/&gt;• TPI &gt; 0: 주변보다 높음 (능선)&lt;br/&gt;• TPI ≈ 0: 주변과 비슷 (평지/사면)&lt;br/&gt;• TPI &lt; 0: 주변보다 낮음 (골짜기)&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 유적 입지 특성 파악&lt;br/&gt;• 방어 시설 위치 분석&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkSlopePosition">
+        <property name="text">
+         <string>지형분류 (Weiss 6단계) - 곡저/평지/사면/능선 ★</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;Weiss 6단계 지형분류 (Landform Classification)&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Weiss, A. (2001). Topographic Position and Landforms Analysis.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;TPI와 경사도를 조합하여 지형을 6가지로 자동 분류합니다:&lt;br/&gt;&lt;br/&gt;1. 깊은 곡저 (Incised Valley)&lt;br/&gt;2. 곡저/하상 (Valley Floor)&lt;br/&gt;3. 평지/단구 (Flat or Terrace)&lt;br/&gt;4. 중간 사면 (Mid Slope)&lt;br/&gt;5. 능선 평탄부 (Upland Flat)&lt;br/&gt;6. 급경사 능선 (Steep Ridge)&lt;br/&gt;&lt;br/&gt;&lt;b&gt;★ 추천: 유적 입지 분석에 가장 유용한 지표입니다.&lt;/b&gt;&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkTRI">
+        <property name="text">
+         <string>TRI (Riley 1999) - 지형 험준도</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;TRI (Terrain Ruggedness Index)&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Riley, S. J., DeGloria, S. D., &amp; Elliot, R. (1999). A Terrain Ruggedness Index That Quantifies Topographic Heterogeneity. Intermountain Journal of Sciences 5(1-4):23-27.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;중심 셀과 8개 인접 셀 간 고도차의 제곱합 평균의 제곱근입니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;분류 기준 (Riley et al.):&lt;/b&gt;&lt;br/&gt;• 0~2: 평탄 (Level)&lt;br/&gt;• 2~5: 거의 평탄 (Nearly Level)&lt;br/&gt;• 5~10: 약간 거침 (Slightly Rugged)&lt;br/&gt;• 10~20: 중간 (Moderately Rugged)&lt;br/&gt;• 20+: 험준 (Highly Rugged)&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkRoughness">
+        <property name="text">
+         <string>Roughness (Wilson 2000) - 미세지형</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;Roughness (거칠기)&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Wilson, M. F. J., O'Connell, B., Brown, C., Guinan, J. C., &amp; Grehan, A. J. (2007). Multiscale Terrain Analysis of Multibeam Bathymetry Data...&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;3×3 창 내에서 최대 고도와 최소 고도의 차이를 계산합니다.&lt;br/&gt;TRI와 유사하지만 계산 방식이 다릅니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 미세지형 변화 파악&lt;br/&gt;• 인위/자연 지형 구분&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupClassification">
+     <property name="title">
+      <string>3. 경사도 분류 기준</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Classification">
+      <item row="0" column="0">
+       <widget class="QRadioButton" name="radioKorean">
+        <property name="text">
+         <string>한국표준 - 완/경/급/험/절 5단계</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;한국 표준 경사도 분류&lt;/b&gt;&lt;hr/&gt;국토지리정보원 기준에 따른 5단계 분류입니다.&lt;br/&gt;&lt;br/&gt;• 완경사지: 0~15° (주거지 최적)&lt;br/&gt;• 경사지: 15~20° (계단식 경작)&lt;br/&gt;• 급경사지: 20~25° (산지 산림)&lt;br/&gt;• 험준지: 25~30° (접근 곤란)&lt;br/&gt;• 절험지: 30°+ (절벽/암벽)&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt; 유적 입지 적합성 평가&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QRadioButton" name="radioTobler">
+        <property name="text">
+         <string>Tobler(1993) - 보행속도</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;Tobler 보행속도 함수 (Hiking Function)&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Tobler, W. (1993). Three Presentations on Geographical Analysis and Modeling: Non-Isotropic Geographic Modeling.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;경사에 따른 보행 속도 변화를 모델링합니다:&lt;br/&gt;&lt;br/&gt;• 평지 (0°): 시속 ~5km (기본 보행)&lt;br/&gt;• 완경사 (5°): 시속 ~4km&lt;br/&gt;• 경사 (15°): 시속 ~2km&lt;br/&gt;• 급경사 (25°+): 시속 &lt;1km&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 고대 도로 경로 추정&lt;br/&gt;• 이동 비용 분석 (Cost-Distance)&lt;br/&gt;• 교역로, 순찰로 복원&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QRadioButton" name="radioMinetti">
+        <property name="text">
+         <string>Minetti(2002) - 에너지효율</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;Minetti 에너지 소비 함수&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Minetti, A. E. (2002). Optimum gradient of mountain paths. Journal of Applied Physiology 79(5):1698-1703.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;경사에 따른 에너지 소비량(J/kg/m) 변화를 분석합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 운반 경로 최적화 분석&lt;br/&gt;• 고대 노동력 추정&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QRadioButton" name="radioLlobera">
+        <property name="text">
+         <string>Llobera(2007) - 인지지형</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;Llobera 인지적 지형 인식&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Llobera, M. (2007). Reconstructing visual landscapes. World Archaeology 39(1):51-69.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;인간이 지형 경사를 어떻게 인지하는지 분석합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 경관 인지 분석&lt;br/&gt;• 시각적 경계/장벽 파악&lt;/html&gt;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btnAdvanced">
+     <property name="text">
+      <string>⚙ 고급 설정 ▼</string>
+     </property>
+     <property name="checkable">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QWidget" name="widgetAdvanced" native="true">
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Advanced">
+      <item>
+       <widget class="QLabel" name="lblAdvancedInfo">
+        <property name="text">
+         <string>※ 아래 기본값은 원저자들의 연구에서 권장하는 표준 설정입니다.</string>
+        </property>
+        <property name="styleSheet">
+         <string>color: #0066cc; font-style: italic; padding: 3px;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="groupTPI">
+        <property name="title">
+         <string>TPI 매개변수 (Weiss 2001)</string>
+        </property>
+        <layout class="QGridLayout" name="gridLayout_TPI">
+         <item row="0" column="0">
+          <widget class="QLabel" name="label_TPIRadius">
+           <property name="text">
+            <string>분석 반경:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QSpinBox" name="spinTPIRadius">
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>100</number>
+           </property>
+           <property name="value">
+            <number>3</number>
+           </property>
+           <property name="suffix">
+            <string> 셀</string>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;b&gt;TPI 분석 반경&lt;/b&gt;&lt;hr/&gt;주변 평균을 계산할 창(window)의 반경입니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;권장값 (Weiss 2001):&lt;/b&gt;&lt;br/&gt;• 3셀: 미시지형 (기본값, 유적 규모)&lt;br/&gt;• 10셀: 중규모 지형&lt;br/&gt;• 30셀: 광역 지형 (산줄기/계곡)&lt;br/&gt;&lt;br/&gt;DEM 해상도에 따라 실제 거리가 달라집니다.&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QLabel" name="label_TPIThreshold">
+           <property name="text">
+            <string>분류 임계:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="3">
+          <widget class="QDoubleSpinBox" name="spinTPIThreshold">
+           <property name="minimum">
+            <double>0.1</double>
+           </property>
+           <property name="maximum">
+            <double>50.0</double>
+           </property>
+           <property name="value">
+            <double>1.0</double>
+           </property>
+           <property name="singleStep">
+            <double>0.1</double>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;b&gt;TPI 분류 임계값&lt;/b&gt;&lt;hr/&gt;능선/평지/골짜기를 구분하는 기준값입니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;권장값 (Weiss 2001):&lt;/b&gt;&lt;br/&gt;• 1.0 (기본값): 표준 편차 기준&lt;br/&gt;• 값이 작을수록 민감하게 분류&lt;br/&gt;• 값이 클수록 둔감하게 분류&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="groupSlopePosition">
+        <property name="title">
+         <string>지형분류 매개변수 (Weiss 6단계)</string>
+        </property>
+        <layout class="QGridLayout" name="gridLayout_SlopePosition">
+         <item row="0" column="0">
+          <widget class="QLabel" name="label_SlopeThreshold">
+           <property name="text">
+            <string>경사도 임계:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QSpinBox" name="spinSlopeThreshold">
+           <property name="maximum">
+            <number>45</number>
+           </property>
+           <property name="value">
+            <number>5</number>
+           </property>
+           <property name="suffix">
+            <string>°</string>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;b&gt;평지 분류 경사도 임계값&lt;/b&gt;&lt;hr/&gt;이 경사 이하를 '평지'로 분류합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;권장값 (Weiss 2001):&lt;/b&gt;&lt;br/&gt;• 5° (기본값): 일반적 지형 분류&lt;br/&gt;• 3°: 더 엄격한 평지 기준&lt;br/&gt;• 10°: 완만한 경사도 평지로 포함&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QLabel" name="label_TPILow">
+           <property name="text">
+            <string>TPI 하위:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="3">
+          <widget class="QDoubleSpinBox" name="spinTPILow">
+           <property name="minimum">
+            <double>-50.0</double>
+           </property>
+           <property name="maximum">
+            <double>0.0</double>
+           </property>
+           <property name="value">
+            <double>-1.0</double>
+           </property>
+           <property name="singleStep">
+            <double>0.1</double>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;b&gt;TPI 하위 임계값 (골짜기 기준)&lt;/b&gt;&lt;hr/&gt;이 값 이하를 '골짜기'로 분류합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;권장값 (Weiss 2001):&lt;/b&gt;&lt;br/&gt;• -1.0 (기본값): -1 표준편차&lt;br/&gt;• 음수 값이 작을수록(절대값 클수록) 더 깊은 골짜기만 선택&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="4">
+          <widget class="QLabel" name="label_TPIHigh">
+           <property name="text">
+            <string>TPI 상위:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="5">
+          <widget class="QDoubleSpinBox" name="spinTPIHigh">
+           <property name="minimum">
+            <double>0.0</double>
+           </property>
+           <property name="maximum">
+            <double>50.0</double>
+           </property>
+           <property name="value">
+            <double>1.0</double>
+           </property>
+           <property name="singleStep">
+            <double>0.1</double>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;b&gt;TPI 상위 임계값 (능선 기준)&lt;/b&gt;&lt;hr/&gt;이 값 이상을 '능선'으로 분류합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;권장값 (Weiss 2001):&lt;/b&gt;&lt;br/&gt;• 1.0 (기본값): +1 표준편차&lt;br/&gt;• 값이 클수록 더 뚜렷한 능선만 선택&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="groupTRI">
+        <property name="title">
+         <string>TRI 매개변수 (Riley 1999)</string>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_TRI">
+         <item>
+          <widget class="QLabel" name="label_TRIMax">
+           <property name="text">
+            <string>험준 기준 임계:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="spinTRIMax">
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>500</number>
+           </property>
+           <property name="value">
+            <number>20</number>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;b&gt;TRI 험준 기준 임계값&lt;/b&gt;&lt;hr/&gt;이 값 이상을 '험준 지형'으로 분류합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;권장값 (Riley et al. 1999):&lt;/b&gt;&lt;br/&gt;• 20 (기본값): 원저자 분류 기준&lt;br/&gt;• 10: 더 민감하게 험준 지형 탐지&lt;br/&gt;• 30: 극도로 험준한 지형만 탐지&lt;/html&gt;</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_TRIMaxTip">
+           <property name="text">
+            <string>(작은값=민감, 큰값=둔감)</string>
+           </property>
+           <property name="styleSheet">
+            <string>color: #666; font-size: 9pt;</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer_TRI">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+          </spacer>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>분석 실행</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsMapLayerComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

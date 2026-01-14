@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ViewshedDialog</class>
+ <widget class="QDialog" name="ViewshedDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>580</width>
+    <height>820</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>가시권 분석 (Viewshed Analysis) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupInfo">
+     <property name="title">
+      <string>분석 개요 및 참고문헌</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Info">
+      <item>
+       <widget class="QLabel" name="lblDescription">
+        <property name="text">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;고고학적 가시권 분석&lt;/span&gt;은 유적의 입지 특성을 파악하는 중요한 도구입니다. 이 도구는 관측점에서 보이는 영역(가시권)과 보이지 않는 영역(비가시권)을 계산합니다.&lt;/p&gt;&lt;p&gt;&lt;span style=&quot; font-style:italic;&quot;&gt;Ref: Wang, J., Robinson, G. J., &amp;amp; White, K. (1996). A Fast Solution to Local Viewshed Computation Using Grid-Based Digital Elevation Models.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #f0f0f0; padding: 5px; border-radius: 3px;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDem">
+     <property name="title">
+      <string>1. 지형 데이터 (DEM) 선택</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_2">
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer">
+        <property name="toolTip">
+         <string>분석의 기초가 되는 수치표고모델(DEM)을 선택하세요.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupMode">
+     <property name="title">
+      <string>2. 분석 유형 선택</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout">
+      <item row="0" column="0">
+       <widget class="QRadioButton" name="radioSinglePoint">
+        <property name="text">
+         <string>단일 가시권 (Single Point)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>하나의 관측점에서 보이는 영역을 계산합니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QRadioButton" name="radioMultiPoint">
+        <property name="text">
+         <string>다중 누적 가시권 (Cumulative)</string>
+        </property>
+        <property name="toolTip">
+         <string>여러 관측점의 가시권을 합산하여 '얼마나 많은 지점에서 보이는지' 계산합니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QRadioButton" name="radioLineViewshed">
+        <property name="text">
+         <string>이동 경로 가시권 (Line Path)</string>
+        </property>
+        <property name="toolTip">
+         <string>선형 경로(예: 성곽, 도로)를 따라 이동하며 보이는 영역을 분석합니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QRadioButton" name="radioReverseViewshed">
+        <property name="text">
+         <string>역방향 가시권 (Reverse Viewshed)</string>
+        </property>
+        <property name="toolTip">
+         <string>특정 지점을 '바라볼 수 있는' 위치를 찾습니다 (Visual Prominence).</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QRadioButton" name="radioLineOfSight">
+        <property name="text">
+         <string>가시선 분석 (Line of Sight)</string>
+        </property>
+        <property name="toolTip">
+         <string>두 지점 사이의 시야가 확보되는지 단면을 통해 확인합니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QRadioButton" name="radioBufferVisibility">
+        <property name="text">
+         <string>원형 조망 분석 (Visual Magnitude)</string>
+        </property>
+        <property name="toolTip">
+         <string>중심점에서 주변 360도를 둘러볼 때의 조망량을 계산합니다.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupObserver">
+     <property name="title">
+      <string>3. 관측점(Observer) 설정</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout">
+        <item>
+         <widget class="QRadioButton" name="radioClickMap">
+          <property name="text">
+           <string>지도에서 직접 클릭</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QRadioButton" name="radioFromLayer">
+          <property name="text">
+           <string>기존 포인트 레이어 사용</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbObserverLayer">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_Selected">
+        <item>
+         <widget class="QLabel" name="lblSelectedPoint">
+          <property name="text">
+           <string>선택된 위치: 없음 (지도를 클릭하세요)</string>
+          </property>
+          <property name="styleSheet">
+           <string>font-weight: bold; color: #333;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnSelectPoint">
+          <property name="text">
+           <string>🖱️ 관측점 지정하기</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupParams">
+     <property name="title">
+      <string>4. 분석 매개변수 (Parameters)</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_2">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblObserverHeight">
+        <property name="text">
+         <string>관측자 눈높이 (m):</string>
+        </property>
+        <property name="toolTip">
+         <string>일반적인 성인 눈높이는 1.6m 내외입니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QDoubleSpinBox" name="spinObserverHeight">
+        <property name="value">
+         <double>1.6</double>
+        </property>
+        <property name="singleStep">
+         <double>0.1</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblTargetHeight">
+        <property name="text">
+         <string>대상물 높이 (m):</string>
+        </property>
+        <property name="toolTip">
+         <string>보려고 하는 대상의 높이입니다 (0 = 지면).</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="spinTargetHeight">
+        <property name="value">
+         <double>0.0</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lblMaxDistance">
+        <property name="text">
+         <string>최대 분석 반경 (m):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="spinMaxDistance">
+        <property name="maximum">
+         <number>100000</number>
+        </property>
+        <property name="value">
+         <number>5000</number>
+        </property>
+        <property name="singleStep">
+         <number>100</number>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="lblAzimuth">
+        <property name="text">
+         <string>시야각(방위/폭):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <layout class="QHBoxLayout" name="horizontalLayout_FOV">
+        <item>
+         <widget class="QSpinBox" name="spinAzimuth">
+          <property name="maximum">
+           <number>360</number>
+          </property>
+          <property name="suffix">
+           <string>°</string>
+          </property>
+          <property name="toolTip">
+           <string>바라보는 중심 방향 (0=북쪽)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="spinAngleWidth">
+          <property name="maximum">
+           <number>360</number>
+          </property>
+          <property name="value">
+           <number>360</number>
+          </property>
+          <property name="suffix">
+           <string>°</string>
+          </property>
+          <property name="toolTip">
+           <string>시야의 폭 (360 = 전방향)</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkCurvature">
+        <property name="text">
+         <string>지구 곡률 보정 (Curvature Correction)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>장거리 분석 시 둥근 지구의 효과를 고려합니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkRefraction">
+        <property name="text">
+         <string>대기 굴절 보정 (Refraction Correction)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>빛이 대기를 통과하며 굴절되는 현상을 보정합니다 (계수 0.13).</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupStyling">
+     <property name="title">
+      <string>5. 결과 시각화 옵션</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Style">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblVisibleColor">
+        <property name="text">
+         <string>가시(Visible) 색상:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QgsColorButton" name="btnVisibleColor">
+        <property name="text">
+         <string>색상 선택</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblNotVisibleColor">
+        <property name="text">
+         <string>비가시(Invisible) 색상:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QgsColorButton" name="btnNotVisibleColor">
+        <property name="text">
+         <string>색상 선택</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkHiguchi">
+        <property name="text">
+         <string>히구치 거리대 (Higuchi View Zones) 표시</string>
+        </property>
+        <property name="toolTip">
+         <string>가시권을 근경/중경/원경으로 구분하여 시각화합니다.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupMultiOptions">
+     <property name="title">
+      <string>고급 옵션 (다중 분석용)</string>
+     </property>
+     <property name="checkable">
+      <bool>true</bool>
+     </property>
+     <property name="checked">
+      <bool>false</bool>
+     </property>
+     <layout class="QFormLayout" name="formLayout_Multi">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblInterval">
+        <property name="text">
+         <string>관측점 샘플링 간격(m):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="spinPointInterval">
+        <property name="value">
+         <number>50</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblMaxPoints">
+        <property name="text">
+         <string>최대 분석 점수 제한:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="spinMaxPoints">
+        <property name="maximum">
+         <number>10000</number>
+        </property>
+        <property name="value">
+         <number>200</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkCountOnly">
+        <property name="text">
+         <string>결과를 이진(Binary)이 아닌 빈도(Count)로 계산</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>분석 실행 (Run Analysis)</string>
+       </property>
+       <property name="styleSheet">
+        <string>background-color: #007bff; color: white; font-weight: bold; padding: 10px 20px; border-radius: 4px;</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsColorButton</class>
+   <extends>QPushButton</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+  <customwidget>
+   <class>QgsMapLayerComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

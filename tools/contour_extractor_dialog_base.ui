@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ContourExtractorDialog</class>
+ <widget class="QDialog" name="ContourExtractorDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>550</width>
+    <height>650</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>등고선 추출 도구 (Contour Extractor) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="label_Header">
+     <property name="text">
+      <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:10pt; font-weight:600;&quot;&gt;등고선 데이터 추출&lt;/span&gt;&lt;/p&gt;&lt;p&gt;수치지형도(DXF)에서 등고선만 필터링하거나, DEM에서 새로운 등고선을 생성합니다.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+     </property>
+     <property name="styleSheet">
+      <string>background-color: #e8f5e9; padding: 10px; border-radius: 4px;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupMode">
+     <property name="title">
+      <string>추출 방식 선택</string>
+     </property>
+     <layout class="QHBoxLayout" name="horizontalLayout_Mode">
+      <item>
+       <widget class="QRadioButton" name="radioDxf">
+        <property name="text">
+         <string>수치지형도(DXF) 필터링</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QRadioButton" name="radioDem">
+        <property name="text">
+         <string>DEM에서 등고선 생성</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDxf">
+     <property name="title">
+      <string>1. DXF 등고선 필터링</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Dxf">
+      <item>
+       <widget class="QLabel" name="label_DxfInfo">
+        <property name="text">
+         <string>필터링할 레이어를 선택하고, 추출할 등고선 유형을 체크하세요.</string>
+        </property>
+        <property name="styleSheet">
+         <string>color: #666; font-style: italic;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QListWidget" name="listDxfLayers">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>120</height>
+         </size>
+        </property>
+        <property name="selectionMode">
+         <enum>QAbstractItemView::ExtendedSelection</enum>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnRefreshLayers">
+        <property name="text">
+         <string>🔄 레이어 목록 새로고침</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_ContourType">
+        <property name="text">
+         <string>추출할 등고선 유형:</string>
+        </property>
+        <property name="styleSheet">
+         <string>font-weight: bold; margin-top: 5px;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QGridLayout" name="gridLayout_Contours">
+        <item row="0" column="0">
+         <widget class="QCheckBox" name="chkContour1">
+          <property name="text">
+           <string>주곡선 (F0017110) - 기본 등고선</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="QCheckBox" name="chkContour2">
+          <property name="text">
+           <string>계곡선 (F0017111) - 굵은 선</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="QCheckBox" name="chkContour3">
+          <property name="text">
+           <string>간곡선 (F0017112) - 파선</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QCheckBox" name="chkContour4">
+          <property name="text">
+           <string>조곡선 (F0017113) - 점선</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnResetFilter">
+        <property name="text">
+         <string>↩️ 필터 초기화 (원래 상태로)</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDem">
+     <property name="title">
+      <string>2. DEM에서 등고선 생성</string>
+     </property>
+     <property name="enabled">
+      <bool>false</bool>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Dem">
+      <item>
+       <widget class="QLabel" name="label_DemInfo">
+        <property name="text">
+         <string>DEM 래스터를 선택하고 등고선 간격을 지정하세요.</string>
+        </property>
+        <property name="styleSheet">
+         <string>color: #666; font-style: italic;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer"/>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_Interval">
+        <item>
+         <widget class="QLabel" name="label_Interval">
+          <property name="text">
+           <string>등고선 간격 (m):</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="spinInterval">
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>1000</number>
+          </property>
+          <property name="value">
+           <number>10</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer_2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>등고선 추출 실행</string>
+       </property>
+       <property name="styleSheet">
+        <string>padding: 10px 20px; font-weight: bold; background-color: #4caf50; color: white;</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsMapLayerComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

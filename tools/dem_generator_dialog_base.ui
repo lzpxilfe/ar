@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DemGeneratorDialog</class>
+ <widget class="QDialog" name="DemGeneratorDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>700</width>
+    <height>850</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>수치지형도 DEM 생성기 (DEM Generator) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="label_Header">
+     <property name="text">
+      <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:10pt; font-weight:600;&quot;&gt;고해상도 지형 모델링 도구&lt;/span&gt;&lt;/p&gt;&lt;p&gt;수치지형도(DXF)의 등고선 및 표고점을 보간하여 정밀한 DEM을 생성합니다. &lt;br/&gt;TIN(불규칙 삼각망) 방식은 등고선 데이터에 가장 적합한 보간 알고리즘입니다.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+     </property>
+     <property name="styleSheet">
+      <string>background-color: #e3f2fd; padding: 10px; border-radius: 4px; border: 1px solid #bbdefb;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDxfLoad">
+     <property name="title">
+      <string>1. 수치지형도(DXF) 로드 및 레이어 필터링</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_2">
+      <item>
+       <widget class="QTableWidget" name="tblLayers">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>200</height>
+         </size>
+        </property>
+        <property name="alternatingRowColors">
+         <bool>true</bool>
+        </property>
+        <property name="selectionBehavior">
+         <enum>QAbstractItemView::SelectRows</enum>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout">
+        <item>
+         <widget class="QPushButton" name="btnSelectAll">
+          <property name="text">
+           <string>모두 선택</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnDeselectAll">
+          <property name="text">
+           <string>선택 해제</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnLoadDxf">
+          <property name="text">
+           <string>📁 DXF 파일(여러 개 가능) 불러오기...</string>
+          </property>
+          <property name="styleSheet">
+           <string>font-weight: bold; padding: 5px 15px;</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupVectorSelect">
+     <property name="title">
+      <string>2. 보간 대상 레이어 확인</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <widget class="QLabel" name="label_Info2">
+        <property name="text">
+         <string>QGIS에 불러와진 레이어 중, DEM 생성에 사용할 벡터 레이어를 체크하세요.</string>
+        </property>
+        <property name="styleSheet">
+         <string>color: #666; font-style: italic;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QListWidget" name="listLayers">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>120</height>
+         </size>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnRefreshLayers">
+        <property name="text">
+         <string>🔄 레이어 목록 새로고침</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupConfig">
+     <property name="title">
+      <string>3. 보간 알고리즘 및 해상도 설정</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblScale">
+        <property name="text">
+         <string>도면 축척 기준:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="cmbScale">
+        <property name="toolTip">
+         <string>국토지리정보원 내규에 따른 축척별 권장 해상도를 자동 입력합니다.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblPixelSize">
+        <property name="text">
+         <string>출력 해상도 (m):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
+        <item>
+         <widget class="QDoubleSpinBox" name="spinPixelSize">
+          <property name="value">
+           <double>1.0</double>
+          </property>
+          <property name="singleStep">
+           <double>0.5</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lblRecommended">
+          <property name="text">
+           <string>(권장: 1.0m)</string>
+          </property>
+          <property name="styleSheet">
+           <string>color: #007bff; font-weight: bold;</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lblInterpolation">
+        <property name="text">
+         <string>보간 방법 (Method):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QComboBox" name="cmbInterpolation"/>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QLabel" name="lblInterpDesc">
+        <property name="text">
+         <string>💡 TIN (Triangulated Irregular Network): 불규칙 삼각망 보간법 [Delaunay, 1934]</string>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #fff3e0; padding: 8px; border-radius: 3px; font-style: italic;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupOutput">
+     <property name="title">
+      <string>4. 결과 파일 저장</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_4">
+      <item>
+       <widget class="QgsFileWidget" name="fileOutput">
+        <property name="dialogTitle">
+         <string>DEM 저장 위치 선택 (GeoTIFF)</string>
+        </property>
+        <property name="filter">
+         <string>GeoTIFF Files (*.tif)</string>
+        </property>
+        <property name="storageMode">
+         <enum>QgsFileWidget::SaveFile</enum>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btnRun">
+     <property name="text">
+      <string>🚀 DEM 생성 시작</string>
+     </property>
+     <property name="styleSheet">
+      <string>padding: 12px; font-size: 11pt; font-weight: bold; background-color: #4caf50; color: white; border-radius: 5px;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPushButton" name="btnClose">
+     <property name="text">
+      <string>닫기</string>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsFileWidget</class>
+   <extends>QWidget</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
