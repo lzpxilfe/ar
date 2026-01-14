@@ -140,13 +140,20 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btnAdvanced.setText("⚙ 고급 설정 ▲")
         self.btnAdvanced.clicked.connect(self.toggle_advanced)
         
-        # Auto-SD checkbox connection (if exists)
+        # Auto-SD checkbox connection and initial state
         if hasattr(self, 'chkAutoSD'):
             self.chkAutoSD.stateChanged.connect(self.on_auto_sd_changed)
+            # Apply initial state - disable inputs if auto-SD is checked
+            self._apply_auto_sd_state(self.chkAutoSD.isChecked())
     
     def on_auto_sd_changed(self, state):
         """Enable/disable manual TPI threshold inputs based on auto-SD checkbox"""
-        auto_mode = state == 2  # Qt.Checked
+        # Use isChecked() for reliable check - stateChanged sends int (0, 1, or 2)
+        auto_mode = self.chkAutoSD.isChecked()
+        self._apply_auto_sd_state(auto_mode)
+    
+    def _apply_auto_sd_state(self, auto_mode):
+        """Apply the auto-SD state to disable/enable relevant spinboxes"""
         self.spinTPILow.setEnabled(not auto_mode)
         self.spinTPIHigh.setEnabled(not auto_mode)
         self.spinTPIThreshold.setEnabled(not auto_mode)

@@ -354,7 +354,7 @@
          <string>히구치 거리대 (Higuchi View Zones) 표시</string>
         </property>
         <property name="toolTip">
-         <string>가시권을 근경/중경/원경으로 구분하여 시각화합니다.</string>
+         <string>&lt;html&gt;&lt;b&gt;히구치 거리대 분석 (Higuchi, 1975)&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Higuchi, T. (1975). The Visual and Spatial Structure of Landscapes. MIT Press.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;인간이 경관을 인지하는 거리에 따라 세 구역으로 분류합니다:&lt;br/&gt;&lt;br/&gt;&lt;b&gt;• 근경 (0~500m):&lt;/b&gt; 세부 질감, 개별 요소 식별 가능&lt;br/&gt;&lt;b&gt;• 중경 (500m~2.5km):&lt;/b&gt; 형태와 부피 파악, 실루엣 인지&lt;br/&gt;&lt;b&gt;• 원경 (2.5km~):&lt;/b&gt; 스카이라인, 전체 경관 인상&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 고대인의 경관 인식 복원&lt;br/&gt;• 유적 입지와 조망의 관계 분석&lt;br/&gt;• 의도된 가시성(상징적 조망) 연구&lt;/html&gt;</string>
         </property>
        </widget>
       </item>
@@ -432,59 +432,7 @@
      </property>
     </widget>
    </item>
-   <item>
-    <widget class="QGroupBox" name="groupMultiOptions">
-     <property name="title">
-      <string>고급 옵션 (다중 분석용)</string>
-     </property>
-     <property name="checkable">
-      <bool>true</bool>
-     </property>
-     <property name="checked">
-      <bool>false</bool>
-     </property>
-     <layout class="QFormLayout" name="formLayout_Multi">
-      <item row="0" column="0">
-       <widget class="QLabel" name="lblInterval">
-        <property name="text">
-         <string>관측점 샘플링 간격(m):</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="QSpinBox" name="spinPointInterval">
-        <property name="value">
-         <number>50</number>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="lblMaxPoints">
-        <property name="text">
-         <string>최대 분석 점수 제한:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <widget class="QSpinBox" name="spinMaxPoints">
-        <property name="maximum">
-         <number>10000</number>
-        </property>
-        <property name="value">
-         <number>200</number>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="0" colspan="2">
-       <widget class="QCheckBox" name="chkCountOnly">
-        <property name="text">
-         <string>결과를 이진(Binary)이 아닌 빈도(Count)로 계산</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
+
    <item>
     <spacer name="verticalSpacer">
      <property name="orientation">

@@ -17,6 +17,9 @@ import uuid
 import time
 import math
 import shutil
+import processing
+import numpy as np
+from osgeo import gdal
 from qgis.PyQt import uic, QtWidgets, QtCore
 from qgis.PyQt.QtCore import Qt, QVariant, QRectF, QPointF
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QFontMetrics, QImage, QPainterPath, QPolygonF
@@ -185,6 +188,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                          layout.addWidget(self.spinRefraction)
                      elif isinstance(layout, (QtWidgets.QVBoxLayout, QtWidgets.QHBoxLayout)):
                          layout.addWidget(self.spinRefraction)
+    
+    def transform_point(self, point, source_crs, dest_crs):
+        """Wrapper method to call the utility transform_point function"""
+        return transform_point(point, source_crs, dest_crs)
     
     def reset_selection(self):
         """Reset all manual point selections and markers"""
@@ -718,7 +725,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         center_dem = self.transform_to_dem_crs(center, dem_layer)
         
         buffer_radius = self.spinMaxDistance.value()  # Use max distance as buffer radius
-        interval = self.spinPointInterval.value()
+        interval = self.spinLineInterval.value()
         
         # Calculate number of points based on circumference and interval
         circumference = 2 * math.pi * buffer_radius
@@ -1026,7 +1033,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     
                     # Ensure label layer is on top
                     self.update_layer_order()
-                    self.cleanup_temp_files([raw_output])
+                    cleanup_files([raw_output])
                     self.accept()
                 else:
                     raise Exception("결과 레이어 로드 실패")
@@ -1038,7 +1045,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     
     def run_line_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run viewshed along a line/polygon perimeter"""
-        interval = self.spinPointInterval.value()
+        interval = self.spinLineInterval.value()
         
         # Get line geometry
         points = []
@@ -1308,7 +1315,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.link_current_marker_to_layer(viewshed_layer.id(), points)
                 
                 # Cleanup temp
-                self.cleanup_temp_files(temp_outputs)
+                cleanup_files(temp_outputs)
                 
                 self.iface.messageBar().pushMessage(
                     "완료", 
@@ -1608,6 +1615,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
                 # STRICT per-point circular masking
+                # Safety check: ensure pt_idx is valid
+                if pt_idx >= len(observer_points):
+                    print(f"Warning: pt_idx {pt_idx} out of range, skipping")
+                    vs_ds = None
+                    continue
+                    
                 pt, pt_crs = observer_points[pt_idx]
                 pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
                 c_col = (pt_dem.x() - target_xmin) / dem_xres
@@ -1662,7 +1675,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         can see that location. Color-coded from red (1 point) to green (all points).
         """
         points = [] # Start empty, we'll collect from all sources as (pt, crs)
-        interval = self.spinPointInterval.value()
+        interval = self.spinLineInterval.value()
         canvas_crs = self.canvas.mapSettings().destinationCrs()
 
         # 1. Add manual clicks
@@ -1853,23 +1866,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{int(time.time())}.tif')
         
         try:
-            # [v1.5.68] Optimized Cumulative Viewshed Merge
-            # Restore Bit-Flags and Circular Masking using NumPy
-            progress.setLabelText("결과 통합 중 (고성능 NumPy)...")
+            # [v1.5.68] Optimized Cumulative Viewshed Merge using NumPy
+            progress.setLabelText("결과 통합 중 (NumPy)...")
             QtWidgets.QApplication.processEvents()
             
-            # Use is_count_mode check if we want simple counts, 
-            # but user requested bit-flags for archaeological analysis.
-            is_count = self.chkCountOnly.isChecked() if hasattr(self, 'chkCountOnly') else False
-            
+            # viewshed_results is already [(idx, filepath), ...] as needed by combine_viewsheds_numpy
             success = self.combine_viewsheds_numpy(
                 dem_layer=dem_layer,
                 viewshed_files=viewshed_results,
                 output_path=final_output,
                 observer_points=points,
                 max_dist=max_dist,
-                is_count_mode=is_count,
-                grid_info=grid_info # Unified Grid
+                is_count_mode=False,
+                grid_info=grid_info
             )
             
             if not success or not os.path.exists(final_output):
