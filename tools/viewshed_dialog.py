@@ -34,7 +34,7 @@ from qgis.PyQt.QtCore import Qt, QVariant, QRectF, QPointF
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QFontMetrics, QImage, QPainterPath, QPolygonF
 from qgis.PyQt.QtWidgets import QDialog, QVBoxLayout, QPushButton, QWidget, QFileDialog, QHBoxLayout, QLabel
 from qgis.core import (
-    QgsProject, QgsRasterLayer, QgsVectorLayer, QgsMapLayerProxyModel,
+    QgsProject, QgsRasterLayer, QgsVectorLayer, QgsMapLayerProxyModel, QgsRectangle,
     QgsPointXY, QgsWkbTypes, QgsFeature, QgsGeometry, QgsField,
     QgsCoordinateReferenceSystem, QgsCoordinateTransform,
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer,
