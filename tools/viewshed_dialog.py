@@ -116,6 +116,48 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if hasattr(self, 'btnVisibleColor'):
             self.btnVisibleColor.setColor(QColor(0, 200, 0, 180))  # Semi-transparent green
         
+        # [v1.5.95] Initialize scientific context and Higuchi signals
+        if hasattr(self, 'chkHiguchi'):
+            self.chkHiguchi.toggled.connect(self.on_higuchi_toggled)
+        
+        # Programmatically update tooltips for scientific basis
+        if hasattr(self, 'chkCurvature'):
+            self.chkCurvature.setToolTip("지구 곡률 보정: h' = h - d²/2R (지구 반경 6,371km)")
+        if hasattr(self, 'chkRefraction'):
+            self.chkRefraction.setToolTip("대기 굴절 보정: 표준 계수 0.13 사용 (빛의 휘어짐 보정)\n지역 대기 조건에 따라 관측 거리가 달라질 수 있습니다.")
+        
+        # [v1.6.0] Add Refraction UI programmatically since we can't edit .ui easily
+        # Insert a spinbox next to the refraction checkbox if possible, or in a new layout
+        self.spinRefraction = QtWidgets.QDoubleSpinBox(self)
+        self.spinRefraction.setRange(0.0, 1.0)
+        self.spinRefraction.setSingleStep(0.01)
+        self.spinRefraction.setDecimals(2)
+        self.spinRefraction.setValue(0.13) # Default refraction coefficient
+        self.spinRefraction.setToolTip("대기 굴절 계수 (Refraction Coefficient)\n보통 0.13 사용 (표준 대기 상태)")
+        self.spinRefraction.setEnabled(self.chkRefraction.isChecked())
+        
+        # Try to find the layout containing chkRefraction and add the spinbox
+        if self.chkRefraction.parent():
+            layout = self.chkRefraction.parent().layout()
+            if layout:
+                idx = layout.indexOf(self.chkRefraction)
+                if idx >= 0:
+                    layout.insertWidget(idx + 1, self.spinRefraction)
+                    # [v1.5.95] Explicit scientific basis labels
+                    self.lblScienceBasis = QtWidgets.QLabel(self)
+                    self.lblScienceBasis.setText("<font size='2' color='#444'><b>[근거]</b> 곡률: h'=h-d²/2R | 굴절: k=0.13(표준)</font>")
+                    self.lblScienceBasis.setToolTip("지구 곡률 보정(R=6,371km) 및 대기 굴절(k) 보정 공식입니다.")
+                    layout.addWidget(self.lblScienceBasis)
+            
+            # [v1.5.95] Add scientific basis label
+            self.lblScienceHelp = QtWidgets.QLabel(self)
+            self.lblScienceHelp.setText("<font size='2' color='#555'>💡 h' = h - (1-k)d²/2R (k=0.13)</font>")
+            self.lblScienceHelp.setToolTip("지구 곡률 및 대기 굴절 보정 공식 (R=6,371km)")
+            if layout:
+                layout.addWidget(self.lblScienceHelp)
+        
+        self.chkRefraction.toggled.connect(self.spinRefraction.setEnabled)
+        
         # [v1.5.90] Code-level UI overrides for terminology and defaults
         self.radioLineViewshed.setText("선형 및 둘레 가시권 (Line/Perimeter)")
         self.radioLineViewshed.setToolTip("선형 경로(도로, 해안선)나 성곽 둘레(Perimeter)를 따라 이동하며 보이는 영역을 분석합니다.")
@@ -124,6 +166,32 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.spinLineMaxPoints.setValue(50)
         if hasattr(self, "spinMaxPoints"):
             self.spinMaxPoints.setValue(50)
+
+        # [v1.6.1] Fix Maximum Distance limit to allow > 2500m
+        if hasattr(self, "spinMaxDistance"):
+            self.spinMaxDistance.setMaximum(999999) # Allow large analysis radius
+            # Set default if needed, but respect UI default usually
+        
+        # [v1.6.1] Safer Refraction Widget Insertion
+        # If previous insertion failed (no parent layout found), try finding thegroupBox
+        if self.spinRefraction.parent() == self:
+             # It means it's just floating on the dialog, which might be invisible or wrongly placed
+             # Let's try to add it to 'groupParameters' layout if exists
+             if hasattr(self, 'groupParameters') and self.groupParameters.layout():
+                 row = self.groupParameters.layout().rowCount()
+                 self.groupParameters.layout().addWidget(QLabel("대기 굴절 계수 (Refraction):"), row, 0)
+                 self.groupParameters.layout().addWidget(self.spinRefraction, row, 1)
+             
+             # Or if chkRefraction is in a specific layout
+             elif self.chkRefraction.parentWidget():
+                 layout = self.chkRefraction.parentWidget().layout()
+                 if layout:
+                     # Attempt to add to the layout
+                     if isinstance(layout, QtWidgets.QGridLayout):
+                         # Logic to find position? Too complex, just add to end
+                         layout.addWidget(self.spinRefraction)
+                     elif isinstance(layout, (QtWidgets.QVBoxLayout, QtWidgets.QHBoxLayout)):
+                         layout.addWidget(self.spinRefraction)
     
     def reset_selection(self):
         """Reset all manual point selections and markers"""
@@ -245,15 +313,24 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # === Mode-specific UI adjustments ===
         
-        # 1. Line Mode: Force layer selection (no map click)
+        # 1. Line Mode: Enable Drawing OR Layer selection
         if is_line_mode:
-            self.radioFromLayer.setChecked(True)
-            self.radioClickMap.setEnabled(False)
-            self.groupObserver.setTitle("3. 분석 대상 레이어 선택")
-            self.btnSelectPoint.setText("🖱️ 추가 관측점 클릭 (선택사항)")
-            self.btnSelectPoint.setEnabled(True)
+            self.radioClickMap.setEnabled(True)
+            self.groupObserver.setTitle("3. 분석 대상(선형/둘레) 설정")
+            
+            # Filter layer for Line/Polygon only
+            self.cmbObserverLayer.setFilters(QgsMapLayerProxyModel.Filter.LineLayer | QgsMapLayerProxyModel.Filter.PolygonLayer)
+            
+            if self.radioFromLayer.isChecked():
+                self.btnSelectPoint.setText("🖱️ 추가 관측점 클릭 (선택사항)")
+                if hasattr(self, 'lblLayerHint'):
+                    self.lblLayerHint.setText("💡 성곽(Polygon)이나 도로(Line) 레이어를 선택하세요.")
+            else:
+                self.btnSelectPoint.setText("🖱️ 지도에서 경로(둘레) 그리기")
+                if hasattr(self, 'lblLayerHint'):
+                    self.lblLayerHint.setText("💡 시작점 클릭 후 경로를 그리세요 (시작점 재클릭 시 자동 닫힘).")
+            
             if hasattr(self, 'lblLayerHint'):
-                self.lblLayerHint.setText("💡 성곽 둘레(Perimeter), 해안선 등 라선형/폴리곤 레이어를 선택하거나 지도를 그려보세요.")
                 self.lblLayerHint.setVisible(True)
         
         # 2. Point-based modes: Enable both options
@@ -366,14 +443,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # UI Feedback based on mode
         if from_layer:
             if is_line_mode:
-                self.lblSelectedPoint.setText("소스: 선택된 라인/폴리곤 레이어")
+                self.lblSelectedPoint.setText("소스: 선택된 선형/둘레 레이어")
             else:
                 self.lblSelectedPoint.setText("소스: 선택된 레이어")
             
             if not is_multi and not is_line_mode:
                 self.point_marker.reset(QgsWkbTypes.PointGeometry)
         else:
-            if self.observer_point:
+            if is_line_mode:
+                if hasattr(self, 'drawn_line_points') and self.drawn_line_points:
+                    self.lblSelectedPoint.setText(f"그려진 경로: {len(self.drawn_line_points)}개 정점 {'(폐곡선)' if self.is_line_closed else '(개곡선)'}")
+                else:
+                    self.lblSelectedPoint.setText("그려진 경로: 없음 (지도를 클릭하세요)")
+            elif self.observer_point:
                 self.lblSelectedPoint.setText(f"선택된 위치: {self.observer_point.x():.1f}, {self.observer_point.y():.1f}")
             else:
                 self.lblSelectedPoint.setText("선택된 위치: 없음")
@@ -588,6 +670,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         max_distance = self.spinMaxDistance.value()
         curvature = self.chkCurvature.isChecked()
         refraction = self.chkRefraction.isChecked()
+        refraction_coeff = 0.13
+        if hasattr(self, 'spinRefraction'):
+            refraction_coeff = self.spinRefraction.value()
         
         self.iface.messageBar().pushMessage("처리 중", "가시권 분석 실행 중...", level=0)
         
@@ -605,17 +690,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if self.radioSinglePoint.isChecked():
                 self.run_single_viewshed(
                     dem_layer, observer_height, target_height, 
-                    max_distance, curvature, refraction
+                    max_distance, curvature, refraction, refraction_coeff
                 )
             elif self.radioLineViewshed.isChecked():
                 self.run_line_viewshed(
                     dem_layer, observer_height, target_height,
-                    max_distance, curvature, refraction
+                    max_distance, curvature, refraction, refraction_coeff
                 )
             elif self.radioMultiPoint.isChecked():
                 self.run_multi_viewshed(
                     dem_layer, observer_height, target_height,
-                    max_distance, curvature, refraction
+                    max_distance, curvature, refraction, refraction_coeff
                 )
             elif self.radioLineOfSight.isChecked():
                 if not self.observer_point or not self.target_point:
@@ -636,7 +721,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             else:  # Reverse viewshed
                 self.run_reverse_viewshed(
                     dem_layer, observer_height, target_height,
-                    max_distance, curvature, refraction
+                    max_distance, curvature, refraction, refraction_coeff
                 )
         except Exception as e:
             self.iface.messageBar().pushMessage("오류", f"분석 중 오류: {str(e)}", level=2)
@@ -873,7 +958,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         QgsProject.instance().addMapLayers([layer])
         return layer
 
-    def run_single_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction):
+    def run_single_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run single point viewshed analysis with circular masking"""
         points_info = self.get_context_point_and_crs()
         if not points_info:
@@ -904,6 +989,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             'MAX_DISTANCE': max_dist,
             'CURVATURE': curvature,
             'REFRACTION': refraction,
+            'IV': refraction_coeff if refraction else 0, # Pass coefficient if enabled
             'OUTPUT': raw_output
         }
         
@@ -975,7 +1061,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         finally:
             self.cleanup_temp_files([raw_output])
     
-    def run_line_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction):
+    def run_line_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run viewshed along a line/polygon perimeter"""
         interval = self.spinPointInterval.value()
         
@@ -1118,6 +1204,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     'OBSERVER_HEIGHT': obs_height,
                     'TARGET_HEIGHT': tgt_height,
                     'MAX_DISTANCE': max_dist,
+                    'CC': 1 if curvature else 0,
+                    'IV': refraction_coeff if refraction else 0,
                     'OUTPUT': output
                 })
                 if os.path.exists(output):
@@ -1254,7 +1342,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if 'progress' in locals():
                 progress.close()
     
-    def run_reverse_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction):
+    def run_reverse_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run reverse viewshed - from where can the target be seen?
         
         This swaps observer and target heights to answer:
@@ -1271,7 +1359,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             obs_height,  # Observer height becomes target
             max_dist, 
             curvature, 
-            refraction
+            refraction,
+            refraction_coeff
         )
     
     def run_line_of_sight(self, dem_layer, obs_height, tgt_height):
@@ -1577,7 +1666,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             import traceback; traceback.print_exc()
             return False
     
-    def run_multi_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction):
+    def run_multi_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run cumulative viewshed from multiple observer points
         
         Combines points from multiple sources:
@@ -1738,7 +1827,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 processing.run("gdal:viewshed", {
                     'INPUT': dem_layer.source(), 'BAND': 1, 'OBSERVER': f"{pt_dem.x()},{pt_dem.y()}",
                     'OBSERVER_HEIGHT': obs_height, 'TARGET_HEIGHT': tgt_height, 'MAX_DISTANCE': max_dist,
-                    'CC': 1 if curvature else 0, 'IV': 0.13 if refraction else 0, 'OUTPUT': output_raw
+                    'CC': 1 if curvature else 0, 'IV': refraction_coeff if refraction else 0, 'OUTPUT': output_raw
                 })
                 
                 if os.path.exists(output_raw):
@@ -1971,9 +2060,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         colors = [
             QgsColorRampShader.ColorRampItem(0, QColor(255, 255, 255, 0), "보이지 않음"),
-            QgsColorRampShader.ColorRampItem(85, QColor(0, 100, 50, 200), f"원경 (2.5km+ 스카이라인)"),
-            QgsColorRampShader.ColorRampItem(170, QColor(0, 150, 75, 200), f"중경 (500m~2.5km 실루엣)"),
-            QgsColorRampShader.ColorRampItem(255, QColor(0, 200, 100, 200), f"근경 (0~500m 세부 질감)")
+            QgsColorRampShader.ColorRampItem(85, QColor(255, 50, 50, 200), f"근경 (0~500m: 질감/세부 인지)"),     # Sharp Red
+            QgsColorRampShader.ColorRampItem(170, QColor(255, 165, 0, 200), f"중경 (500m~2.5km: 형태/부피 파악)"), # Orange
+            QgsColorRampShader.ColorRampItem(255, QColor(138, 43, 226, 200), f"원경 (2.5km~: 실루엣/스카이라인)"), # Purple/Blue
         ]
         
         color_ramp.setColorRampItemList(colors)
@@ -1987,6 +2076,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Create distance-based zone rings as vector overlay
         self.create_higuchi_rings(observer_point, max_dist, dem_layer)
     
+    def on_higuchi_toggled(self, checked):
+        """Suggest parameters suited for Higuchi analysis"""
+        if checked:
+            # Higuchi zones need at least 2.5km (preferably 5km)
+            current_dist = self.spinMaxDistance.value()
+            if current_dist < 5000:
+                self.spinMaxDistance.setValue(5000)
+                self.iface.messageBar().pushMessage(
+                    "히구치 분석 안내", 
+                    "히구치 거리대 분석을 위해 권장 반경인 5,000m로 자동 조정되었습니다.",
+                    level=0
+                )
+    
     def create_higuchi_rings(self, center_point, max_dist, dem_layer):
         """Create buffer rings showing Higuchi distance zones"""
         
@@ -1997,13 +2099,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # We need point in DEM CRS for buffer
         center_dem = self.transform_to_dem_crs(center_point, dem_layer)
         zones = [
-            (500, "근경 (500m)", QColor(0, 200, 100)),
-            (2500, "중경 (2.5km)", QColor(0, 150, 75)),
+            (500, "근경 (500m)", QColor(255, 80, 80)),      # Red
+            (2500, "중경 (2.5km)", QColor(255, 200, 0)),    # Yellow
         ]
         
         # Add far zone only if max_dist is larger
         if max_dist > 2500:
-            zones.append((max_dist, f"원경 ({max_dist/1000:.1f}km)", QColor(0, 100, 50)))
+            zones.append((max_dist, f"원경 ({max_dist/1000:.1f}km)", QColor(50, 200, 50))) # Green
         
         # Create ring features
         for distance, zone_name, color in zones:
