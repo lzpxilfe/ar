@@ -1147,7 +1147,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         total_needed = len(points)
         if total_needed > max_limit:
             cutoff_dist = max_limit * interval
-            # Show warning dialog with specific numbers
+            from qgis.PyQt.QtWidgets import QMessageBox
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("관측점 개수 경고")
+            msg.setText(f"⚠️ 전체 분석에 {total_needed}개의 관측점이 필요하지만,\n"
+                       f"현재 최대 {max_limit}개로 제한되어 있습니다.\n\n"
+                       f"→ 이대로 진행하면 전체 경로 중 시작점에서 약 {cutoff_dist/1000:.1f}km 지점에서 분석이 중단(끊김)됩니다!")
+            msg.setInformativeText(f"💡 해결 방법:\n"
+                                  f"• 예(Yes): {max_limit}개로 제한하여 안전하게 진행\n"
+                                  f"• 아니오(No): 전체 {total_needed}개 분석 (매우 느림)\n"
+                                  f"• 취소(Cancel): 분석 중단")
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Yes)
+            
             res_msg = msg.exec_()
             if res_msg == QMessageBox.No:
                 # Proceed with ALL points (Slow)
@@ -1169,9 +1182,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         QtWidgets.QApplication.processEvents()
 
         # Setup progress dialog
-        progress = QtWidgets.QProgressDialog("가시권 분석 수행 중...", "취소", 0, len(points), self)
+        progress = QtWidgets.QProgressDialog("가시권 분석 초기화 중...", "취소", 0, len(points), self)
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.show()
+        QtWidgets.QApplication.processEvents() # Ensure it shows
 
         # Run viewshed for each point and combine
         temp_outputs = []
@@ -1735,14 +1749,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         if total_needed > MAX_POINTS:
             from qgis.PyQt.QtWidgets import QMessageBox
-            msg = QMessageBox()
+            msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
             msg.setWindowTitle("관측점 개수 경고")
             msg.setText(f"⚠️ 전체 분석에 {total_needed}개의 관측점이 포함되어 있습니다.\n"
                        f"성능을 위해 기본적으로 {MAX_POINTS}개로 제한됩니다.")
-            msg.setInformativeText(f"분석 시간이 매우 오래 걸릴 수 있습니다.\n"
-                                  f"{MAX_POINTS}개로 축소하여 진행하시겠습니까?\n\n"
-                                  f"(Yes: {MAX_POINTS}개로 축소, No: 전체 진행, Cancel: 취소)")
+            msg.setInformativeText(f"고해상도 DEM과 많은 관측점은 수 분 이상 소요될 수 있습니다.\n\n"
+                                  f"• 예(Yes): {MAX_POINTS}개로 축소하여 안전하게 진행\n"
+                                  f"• 아니오(No): 전체 {total_needed}개 분석 (매우 느림)\n"
+                                  f"• 취소(Cancel): 취소 및 설정으로 복귀")
             msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             msg.setDefaultButton(QMessageBox.Yes)
             
@@ -1764,9 +1779,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         QtWidgets.QApplication.processEvents()
 
         # Setup progress dialog
-        progress = QtWidgets.QProgressDialog("다중점 가시권 분석 중...", "취소", 0, len(points), self)
+        progress = QtWidgets.QProgressDialog("다중점 가시권 분석 초기화 중...", "취소", 0, len(points), self)
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.show()
+        QtWidgets.QApplication.processEvents() # Ensure visibility
         # [v1.5.65] Smart Analysis Extent Optimization
         total_obs_ext = QgsRectangle()
         total_obs_ext.setMinimal()
