@@ -1674,9 +1674,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_ds = None
             
             # 4. Final NoData masking (Strictly outside of all circles)
-            if not union_mode:
-                nodata_value = -9999
-                cumulative[~circular_mask] = nodata_value
+            # 4. Final NoData masking (Strictly outside of all circles)
+            nodata_value = -9999
+            cumulative[~circular_mask] = nodata_value
             
             # Save Result
             driver = gdal.GetDriverByName('GTiff')
