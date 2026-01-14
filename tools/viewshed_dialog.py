@@ -115,6 +115,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnNotVisibleColor.setColor(QColor(255, 223, 223))  # #ffdfdf
         if hasattr(self, 'btnVisibleColor'):
             self.btnVisibleColor.setColor(QColor(0, 200, 0, 180))  # Semi-transparent green
+        
+        # [v1.5.90] Code-level UI overrides for terminology and defaults
+        self.radioLineViewshed.setText("선형 및 둘레 가시권 (Line/Perimeter)")
+        self.radioLineViewshed.setToolTip("선형 경로(도로, 해안선)나 성곽 둘레(Perimeter)를 따라 이동하며 보이는 영역을 분석합니다.")
+        
+        if hasattr(self, "spinLineMaxPoints"):
+            self.spinLineMaxPoints.setValue(50)
+        if hasattr(self, "spinMaxPoints"):
+            self.spinMaxPoints.setValue(50)
     
     def reset_selection(self):
         """Reset all manual point selections and markers"""
@@ -244,7 +253,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnSelectPoint.setText("🖱️ 추가 관측점 클릭 (선택사항)")
             self.btnSelectPoint.setEnabled(True)
             if hasattr(self, 'lblLayerHint'):
-                self.lblLayerHint.setText("💡 성곽 둘레, 해안선 등 라인/폴리곤 레이어를 선택하세요.")
+                self.lblLayerHint.setText("💡 성곽 둘레(Perimeter), 해안선 등 라선형/폴리곤 레이어를 선택하거나 지도를 그려보세요.")
                 self.lblLayerHint.setVisible(True)
         
         # 2. Point-based modes: Enable both options
@@ -452,7 +461,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.map_tool = ViewshedLineTool(self.canvas, self)
             self.canvas.setMapTool(self.map_tool)
             self.iface.messageBar().pushMessage(
-                "라인 따라 가시권", "지도에서 라인을 그리세요. 클릭으로 점 추가, 우클릭/Enter로 완료", level=0
+                "선형 및 둘레 가시권", "지도에서 라인을 그리세요. 클릭으로 점 추가, 시작점 클릭 시 자동 닫힘(Snap), 우클릭으로 완료", level=0
             )
         else:
             self.map_tool = ViewshedPointTool(self.canvas, self)
@@ -1057,6 +1066,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Calculate required points and warn if truncation will occur
         total_needed = len(points)
         if total_needed > max_limit:
+            cutoff_dist = max_limit * interval
             # Show warning dialog with specific numbers
             from qgis.PyQt.QtWidgets import QMessageBox
             msg = QMessageBox()
@@ -1064,11 +1074,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             msg.setWindowTitle("관측점 개수 경고")
             msg.setText(f"⚠️ 전체 분석에 {total_needed}개의 관측점이 필요하지만,\n"
                        f"현재 최대 {max_limit}개로 제한되어 있습니다.\n\n"
-                       f"→ 분석이 라인 시작부터 {max_limit}개 지점에서 끊깁니다!")
+                       f"→ 이대로 진행하면 전체 경로 중 시작점에서 약 {cutoff_dist/1000:.1f}km 지점에서 분석이 중단(끊김)됩니다!")
             msg.setInformativeText(f"💡 해결 방법:\n"
-                                  f"• 최대 샘플링 점 개수를 {total_needed}개 이상으로 늘리거나\n"
-                                  f"• 관측점 간격을 늘려 점 개수를 줄이세요\n\n"
-                                  f"그래도 진행하시겠습니까?")
+                                  f"• 최대 분석 점수 제한을 {total_needed}개 이상으로 늘리거나\n"
+                                  f"• 샘플링 간격을 늘려 점 개수를 조절하세요.\n\n"
+                                  f"제한된 범위까지만 분석을 진행하시겠습니까?")
             msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
             msg.setDefaultButton(QMessageBox.No)
             
