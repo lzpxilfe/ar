@@ -1638,18 +1638,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 if not union_mode:
                     val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
+                # [v1.6.14] Always calculate circular_mask for buffer-shape boundary
+                pt, pt_crs = observer_points[pt_idx]
+                pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
+                c_col = (pt_dem.x() - target_xmin) / dem_xres
+                c_row = (target_ymax - pt_dem.y()) / dem_yres
+                rad_pix = max_dist / dem_xres
+                point_mask = ((c_full - c_col)**2 + (r_full - c_row)**2 <= rad_pix**2)
+                circular_mask |= point_mask
+                
                 # Robust Visibility Detection
                 if union_mode:
                     vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5)
                 else:
-                    # Cumulative mode: still use point_mask for circular consistency
-                    pt, pt_crs = observer_points[pt_idx]
-                    pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
-                    c_col = (pt_dem.x() - target_xmin) / dem_xres
-                    c_row = (target_ymax - pt_dem.y()) / dem_yres
-                    rad_pix = max_dist / dem_xres
-                    point_mask = ((c_full - c_col)**2 + (r_full - c_row)**2 <= rad_pix**2)
-                    circular_mask |= point_mask
                     vis_mask = (vs_data[:h_overlap, :w_overlap] > 0.5) & point_mask[:h_overlap, :w_overlap]
                 
                 if vs_nodata is not None:
@@ -1663,13 +1664,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_ds = None
             
             # 4. Final NoData masking
-            # [v1.6.12] Define nodata_value unconditionally to prevent NameError
+            # [v1.6.14] Apply circular buffer masking for ALL modes
             nodata_value = -9999
-            
-            # In Union Mode, we allow everything that GDAL returned to be shown.
-            # Final transparency is handled by Style (0=Transparent).
-            if not union_mode:
-                cumulative[~circular_mask] = nodata_value
+            cumulative[~circular_mask] = nodata_value
             
             # Save Result
             driver = gdal.GetDriverByName('GTiff')
