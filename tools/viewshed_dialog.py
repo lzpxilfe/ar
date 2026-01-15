@@ -164,23 +164,16 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             # Add spinbox to col 1
             layout.addWidget(self.spinRefraction, 5, 1)
             
-            # Add scientific basis label to a new row
-            self.lblScienceHelp = QtWidgets.QLabel(self)
-            self.lblScienceHelp.setWordWrap(True)
-            self.lblScienceHelp.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            layout.addWidget(self.lblScienceHelp, 6, 0, 1, 2)
+            # Keep the main UI clean: show only a short summary + a "details" dialog.
+            self.lblScienceSummary = QtWidgets.QLabel(self)
+            self.lblScienceSummary.setWordWrap(True)
+            self.lblScienceSummary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(self.lblScienceSummary, 6, 0)
 
-            self.lblScienceStats = QtWidgets.QLabel(self)
-            self.lblScienceStats.setWordWrap(True)
-            self.lblScienceStats.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            layout.addWidget(self.lblScienceStats, 7, 0, 1, 2)
-
-            self.lblScienceHelp.setToolTip(
-                "근거:\n"
-                "- 곡률 하강량(근사): Δh ≈ d²/(2R)\n"
-                "- 굴절 포함: Δh ≈ d²/(2R) · (1-k)\n"
-                "- GDAL gdal_viewshed는 -cc(곡률/굴절 계수)를 사용하며 기본값은 0.85714(≈6/7)입니다."
-            )
+            self.btnScienceHelp = QtWidgets.QToolButton(self)
+            self.btnScienceHelp.setText("설명")
+            self.btnScienceHelp.setToolTip("곡률/굴절(대기굴절) 보정 설명 보기")
+            layout.addWidget(self.btnScienceHelp, 6, 1)
             
         # [v1.6.19] Connect signal for automatic cleanup (Line 88 already uses layersWillBeRemoved)
         # Consolidating to line 88 for redundancy reduction.
@@ -190,6 +183,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.chkRefraction.toggled.connect(self._on_refraction_toggled)
         if hasattr(self, 'chkCurvature'):
             self.chkCurvature.toggled.connect(self._on_curvature_toggled)
+        if hasattr(self, "btnScienceHelp"):
+            self.btnScienceHelp.clicked.connect(self._show_curvature_refraction_help_dialog)
         if hasattr(self, 'spinRefraction'):
             self.spinRefraction.valueChanged.connect(self._update_curvature_refraction_help)
         if hasattr(self, "spinMaxDistance"):
@@ -284,14 +279,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self._update_curvature_refraction_help()
 
     def _update_curvature_refraction_help(self):
-        if not hasattr(self, 'lblScienceHelp') or not hasattr(self, 'lblScienceStats'):
+        if not hasattr(self, 'lblScienceSummary'):
             return
 
         try:
             r_earth = 6371000.0  # meters
             max_dist = self.spinMaxDistance.value() if hasattr(self, "spinMaxDistance") else 0.0
-            obs_h = self.spinObserverHeight.value() if hasattr(self, "spinObserverHeight") else 0.0
-            tgt_h = self.spinTargetHeight.value() if hasattr(self, "spinTargetHeight") else 0.0
 
             curvature = self.chkCurvature.isChecked() if hasattr(self, "chkCurvature") else False
             refraction = self.chkRefraction.isChecked() if hasattr(self, "chkRefraction") else False
@@ -303,17 +296,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             drop_curv = (max_dist ** 2) / (2.0 * r_earth) if max_dist else 0.0
             drop_apparent = drop_curv * cc
 
-            # Effective Earth radius method (for intuition on horizon distance).
-            horizon_text = "지평선 근사: N/A"
-            if cc > 0 and max_dist > 0:
-                r_eff = r_earth / cc
-                horizon = math.sqrt(max(0.0, 2.0 * r_eff * obs_h)) + math.sqrt(max(0.0, 2.0 * r_eff * tgt_h))
-                horizon_text = f"평탄 지형 기준 지평선 근사 ≈ {horizon:,.0f} m (관측/대상 높이 반영)"
-
             def curvature_drop(distance_m):
                 return (distance_m ** 2) / (2.0 * r_earth)
 
-            # Rule-of-thumb examples (flat terrain): how big curvature/refraction is at km scales
+            # Rule-of-thumb examples (flat terrain): how big curvature/refraction is at km scales.
             d5 = 5000.0
             d10 = 10000.0
             d20 = 20000.0
@@ -328,36 +314,67 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if k > 0:
                 d_for_1m = math.sqrt((2.0 * r_earth * 1.0) / k)
                 d_for_5m = math.sqrt((2.0 * r_earth * 5.0) / k)
-                ref_meaning_text = (
-                    f"k={k:.2f} 기준: 굴절 보정(=곡률 낙하 차이) "
-                    f"1m≈{d_for_1m/1000:.1f}km, 5m≈{d_for_5m/1000:.1f}km"
-                )
+                ref_meaning_text = f"굴절 보정(=곡률 낙하 차이) 1m~{d_for_1m/1000:.1f}km, 5m~{d_for_5m/1000:.1f}km"
             else:
                 ref_meaning_text = "k=0이면 굴절 효과 없음"
 
-            self.lblScienceHelp.setText(
-                "<font size='2' color='#444'>"
-                "<b>[근거]</b> Δh≈d²/(2R)·cc, R=6,371km. "
-                "굴절계수 k는 cc=1−k로 반영(GDAL gdal_viewshed: -cc, 기본 0.85714≈6/7)."
-                "</font>"
+            status_label = "OFF"
+            if curvature and refraction:
+                status_label = "곡률+굴절"
+            elif curvature:
+                status_label = "곡률"
+
+            self.lblScienceSummary.setText(
+                f"{status_label}: k={k:.2f}, cc={cc:.3f} · 반경 {max_dist:,.0f}m: "
+                f"곡률 하강 {drop_curv:.2f}m → 적용 {drop_apparent:.2f}m"
             )
 
-            self.lblScienceStats.setText(
-                "<font size='2' color='#444'>"
-                f"<b>[의미]</b> k={k:.2f} → cc={cc:.3f}. "
-                "k↑(굴절↑) → cc↓ → 원거리에서 더 보임 / k↓ → cc↑ → 덜 보임.<br>"
-                f"<b>[규모]</b> 반경 {max_dist:,.0f} m에서 곡률 하강량(굴절없음)≈{drop_curv:.2f} m, "
-                f"현재 설정 적용≈{drop_apparent:.2f} m. "
-                "※ d² 비례라 짧은 반경에서는 차이가 매우 작을 수 있습니다.<br>"
-                f"<b>[언제 체감?]</b> {ref_meaning_text} (굴절에 따른 곡률 하강량 차이 기준)<br>"
-                f"<b>[예시]</b> 5km 곡률≈{drop5:.1f}m(굴절로≈{refr_relief_5:.2f}m 완화), "
-                f"10km≈{drop10:.1f}m(≈{refr_relief_10:.2f}m), "
-                f"20km≈{drop20:.1f}m(≈{refr_relief_20:.2f}m)<br>"
-                f"<b>[직관]</b> {horizon_text}"
-                "</font>"
+            self._science_help_html = (
+                "<div style='font-size:11pt; line-height:1.45; color:#222;'>"
+                "<h3 style='margin:0 0 6px 0;'>곡률/굴절(대기굴절) 보정</h3>"
+                f"<b>현재 설정</b><br>"
+                f"- 곡률: {'ON' if curvature else 'OFF'} / 굴절: {'ON' if refraction else 'OFF'}<br>"
+                f"- k={k:.2f} → cc={cc:.3f} (GDAL gdal_viewshed -cc로 전달)<br><br>"
+                "<b>근거(근사)</b><br>"
+                "- 곡률 하강량: Δh ~ d²/(2R), R=6,371km<br>"
+                "- 굴절 포함: Δh ~ d²/(2R) · cc, (곡률 ON일 때) cc=1-k<br>"
+                "- GDAL 기본값: cc=0.85714(~6/7 → k~0.14286)<br><br>"
+                "<b>현재 반경에서 규모</b><br>"
+                f"- 반경 {max_dist:,.0f}m: 곡률 하강(굴절없음) ~ {drop_curv:.2f}m, 적용 ~ {drop_apparent:.2f}m<br>"
+                "- d² 비례라 반경이 짧으면(예: 1km) 체크해도 결과가 거의 안 바뀔 수 있음<br><br>"
+                "<b>언제 의미 있나(대략)</b><br>"
+                f"- {ref_meaning_text}<br><br>"
+                "<b>예시(평탄 지형 기준)</b><br>"
+                f"- 5km: 곡률 ~ {drop5:.1f}m, 굴절 완화 ~ {refr_relief_5:.2f}m<br>"
+                f"- 10km: 곡률 ~ {drop10:.1f}m, 굴절 완화 ~ {refr_relief_10:.2f}m<br>"
+                f"- 20km: 곡률 ~ {drop20:.1f}m, 굴절 완화 ~ {refr_relief_20:.2f}m<br>"
+                "</div>"
             )
         except Exception:
             # Never fail the tool due to UI help text
+            pass
+
+    def _show_curvature_refraction_help_dialog(self):
+        try:
+            self._update_curvature_refraction_help()
+            html = getattr(self, "_science_help_html", None) or ""
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle("곡률/굴절(대기굴절) 보정 설명")
+            layout = QVBoxLayout(dlg)
+
+            text = QtWidgets.QTextBrowser(dlg)
+            text.setOpenExternalLinks(True)
+            text.setHtml(html)
+            layout.addWidget(text)
+
+            btn_close = QPushButton("닫기", dlg)
+            btn_close.clicked.connect(dlg.accept)
+            layout.addWidget(btn_close)
+
+            dlg.resize(640, 480)
+            dlg.exec_()
+        except Exception:
             pass
     
     def reset_selection(self):
@@ -1173,21 +1190,31 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if os.path.exists(final_output):
                 use_higuchi = self.chkHiguchi.isChecked()
                 is_reverse = self.radioReverseViewshed.isChecked()
+
+                raster_path = final_output
                 if use_higuchi:
                     layer_name = f"가시권_히구치_{int(max_dist)}m"
+                    higuchi_output = os.path.join(tempfile.gettempdir(), f'archt_vs_higuchi_{run_id}.tif')
+                    self._create_higuchi_viewshed_raster(
+                        final_output, higuchi_output, point, src_crs, dem_layer
+                    )
+                    raster_path = higuchi_output
                 elif is_reverse:
                     layer_name = f"역방향_가시권_{int(max_dist)}m"
                 else:
                     layer_name = f"가시권_단일점_{int(max_dist)}m"
-                viewshed_layer = QgsRasterLayer(final_output, layer_name)
+                viewshed_layer = QgsRasterLayer(raster_path, layer_name)
                 
                 if viewshed_layer.isValid():
                     if use_higuchi:
-                        self.apply_higuchi_style(viewshed_layer, point, max_dist, dem_layer)
+                        self.apply_higuchi_style(viewshed_layer)
                     else:
                         self.apply_viewshed_style(viewshed_layer)
                     
                     QgsProject.instance().addMapLayers([viewshed_layer])
+                    if use_higuchi:
+                        # Add rings after raster so they draw on top.
+                        self.create_higuchi_rings(point, src_crs, max_dist, dem_layer)
                     self.link_current_marker_to_layer(viewshed_layer.id(), [(point, src_crs)])
                     
                     # Ensure label layer is on top
@@ -1950,7 +1977,102 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         layer.setOpacity(0.7)
         layer.triggerRepaint()
     
-    def apply_higuchi_style(self, layer, observer_point, max_dist, dem_layer):
+    def _create_higuchi_viewshed_raster(self, input_raster_path, output_raster_path, observer_point, observer_crs, dem_layer):
+        """Reclassify a binary viewshed raster into Higuchi distance zones.
+
+        Output classes (Byte-like, stored as Int16 to keep NoData=-9999):
+        - 0: not visible (transparent in Higuchi style)
+        - 85: near view (0~500m)
+        - 170: mid view (500m~2.5km)
+        - 255: far view (2.5km~)
+        """
+        # Observer point must be in DEM CRS to compute metric distance per pixel.
+        observer_dem = self.transform_point(observer_point, observer_crs, dem_layer.crs())
+        ox = float(observer_dem.x())
+        oy = float(observer_dem.y())
+
+        nodata_out = -9999
+
+        ds = None
+        out_ds = None
+        try:
+            ds = gdal.Open(input_raster_path, gdal.GA_ReadOnly)
+            if ds is None:
+                raise Exception("히구치 재분류: 입력 래스터를 열 수 없습니다.")
+
+            band = ds.GetRasterBand(1)
+            in_nodata = band.GetNoDataValue()
+            gt = ds.GetGeoTransform()
+            proj = ds.GetProjection()
+            xsize = ds.RasterXSize
+            ysize = ds.RasterYSize
+
+            driver = gdal.GetDriverByName("GTiff")
+            out_ds = driver.Create(
+                output_raster_path,
+                xsize,
+                ysize,
+                1,
+                gdal.GDT_Int16,
+                options=["TILED=YES", "COMPRESS=LZW"],
+            )
+            if out_ds is None:
+                raise Exception("히구치 재분류: 출력 래스터를 만들 수 없습니다.")
+
+            out_ds.SetGeoTransform(gt)
+            out_ds.SetProjection(proj)
+            out_band = out_ds.GetRasterBand(1)
+            out_band.SetNoDataValue(nodata_out)
+
+            block_x, block_y = band.GetBlockSize()
+            if not block_x or not block_y:
+                block_x, block_y = 512, 512
+
+            for yoff in range(0, ysize, block_y):
+                yblock = min(block_y, ysize - yoff)
+                for xoff in range(0, xsize, block_x):
+                    xblock = min(block_x, xsize - xoff)
+
+                    arr = band.ReadAsArray(xoff, yoff, xblock, yblock)
+                    if arr is None:
+                        continue
+
+                    # Pixel center coordinates via affine transform.
+                    cols = (xoff + np.arange(xblock, dtype=np.float64)) + 0.5
+                    rows = (yoff + np.arange(yblock, dtype=np.float64)) + 0.5
+                    col_grid, row_grid = np.meshgrid(cols, rows)
+                    x = gt[0] + col_grid * gt[1] + row_grid * gt[2]
+                    y = gt[3] + col_grid * gt[4] + row_grid * gt[5]
+                    dist = np.sqrt((x - ox) ** 2 + (y - oy) ** 2)
+
+                    nodata_mask = np.zeros(arr.shape, dtype=bool)
+                    if in_nodata is not None:
+                        nodata_mask |= arr == in_nodata
+                    # Our pipeline commonly uses -9999 for masked-out pixels.
+                    nodata_mask |= arr == -9999
+
+                    valid = ~nodata_mask
+                    visible = valid & (arr > 0)
+
+                    out = np.full(arr.shape, nodata_out, dtype=np.int16)
+                    out[valid] = 0
+                    out[visible & (dist <= 500.0)] = 85
+                    out[visible & (dist > 500.0) & (dist <= 2500.0)] = 170
+                    out[visible & (dist > 2500.0)] = 255
+
+                    out_band.WriteArray(out, xoff, yoff)
+
+            out_band.FlushCache()
+            out_ds.FlushCache()
+        except Exception:
+            # Avoid leaving a partially-written raster behind.
+            cleanup_files([output_raster_path])
+            raise
+        finally:
+            out_ds = None
+            ds = None
+
+    def apply_higuchi_style(self, layer):
         """Apply Higuchi (1975) distance-based landscape zone styling"""
         # Set NoData value to ensure corners are transparent
         layer.dataProvider().setNoDataValue(1, -9999)
@@ -1973,32 +2095,56 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         layer.setRenderer(renderer)
         layer.setOpacity(0.7)
         layer.triggerRepaint()
-        
-        # Create distance-based zone rings as vector overlay
-        self.create_higuchi_rings(observer_point, max_dist, dem_layer)
     
     def on_higuchi_toggled(self, checked):
         """Suggest parameters suited for Higuchi analysis"""
-        if checked:
-            # Higuchi zones need at least 2.5km (preferably 5km)
-            current_dist = self.spinMaxDistance.value()
-            if current_dist < 5000:
-                self.spinMaxDistance.setValue(5000)
-                self.iface.messageBar().pushMessage(
-                    "히구치 분석 안내", 
-                    "히구치 거리대 분석을 위해 권장 반경인 5,000m로 자동 조정되었습니다.",
-                    level=0
-                )
+        if not checked or not hasattr(self, "spinMaxDistance"):
+            return
+
+        # Higuchi zones: Near(0~500m) / Mid(500m~2.5km) / Far(2.5km~)
+        current_dist = float(self.spinMaxDistance.value())
+        if current_dist >= 2500:
+            return
+
+        from qgis.PyQt.QtWidgets import QMessageBox
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("히구치 거리대 안내")
+        msg.setText(
+            "히구치 거리대는 '보이는 영역'을 거리별로 근경/중경/원경으로 나눠 색으로 표시합니다.\n"
+            f"현재 최대거리: {current_dist:,.0f} m\n\n"
+            "원경(2.5km~)을 보려면 최소 2,500m가 필요합니다. (권장: 5,000m)"
+        )
+
+        btn_2500 = msg.addButton("2,500m로 설정", QMessageBox.AcceptRole)
+        btn_5000 = msg.addButton("5,000m로 설정(권장)", QMessageBox.AcceptRole)
+        btn_keep = msg.addButton("유지", QMessageBox.RejectRole)
+        msg.setDefaultButton(btn_5000)
+
+        msg.exec_()
+        clicked = msg.clickedButton()
+        if clicked == btn_2500:
+            self.spinMaxDistance.setValue(2500)
+        elif clicked == btn_5000:
+            self.spinMaxDistance.setValue(5000)
+        elif clicked == btn_keep:
+            return
     
-    def create_higuchi_rings(self, center_point, max_dist, dem_layer):
+    def create_higuchi_rings(self, center_point, center_crs, max_dist, dem_layer):
         """Create buffer rings showing Higuchi distance zones"""
         
         # Use DEM CRS instead of hardcoded EPSG:5186
         layer = QgsVectorLayer("LineString?crs=" + dem_layer.crs().authid(), "히구치_거리대", "memory")
         pr = layer.dataProvider()
+        pr.addAttributes([
+            QgsField("zone", QVariant.String),
+            QgsField("distance_m", QVariant.Int),
+        ])
+        layer.updateFields()
         
         # We need point in DEM CRS for buffer
-        center_dem = self.transform_point(center_point, self.canvas.mapSettings().destinationCrs(), dem_layer.crs())
+        center_dem = self.transform_point(center_point, center_crs, dem_layer.crs())
         zones = [
             (500, "근경 (500m)", QColor(255, 80, 80)),      # Red
             (2500, "중경 (2.5km)", QColor(255, 200, 0)),    # Yellow
