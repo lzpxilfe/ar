@@ -125,9 +125,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Programmatically update tooltips for scientific basis
         if hasattr(self, 'chkCurvature'):
-            self.chkCurvature.setToolTip("지구 곡률 보정: h' = h - d²/2R (지구 반경 6,371km)")
+            self.chkCurvature.setToolTip(
+                "지구 곡률 보정(평면 가정 해제)\n"
+                "- 곡률 하강량(근사): Δh ≈ d²/(2R)\n"
+                "- R: 지구 반경(약 6,371km)\n"
+                "- 효과는 거리(d)의 제곱에 비례하므로, 반경이 짧으면 결과가 거의 안 바뀔 수 있습니다."
+            )
         if hasattr(self, 'chkRefraction'):
-            self.chkRefraction.setToolTip("대기 굴절 보정: 표준 계수 0.13 사용 (빛의 휘어짐 보정)\n지역 대기 조건에 따라 관측 거리가 달라질 수 있습니다.")
+            self.chkRefraction.setToolTip(
+                "대기 굴절 보정(표준대기 근사)\n"
+                "- 굴절계수 k(기본 0.13): 빛이 아래로 휘는 정도(곡률 효과를 일부 상쇄)\n"
+                "- k↑ → 곡률 보정량↓ → 원거리에서 '더 보임' 쪽으로 결과가 바뀔 수 있음\n"
+                "- k↓ → 곡률 보정량↑ → 원거리에서 '덜 보임' 쪽으로 결과가 바뀔 수 있음\n"
+                "※ 굴절은 곡률과 함께 의미가 있어, 일반적으로 곡률 보정과 같이 사용합니다."
+            )
         
         # [v1.6.0] Add Refraction UI programmatically since we can't edit .ui easily
         # Insert a spinbox next to the refraction checkbox if possible, or in a new layout
@@ -136,7 +147,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.spinRefraction.setSingleStep(0.01)
         self.spinRefraction.setDecimals(2)
         self.spinRefraction.setValue(0.13) # Default refraction coefficient
-        self.spinRefraction.setToolTip("대기 굴절 계수 (Refraction Coefficient)\n보통 0.13 사용 (표준 대기 상태)")
+        self.spinRefraction.setToolTip(
+            "대기 굴절 계수 k (Refraction Coefficient)\n"
+            "- 범위(권장): 대략 0.00~0.20 (대기 상태에 따라 변동)\n"
+            "- 해석: k가 커질수록 지구 곡률로 인한 시야 제한이 완화됩니다.\n"
+            "- 본 도구는 GDAL gdal_viewshed의 -cc(곡률/굴절 계수)에 cc=1-k로 전달합니다."
+        )
         self.spinRefraction.setEnabled(self.chkRefraction.isChecked())
         
         # [v1.5.96] Correctly inject Refraction UI into QGridLayout
@@ -150,14 +166,38 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Add scientific basis label to a new row
             self.lblScienceHelp = QtWidgets.QLabel(self)
-            self.lblScienceHelp.setText("<font size='2' color='#444'><b>[근거]</b> 곡률: h'=h-d²/2R | 굴절: k=0.13(표준)</font>")
-            self.lblScienceHelp.setToolTip("지구 곡률 보정(R=6,371km) 및 대기 굴절(k) 보정 공식입니다.")
+            self.lblScienceHelp.setWordWrap(True)
+            self.lblScienceHelp.setTextInteractionFlags(Qt.TextSelectableByMouse)
             layout.addWidget(self.lblScienceHelp, 6, 0, 1, 2)
+
+            self.lblScienceStats = QtWidgets.QLabel(self)
+            self.lblScienceStats.setWordWrap(True)
+            self.lblScienceStats.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(self.lblScienceStats, 7, 0, 1, 2)
+
+            self.lblScienceHelp.setToolTip(
+                "근거:\n"
+                "- 곡률 하강량(근사): Δh ≈ d²/(2R)\n"
+                "- 굴절 포함: Δh ≈ d²/(2R) · (1-k)\n"
+                "- GDAL gdal_viewshed는 -cc(곡률/굴절 계수)를 사용하며 기본값은 0.85714(≈6/7)입니다."
+            )
             
         # [v1.6.19] Connect signal for automatic cleanup (Line 88 already uses layersWillBeRemoved)
         # Consolidating to line 88 for redundancy reduction.
             
         self.chkRefraction.toggled.connect(self.spinRefraction.setEnabled)
+        if hasattr(self, 'chkRefraction'):
+            self.chkRefraction.toggled.connect(self._on_refraction_toggled)
+        if hasattr(self, 'chkCurvature'):
+            self.chkCurvature.toggled.connect(self._on_curvature_toggled)
+        if hasattr(self, 'spinRefraction'):
+            self.spinRefraction.valueChanged.connect(self._update_curvature_refraction_help)
+        if hasattr(self, "spinMaxDistance"):
+            self.spinMaxDistance.valueChanged.connect(self._update_curvature_refraction_help)
+        if hasattr(self, "spinObserverHeight"):
+            self.spinObserverHeight.valueChanged.connect(self._update_curvature_refraction_help)
+        if hasattr(self, "spinTargetHeight"):
+            self.spinTargetHeight.valueChanged.connect(self._update_curvature_refraction_help)
         
         # [v1.5.90] Code-level UI overrides for terminology and defaults
         self.radioLineViewshed.setText("선형 및 둘레 가시권 (Line/Perimeter)")
@@ -185,14 +225,16 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
              
              # Or if chkRefraction is in a specific layout
              elif self.chkRefraction.parentWidget():
-                 layout = self.chkRefraction.parentWidget().layout()
-                 if layout:
-                     # Attempt to add to the layout
-                     if isinstance(layout, QtWidgets.QGridLayout):
-                         # Logic to find position? Too complex, just add to end
-                         layout.addWidget(self.spinRefraction)
-                     elif isinstance(layout, (QtWidgets.QVBoxLayout, QtWidgets.QHBoxLayout)):
-                         layout.addWidget(self.spinRefraction)
+                  layout = self.chkRefraction.parentWidget().layout()
+                  if layout:
+                      # Attempt to add to the layout
+                      if isinstance(layout, QtWidgets.QGridLayout):
+                          # Logic to find position? Too complex, just add to end
+                          layout.addWidget(self.spinRefraction)
+                      elif isinstance(layout, (QtWidgets.QVBoxLayout, QtWidgets.QHBoxLayout)):
+                          layout.addWidget(self.spinRefraction)
+
+        self._update_curvature_refraction_help()
     
     def transform_point(self, point, source_crs, dest_crs):
         """Wrapper method to call the utility transform_point function"""
@@ -211,21 +253,83 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         - curvature on, refraction off -> -cc 1
         - curvature on, refraction on  -> -cc (1 - k)
         """
+        cc = self._calculate_gdal_viewshed_cc(curvature, refraction, refraction_coeff)
+        return f"-cc {cc}"
+
+    def _calculate_gdal_viewshed_cc(self, curvature, refraction, refraction_coeff):
         # Refraction is a correction applied together with curvature.
         if refraction and not curvature:
             curvature = True
 
         if not curvature:
-            return "-cc 0"
+            return 0.0
 
         if refraction:
             cc = 1.0 - float(refraction_coeff)
-            # Clamp to a sane range; GDAL accepts a float, but negative values don't make sense here.
             cc = max(0.0, min(1.0, cc))
         else:
             cc = 1.0
 
-        return f"-cc {cc}"
+        return cc
+
+    def _on_refraction_toggled(self, checked):
+        if checked and hasattr(self, 'chkCurvature') and not self.chkCurvature.isChecked():
+            # Refraction without curvature isn't meaningful; keep UI consistent with execution.
+            self.chkCurvature.setChecked(True)
+        self._update_curvature_refraction_help()
+
+    def _on_curvature_toggled(self, checked):
+        if not checked and hasattr(self, 'chkRefraction') and self.chkRefraction.isChecked():
+            self.chkRefraction.setChecked(False)
+        self._update_curvature_refraction_help()
+
+    def _update_curvature_refraction_help(self):
+        if not hasattr(self, 'lblScienceHelp') or not hasattr(self, 'lblScienceStats'):
+            return
+
+        try:
+            r_earth = 6371000.0  # meters
+            max_dist = self.spinMaxDistance.value() if hasattr(self, "spinMaxDistance") else 0.0
+            obs_h = self.spinObserverHeight.value() if hasattr(self, "spinObserverHeight") else 0.0
+            tgt_h = self.spinTargetHeight.value() if hasattr(self, "spinTargetHeight") else 0.0
+
+            curvature = self.chkCurvature.isChecked() if hasattr(self, "chkCurvature") else False
+            refraction = self.chkRefraction.isChecked() if hasattr(self, "chkRefraction") else False
+            k = self.spinRefraction.value() if hasattr(self, "spinRefraction") else 0.13
+
+            cc = self._calculate_gdal_viewshed_cc(curvature, refraction, k)
+
+            # Curvature drop over distance d (flat-earth vs sphere) approximation.
+            drop_curv = (max_dist ** 2) / (2.0 * r_earth) if max_dist else 0.0
+            drop_apparent = drop_curv * cc
+
+            # Effective Earth radius method (for intuition on horizon distance).
+            horizon_text = "지평선 근사: N/A"
+            if cc > 0 and max_dist > 0:
+                r_eff = r_earth / cc
+                horizon = math.sqrt(max(0.0, 2.0 * r_eff * obs_h)) + math.sqrt(max(0.0, 2.0 * r_eff * tgt_h))
+                horizon_text = f"평탄 지형 기준 지평선 근사 ≈ {horizon:,.0f} m (관측/대상 높이 반영)"
+
+            self.lblScienceHelp.setText(
+                "<font size='2' color='#444'>"
+                "<b>[근거]</b> Δh≈d²/(2R)·cc, R=6,371km. "
+                "굴절계수 k는 cc=1−k로 반영(GDAL gdal_viewshed: -cc, 기본 0.85714≈6/7)."
+                "</font>"
+            )
+
+            self.lblScienceStats.setText(
+                "<font size='2' color='#444'>"
+                f"<b>[의미]</b> k={k:.2f} → cc={cc:.3f}. "
+                "k↑(굴절↑) → cc↓ → 원거리에서 더 보임 / k↓ → cc↑ → 덜 보임.<br>"
+                f"<b>[규모]</b> 반경 {max_dist:,.0f} m에서 곡률 하강량(굴절없음)≈{drop_curv:.2f} m, "
+                f"현재 설정 적용≈{drop_apparent:.2f} m. "
+                "※ d² 비례라 짧은 반경에서는 차이가 매우 작을 수 있습니다.<br>"
+                f"<b>[직관]</b> {horizon_text}"
+                "</font>"
+            )
+        except Exception:
+            # Never fail the tool due to UI help text
+            pass
     
     def reset_selection(self):
         """Reset all manual point selections and markers"""
