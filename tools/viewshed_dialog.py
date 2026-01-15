@@ -14,33 +14,28 @@ Reference:
 import os
 import tempfile
 import uuid
-import time
 import math
 import shutil
 import processing
 import numpy as np
 from osgeo import gdal
 from qgis.PyQt import uic, QtWidgets, QtCore
-from qgis.PyQt.QtCore import Qt, QVariant, QRectF, QPointF
-from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QFontMetrics, QImage, QPainterPath, QPolygonF
+from qgis.PyQt.QtCore import Qt, QVariant, QPointF
+from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QImage, QPolygonF
 from qgis.PyQt.QtWidgets import QDialog, QVBoxLayout, QPushButton, QWidget, QFileDialog, QHBoxLayout, QLabel
 from qgis.core import (
     QgsProject, QgsRasterLayer, QgsVectorLayer, QgsMapLayerProxyModel, QgsRectangle,
     QgsPointXY, QgsWkbTypes, QgsFeature, QgsGeometry, QgsField,
-    QgsCoordinateReferenceSystem, QgsCoordinateTransform,
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer,
-    QgsRasterBandStats, QgsLineSymbol, QgsRendererCategory,
+    QgsLineSymbol, QgsRendererCategory,
     QgsCategorizedSymbolRenderer, QgsSingleSymbolRenderer, QgsPointLocator,
     QgsMarkerSymbol, QgsPalLayerSettings, QgsTextFormat, QgsVectorLayerSimpleLabeling,
-    QgsTextBufferSettings, QgsTextAnnotation
+    QgsTextAnnotation, Qgis, QgsUnitTypes
 )
-from qgis.gui import (
-    QgsMapToolEmitPoint, QgsRubberBand, QgsMapMouseEvent, 
-    QgsSnapIndicator, QgsVertexMarker, QgsMapCanvasAnnotationItem
-)
+from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator, QgsMapCanvasAnnotationItem
 from qgis.PyQt.QtGui import QTextDocument
 
-from .utils import transform_point, cleanup_files, restore_ui_focus, push_message
+from .utils import cleanup_files, is_metric_crs, log_message, restore_ui_focus, push_message, transform_point
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -394,7 +389,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 try:
                     if self.canvas and self.canvas.scene():
                         self.canvas.scene().removeItem(item)
-                except:
+                except Exception:
                     pass
             self.point_labels = []
         
@@ -434,7 +429,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             return item
             
         except Exception as e:
-            print(f"Canvas labeling error: {e}")
+            log_message(f"Canvas labeling error: {e}", level=Qgis.Warning)
             return None
     
     # [v1.6.17] _get_or_create_label_layer REMOVED - deprecated, was returning None
@@ -448,7 +443,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         for layer in layers:
             try:
                 QgsProject.instance().removeMapLayer(layer.id())
-            except:
+            except Exception:
                 pass
         self.label_layer = None
 
@@ -662,7 +657,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                             if self.canvas and self.canvas.scene():
                                 self.canvas.scene().removeItem(m) # Remove from scene
                     except Exception as e:
-                        print(f"Marker cleanup error: {e}")
+                        log_message(f"Marker cleanup error: {e}", level=Qgis.Warning)
                 del self.result_marker_map[lid]
                 
             # 2. Clean up Text Annotations (Labels) [v1.6.02]
@@ -673,7 +668,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         if item and self.canvas.scene():
                             self.canvas.scene().removeItem(item)
                     except Exception as e:
-                        print(f"Annotation cleanup error: {e}")
+                        log_message(f"Annotation cleanup error: {e}", level=Qgis.Warning)
                 del self.result_annotation_map[lid]
             
             # 3. [v1.6.18] Clean up linked Observer Layer (red points layer)
@@ -681,7 +676,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 obs_layer_id = self.result_observer_layer_map[lid]
                 try:
                     QgsProject.instance().removeMapLayer(obs_layer_id)
-                except:
+                except Exception:
                     pass
                 del self.result_observer_layer_map[lid]
         
@@ -840,7 +835,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if not dem_layer:
             self.iface.messageBar().pushMessage("오류", "DEM 래스터를 선택해주세요", level=2)
             return
-        
+
+        # Distance-based viewshed tools assume metric DEM CRS (meters).
+        dem_crs = dem_layer.crs()
+        if not is_metric_crs(dem_crs):
+            unit_name = QgsUnitTypes.toString(dem_crs.mapUnits())
+            push_message(
+                self.iface,
+                "오류",
+                f"DEM CRS 단위가 미터가 아닙니다 (현재: {unit_name}). 가시권/히구치/버퍼 분석은 미터 단위 투영 CRS가 필요합니다.",
+                level=2,
+                duration=8,
+            )
+            return
+         
         # Check observer point
         # Check observer point (Supports single selection and multi-clicked list)
         has_manual = self.observer_point is not None or len(self.observer_points) > 0
@@ -1368,7 +1376,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Add Start/End point markers on the map
         marker_layer = QgsVectorLayer("Point?crs=" + dem_layer.crs().authid(),
-                                      f"가시선_마커", "memory")
+                                      "가시선_마커", "memory")
         m_pr = marker_layer.dataProvider()
         m_pr.addAttributes([QgsField("유형", QVariant.String)])
         marker_layer.updateFields()
@@ -1450,7 +1458,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 self.iface.messageBar().pushMessage(
                     "가시선 분석", 
-                    f"❌ 직시 불가!", 
+                    "❌ 직시 불가!",
                     level=1
                 )
         
@@ -1465,7 +1473,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             profiler = ViewshedProfilerDialog(self.iface, profile_data, obs_height, tgt_height, total_dist, self)
             profiler.exec_()
         except Exception as e:
-            print(f"Profiler error: {e}")
+            log_message(f"Profiler error: {e}", level=Qgis.Warning)
     
     def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info, union_mode=False):
         """Highly optimized cumulative viewshed merging with unified grid alignment.
@@ -1550,8 +1558,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             out_ds = None
             return True
         except Exception as e:
-            print(f"NumPy combine error: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+
+            log_message(f"Viewshed merge error: {e}", level=Qgis.Critical)
+            log_message(traceback.format_exc(), level=Qgis.Critical)
             return False
     
     def run_multi_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
@@ -1597,8 +1607,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             obs_layer = self.cmbObserverLayer.currentLayer()
             if obs_layer:
                 # [v1.6.02] Auto-hide labels to reduce clutter
-                try: obs_layer.setLabelsEnabled(False)
-                except: pass
+                try:
+                    obs_layer.setLabelsEnabled(False)
+                except Exception:
+                    pass
                 
                 # Use selection if exists
                 selected_features = obs_layer.selectedFeatures()
@@ -1764,10 +1776,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         if os.path.exists(full_vs):
                             temp_outputs.append(full_vs)
                             viewshed_results.append((i, full_vs))
-                            try: os.remove(output_raw)
-                            except: pass
-                    except: pass
-            except:
+                            try:
+                                os.remove(output_raw)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        log_message(f"warpreproject failed for viewshed #{i}: {e}", level=Qgis.Warning)
+            except Exception as e:
+                log_message(f"viewshed failed for point #{i}: {e}", level=Qgis.Warning)
                 continue
         
         progress.setValue(len(points))
@@ -1779,7 +1795,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Combine all viewsheds by summing (cumulative viewshed)
         # Using a safer approach with processing.run("gdal:merge")
-        final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{int(time.time())}.tif')
+        final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{uuid.uuid4().hex[:8]}.tif')
         
         try:
             # [v1.5.68] Optimized Cumulative Viewshed Merge using NumPy
@@ -2088,9 +2104,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
         colors = [
             QgsColorRampShader.ColorRampItem(0, not_visible_color, "보이지 않음"),
-            QgsColorRampShader.ColorRampItem(85, QColor(255, 50, 50, 200), f"근경 (0~500m: 질감/세부 인지)"),     # Sharp Red
-            QgsColorRampShader.ColorRampItem(170, QColor(255, 165, 0, 200), f"중경 (500m~2.5km: 형태/부피 파악)"), # Orange
-            QgsColorRampShader.ColorRampItem(255, QColor(138, 43, 226, 200), f"원경 (2.5km~: 실루엣/스카이라인)"), # Purple/Blue
+            QgsColorRampShader.ColorRampItem(85, QColor(255, 50, 50, 200), "근경 (0~500m: 질감/세부 인지)"),     # Sharp Red
+            QgsColorRampShader.ColorRampItem(170, QColor(255, 165, 0, 200), "중경 (500m~2.5km: 형태/부피 파악)"), # Orange
+            QgsColorRampShader.ColorRampItem(255, QColor(138, 43, 226, 200), "원경 (2.5km~: 실루엣/스카이라인)"), # Purple/Blue
         ]
         
         color_ramp.setColorRampItemList(colors)
@@ -2302,8 +2318,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.los_click_count = 0
         # Ensure indicator is hidden if tool was active
         if self.map_tool:
-            try: self.map_tool.snap_indicator.setMatch(QgsPointLocator.Match())
-            except: pass
+            try:
+                self.map_tool.snap_indicator.setMatch(QgsPointLocator.Match())
+            except Exception:
+                pass
         super().reject()
     
     def closeEvent(self, event):
@@ -2680,5 +2698,7 @@ class ViewshedProfilerDialog(QDialog):
             self.plot.render(painter)
             painter.end()
             image.save(filename)
-            print(f"Profile saved to {filename}")
+            from qgis.PyQt.QtWidgets import QMessageBox
+
+            QMessageBox.information(self, "저장 완료", f"프로파일 이미지 저장: {filename}")
 

@@ -22,6 +22,7 @@ User-configurable parameters for TPI radius, TPI thresholds, and Slope Position
 """
 import os
 import tempfile
+import uuid
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtGui import QColor
@@ -253,6 +254,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             dem_source = dem_layer.source()
             results = []
+            run_id = uuid.uuid4().hex[:8]
             
             # Get user parameters
             tpi_radius = self.spinTPIRadius.value()
@@ -264,7 +266,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Slope
             if self.chkSlope.isChecked():
-                output = os.path.join(tempfile.gettempdir(), 'archtoolkit_slope.tif')
+                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_slope_{run_id}.tif')
                 processing.run("gdal:slope", {
                     'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': output
                 })
@@ -278,7 +280,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Aspect
             if self.chkAspect.isChecked():
-                output = os.path.join(tempfile.gettempdir(), 'archtoolkit_aspect.tif')
+                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_aspect_{run_id}.tif')
                 processing.run("gdal:aspect", {
                     'INPUT': dem_source, 'BAND': 1, 'TRIG_ANGLE': False, 'ZERO_FLAT': True, 'OUTPUT': output
                 })
@@ -290,7 +292,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # TRI with user-defined classification threshold
             if self.chkTRI.isChecked():
-                output = os.path.join(tempfile.gettempdir(), 'archtoolkit_tri.tif')
+                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_tri_{run_id}.tif')
                 processing.run("gdal:triterrainruggednessindex", {
                     'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
                 })
@@ -304,11 +306,11 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # TPI with user parameters (radius and threshold)
             if self.chkTPI.isChecked():
-                self.run_tpi_analysis(dem_layer, dem_source, tpi_radius, tpi_threshold, results)
+                self.run_tpi_analysis(dem_layer, dem_source, tpi_radius, tpi_threshold, results, run_id)
             
             # Roughness
             if self.chkRoughness.isChecked():
-                output = os.path.join(tempfile.gettempdir(), 'archtoolkit_roughness.tif')
+                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_roughness_{run_id}.tif')
                 processing.run("gdal:roughness", {
                     'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
                 })
@@ -320,7 +322,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Slope Position - Weiss (2001) 6-class with user thresholds
             if self.chkSlopePosition.isChecked():
-                self.run_slope_position_analysis(dem_source, slope_threshold, tpi_low, tpi_high, results)
+                self.run_slope_position_analysis(dem_source, slope_threshold, tpi_low, tpi_high, results, run_id)
             
             if results:
                 push_message(self.iface, "완료", f"분석 완료: {', '.join(results)}", level=0)
@@ -337,7 +339,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             if not success:
                 restore_ui_focus(self)
     
-    def run_tpi_analysis(self, dem_layer, dem_source, radius, threshold, results):
+    def run_tpi_analysis(self, dem_layer, dem_source, radius, threshold, results, run_id):
         """Run TPI analysis with user-specified radius and classification threshold
         
         TPI = Elevation - Mean of Neighborhood
@@ -351,7 +353,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         downsampled = None
         mean_approx = None
         try:
-            output = os.path.join(tempfile.gettempdir(), 'archtoolkit_tpi.tif')
+            output = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_{run_id}.tif')
             
             # Calculate window size (must be odd number: 3, 5, 7, ...)
             window_size = radius * 2 + 1 if radius > 1 else 3
@@ -370,7 +372,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 new_res = max(pixel_size_x, pixel_size_y) * radius
                 
                 # Step 1: Downsample (average resampling = approximate focal mean)
-                downsampled = os.path.join(tempfile.gettempdir(), 'archtoolkit_tpi_down.tif')
+                downsampled = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_down_{run_id}.tif')
                 processing.run("gdal:warpreproject", {
                     'INPUT': dem_source,
                     'SOURCE_CRS': None,
@@ -388,7 +390,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 })
                 
                 # Step 2: Resample back to original resolution (neighborhood mean approximation)
-                mean_approx = os.path.join(tempfile.gettempdir(), 'archtoolkit_tpi_mean.tif')
+                mean_approx = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_mean_{run_id}.tif')
                 extent = dem_layer.extent()
                 extent_str = f"{extent.xMinimum()},{extent.xMaximum()},{extent.yMinimum()},{extent.yMaximum()}"
                 
@@ -439,7 +441,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         finally:
             cleanup_files([downsampled, mean_approx])
     
-    def run_slope_position_analysis(self, dem_source, slope_thresh, tpi_low, tpi_high, results):
+    def run_slope_position_analysis(self, dem_source, slope_thresh, tpi_low, tpi_high, results, run_id):
         """Run Weiss (2001) 6-class Landform Classification using GDAL with user thresholds
         
         Parameters:
@@ -457,13 +459,13 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         """
         try:
             # 1. Generate TPI
-            tpi_path = os.path.join(tempfile.gettempdir(), 'archtoolkit_tpi_temp.tif')
+            tpi_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_temp_{run_id}.tif')
             processing.run("gdal:tpitopographicpositionindex", {
                 'INPUT': dem_source, 'BAND': 1, 'OUTPUT': tpi_path
             })
             
             # 2. Generate Slope
-            slope_path = os.path.join(tempfile.gettempdir(), 'archtoolkit_slope_temp.tif')
+            slope_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_slope_temp_{run_id}.tif')
             processing.run("gdal:slope", {
                 'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': slope_path
             })
@@ -493,7 +495,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                     )
             
             # 4. Use gdal_calc.py for classification with thresholds
-            output_path = os.path.join(tempfile.gettempdir(), 'archtoolkit_landform.tif')
+            output_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_landform_{run_id}.tif')
             
             # Calculate intermediate thresholds (Weiss 2001: 0.5 SD boundaries)
             tpi_mid_low = tpi_low / 2   # -0.5 SD

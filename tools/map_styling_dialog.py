@@ -26,13 +26,13 @@ from qgis.PyQt.QtCore import Qt, QVariant, QPointF
 from qgis.PyQt.QtGui import QColor, QPainter
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsRasterLayer, QgsMapLayerProxyModel,
-    QgsSymbol, QgsLineSymbol, QgsFillSymbol,
+    QgsLineSymbol, QgsFillSymbol,
     QgsRuleBasedRenderer, QgsSingleSymbolRenderer,
     QgsSimpleLineSymbolLayer, QgsSimpleFillSymbolLayer,
     QgsUnitTypes, QgsField, QgsFeature, QgsGeometry,
     QgsWkbTypes, QgsFeatureRequest,
     QgsSingleBandPseudoColorRenderer, QgsRasterShader, QgsColorRampShader,
-    QgsSingleBandGrayRenderer, QgsHillshadeRenderer, QgsContrastEnhancement,
+    QgsSingleBandGrayRenderer, QgsHillshadeRenderer,
     QgsRasterBandStats, QgsLayerTreeLayer
 )
 from .utils import restore_ui_focus, push_message
@@ -281,7 +281,7 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
                                 poly_geom = QgsGeometry.fromPolygonXY([ring])
                             else:
                                 poly_geom = QgsGeometry.fromPolygonXY([geom.asPolyline()])
-                        except:
+                        except Exception:
                             pass
                     
                     if poly_geom and not poly_geom.isNull() and not poly_geom.isEmpty():
@@ -294,7 +294,7 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
                                 new_feat.setGeometry(buffered)
                             else:
                                 new_feat.setGeometry(geom)
-                        except:
+                        except Exception:
                             new_feat.setGeometry(geom)
                 else:
                     new_feat.setGeometry(geom)

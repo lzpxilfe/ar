@@ -17,6 +17,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import os
 import tempfile
+import uuid
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt
@@ -183,7 +184,8 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
             QtWidgets.QApplication.processEvents()
             
             # Use temp file instead of memory layer
-            temp_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_contour_{interval}m.gpkg')
+            run_id = uuid.uuid4().hex[:8]
+            temp_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_contour_{interval}m_{run_id}.gpkg')
             
             # Run GDAL contour
             result = processing.run("gdal:contour", {

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
-from qgis.core import QgsCoordinateTransform, QgsProject
-from qgis.PyQt import QtWidgets
+from qgis.core import QgsCoordinateTransform, QgsMessageLog, QgsProject, QgsUnitTypes, Qgis
 
 def transform_point(point, src_crs, dest_crs):
     """Transform point from source CRS to destination CRS"""
@@ -18,6 +17,21 @@ def cleanup_files(file_paths):
                 os.remove(path)
             except Exception:
                 pass
+
+def log_message(message, level=Qgis.Info):
+    """Log to QGIS Message Log (not the transient message bar)."""
+    try:
+        QgsMessageLog.logMessage(str(message), "ArchToolkit", level)
+    except Exception:
+        # Never crash due to logging
+        pass
+
+def is_metric_crs(crs):
+    """Return True if CRS map units are meters (recommended for distance-based tools)."""
+    try:
+        return (not crs.isGeographic()) and crs.mapUnits() == QgsUnitTypes.DistanceMeters
+    except Exception:
+        return False
 
 def restore_ui_focus(dialog):
     """Ensure the dialog is visible and has focus"""

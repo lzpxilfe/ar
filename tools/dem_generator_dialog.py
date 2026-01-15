@@ -16,14 +16,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import os
+import uuid
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtWidgets import QTableWidgetItem, QCheckBox, QWidget, QHBoxLayout, QFileDialog, QListWidgetItem, QProgressDialog
+from qgis.PyQt.QtWidgets import QTableWidgetItem, QCheckBox, QWidget, QHBoxLayout, QFileDialog, QListWidgetItem
 from qgis.PyQt.QtCore import Qt, QSize
-from qgis.core import QgsProject, QgsVectorLayer, QgsApplication, QgsTask, QgsMessageLog, Qgis, QgsProcessingFeedback
+from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
 import processing
-import time
 import tempfile
 from .utils import restore_ui_focus, push_message
 
@@ -334,7 +334,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Step 1: Merge all selected layers into one temp file
             if len(selected_layers) > 1:
-                temp_merged = os.path.join(tempfile.gettempdir(), 'archtoolkit_merged.gpkg')
+                temp_merged = os.path.join(tempfile.gettempdir(), f'archtoolkit_merged_{uuid.uuid4().hex[:8]}.gpkg')
                 processing.run("native:mergevectorlayers", {
                     'LAYERS': selected_layers,
                     'CRS': selected_layers[0].crs(),

@@ -26,14 +26,14 @@ from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt, QPointF, QRectF, QVariant
 from qgis.PyQt.QtWidgets import QMessageBox, QFileDialog, QWidget
-from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QPalette, QPainterPath, QImage
+from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPalette, QPainterPath, QImage
 from qgis.core import (
-    QgsProject, QgsRasterLayer, QgsMapLayerProxyModel, QgsPointXY, QgsRaster,
+    QgsProject, QgsMapLayerProxyModel, QgsPointXY, QgsRaster,
     QgsVectorLayer, QgsField, QgsFeature, QgsGeometry, QgsWkbTypes,
-    QgsLineSymbol, QgsSingleSymbolRenderer
+    QgsLineSymbol, QgsSingleSymbolRenderer, Qgis, QgsDistanceArea
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
-from .utils import restore_ui_focus, push_message
+from .utils import log_message, restore_ui_focus, push_message, transform_point
 
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -457,23 +457,45 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
         try:
-            start = self.points[0]
-            end = self.points[1]
-            num_samples = self.spinSamples.value()
+            start_canvas = self.points[0]
+            end_canvas = self.points[1]
+            num_samples = int(self.spinSamples.value())
+            if num_samples <= 0:
+                push_message(self.iface, "오류", "샘플 수는 1 이상이어야 합니다.", level=2)
+                restore_ui_focus(self)
+                return
+
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+            dem_crs = dem_layer.crs()
             
             self.profile_data = []
-            total_distance = start.distance(end)
+
+            # Always measure in meters (ellipsoidal) so geographic CRS projects don't break stats/exports.
+            distance_area = QgsDistanceArea()
+            distance_area.setSourceCrs(canvas_crs, QgsProject.instance().transformContext())
+            distance_area.setEllipsoid(QgsProject.instance().ellipsoid() or "WGS84")
+            distance_area.setEllipsoidalMode(True)
+            total_distance_m = float(distance_area.measureLine(start_canvas, end_canvas))
             
-            push_message(self.iface, "단면 분석", f"시작점에서 끝점까지 {total_distance:.1f}m, {num_samples}개 샘플 추출 중...", level=0)
+            push_message(
+                self.iface,
+                "단면 분석",
+                f"시작점에서 끝점까지 {total_distance_m:.1f}m, {num_samples}개 샘플 추출 중...",
+                level=0,
+            )
             
             valid_samples = 0
             for i in range(num_samples + 1):
                 fraction = i / num_samples
-                x = start.x() + fraction * (end.x() - start.x())
-                y = start.y() + fraction * (end.y() - start.y())
+                x_canvas = start_canvas.x() + fraction * (end_canvas.x() - start_canvas.x())
+                y_canvas = start_canvas.y() + fraction * (end_canvas.y() - start_canvas.y())
+                sample_canvas = QgsPointXY(x_canvas, y_canvas)
+
+                # Identify expects coordinates in DEM CRS.
+                sample_dem = transform_point(sample_canvas, canvas_crs, dem_crs)
                 
                 result = dem_layer.dataProvider().identify(
-                    QgsPointXY(x, y), 
+                    sample_dem,
                     QgsRaster.IdentifyFormatValue
                 )
                 
@@ -486,12 +508,12 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                         value = list(results_dict.values())[0]
                     
                     if value is not None and value != dem_layer.dataProvider().sourceNoDataValue(1):
-                        dist = fraction * total_distance
+                        dist = fraction * total_distance_m
                         self.profile_data.append({
                             'distance': dist,
                             'elevation': float(value),
-                            'x': x,
-                            'y': y
+                            'x': x_canvas,
+                            'y': y_canvas
                         })
                         valid_samples += 1
             
@@ -502,7 +524,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.btnExportImage.setEnabled(True)
                 
                 # Save line to persistent layer
-                self.save_line_to_layer(total_distance)
+                self.save_line_to_layer(total_distance_m)
                 
                 # Clear rubber band completely - line is now in vector layer
                 self.rubber_band.reset(QgsWkbTypes.LineGeometry)
@@ -667,7 +689,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 if self.canvas and self.canvas.scene():
                     try:
                         self.canvas.scene().removeItem(self.rubber_band)
-                    except:
+                    except Exception:
                         pass
             
             if hasattr(self, 'hover_marker') and self.hover_marker:
@@ -676,7 +698,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 if self.canvas and self.canvas.scene():
                     try:
                         self.canvas.scene().removeItem(self.hover_marker)
-                    except:
+                    except Exception:
                         pass
             
             # Remove the temporary profile layer from project
@@ -685,21 +707,21 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             for layer in layers:
                 try:
                     QgsProject.instance().removeMapLayer(layer.id())
-                except:
+                except Exception:
                     pass
             
             # Restore original map tool
             if hasattr(self, 'original_tool') and self.original_tool:
                 try:
                     self.canvas.setMapTool(self.original_tool)
-                except:
+                except Exception:
                     pass
             
             # Refresh canvas
             if self.canvas:
                 self.canvas.refresh()
         except Exception as e:
-            print(f"Cleanup error: {e}")
+            log_message(f"Cleanup error: {e}", level=Qgis.Warning)
 
 
 class ProfileLineTool(QgsMapToolEmitPoint):

@@ -15,7 +15,8 @@ ArchToolkit은 **기본 QGIS 설치만으로 완전히 동작**해야 합니다.
 - ❌ GRASS GIS 알고리즘 (`grass7:*`)
 - ❌ SAGA GIS 알고리즘 (`saga:*`)
 - ❌ WhiteboxTools
-- ❌ 외부 Python 패키지 (numpy, pandas, matplotlib 등)
+- ❌ 별도 설치가 필요한 외부 Python 패키지 (예: pandas, matplotlib 등)
+- ✅ 단, QGIS 배포판에 기본 포함된 패키지(예: numpy)는 허용(추가 설치 불필요) — 사용 시 README/metadata에 의존성 명시
 - ❌ 별도 설치가 필요한 모든 의존성
 
 ### 복잡한 분석 구현 방법
