@@ -2076,13 +2076,18 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         """Apply Higuchi (1975) distance-based landscape zone styling"""
         # Set NoData value to ensure corners are transparent
         layer.dataProvider().setNoDataValue(1, -9999)
-        
+
         shader = QgsRasterShader()
         color_ramp = QgsColorRampShader()
         color_ramp.setColorRampType(QgsColorRampShader.Discrete)
-        
+
+        # Use the user's "Not visible" color (default: pink) for non-visible cells (value 0).
+        not_visible_color = self.btnNotVisibleColor.color() if hasattr(self, "btnNotVisibleColor") else QColor(255, 105, 180, 180)
+        if not_visible_color.alpha() == 255:
+            not_visible_color.setAlpha(180)
+
         colors = [
-            QgsColorRampShader.ColorRampItem(0, QColor(255, 255, 255, 0), "보이지 않음"),
+            QgsColorRampShader.ColorRampItem(0, not_visible_color, "보이지 않음"),
             QgsColorRampShader.ColorRampItem(85, QColor(255, 50, 50, 200), f"근경 (0~500m: 질감/세부 인지)"),     # Sharp Red
             QgsColorRampShader.ColorRampItem(170, QColor(255, 165, 0, 200), f"중경 (500m~2.5km: 형태/부피 파악)"), # Orange
             QgsColorRampShader.ColorRampItem(255, QColor(138, 43, 226, 200), f"원경 (2.5km~: 실루엣/스카이라인)"), # Purple/Blue
