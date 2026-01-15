@@ -239,7 +239,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
                     total_features += layer.featureCount()
                     loaded_count += 1
                     
-            except Exception as e:
+            except Exception:
                 push_message(self.iface, "경고", f"{os.path.basename(dxf_path)} 로드 실패", level=1)
         
         self.populate_layers()
@@ -335,7 +335,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             # Step 1: Merge all selected layers into one temp file
             if len(selected_layers) > 1:
                 temp_merged = os.path.join(tempfile.gettempdir(), 'archtoolkit_merged.gpkg')
-                merge_result = processing.run("native:mergevectorlayers", {
+                processing.run("native:mergevectorlayers", {
                     'LAYERS': selected_layers,
                     'CRS': selected_layers[0].crs(),
                     'OUTPUT': temp_merged

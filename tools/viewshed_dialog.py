@@ -197,6 +197,35 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     def transform_point(self, point, source_crs, dest_crs):
         """Wrapper method to call the utility transform_point function"""
         return transform_point(point, source_crs, dest_crs)
+
+    def _build_gdal_viewshed_extra(self, curvature, refraction, refraction_coeff):
+        """
+        Build GDAL viewshed command-line args for QGIS Processing's `gdal:viewshed`.
+
+        QGIS 3.40's `gdal:viewshed` wrapper does not expose curvature/refraction
+        parameters directly; instead we pass them through the `EXTRA` string.
+
+        Note: GDAL's `-cc` expects a combined curvature/refraction coefficient.
+        This plugin's UI uses a refraction coefficient `k` (default ~0.13), so:
+        - curvature off  -> -cc 0
+        - curvature on, refraction off -> -cc 1
+        - curvature on, refraction on  -> -cc (1 - k)
+        """
+        # Refraction is a correction applied together with curvature.
+        if refraction and not curvature:
+            curvature = True
+
+        if not curvature:
+            return "-cc 0"
+
+        if refraction:
+            cc = 1.0 - float(refraction_coeff)
+            # Clamp to a sane range; GDAL accepts a float, but negative values don't make sense here.
+            cc = max(0.0, min(1.0, cc))
+        else:
+            cc = 1.0
+
+        return f"-cc {cc}"
     
     def reset_selection(self):
         """Reset all manual point selections and markers"""
@@ -767,7 +796,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Run LOS from each perimeter point to center
         provider = dem_layer.dataProvider()
-        visible_results = []
         
         # Consolidate perimeter points into a single ring styling
         # Instead of rays, we draw the perimeter itself, colored by visibility from center.
@@ -780,17 +808,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             QgsField("score", QVariant.Double)
         ])
         layer.updateFields()
-        
-        # Reconstruct the perimeter segments based on visibility
-        # We have the visibility status for each point 'i'
-        visible_segments = []
-        hidden_segments = []
-        
-        current_poly_pts = []
-        current_status = None
-        
-        # We need to close the loop
-        pts_loop = perimeter_points + [perimeter_points[0]]
         
         # To get status for segments between points, we can use the status of the starting point
         # OR we can supersample. For now, point status -> segment status.
@@ -806,7 +823,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
              # Sample along line to center
             dx = center_dem.x() - pt.x()
             dy = center_dem.y() - pt.y()
-            dist = math.sqrt(dx*dx + dy*dy)
             
             # Quick Check: 10 samples
             is_visible = True
@@ -977,6 +993,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Transform point to DEM CRS
         point_dem = self.transform_point(point, src_crs, dem_layer.crs())
+
+        extra = self._build_gdal_viewshed_extra(curvature, refraction, refraction_coeff)
         
         # Build params
         params = {
@@ -986,18 +1004,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             'OBSERVER_HEIGHT': obs_height,
             'TARGET_HEIGHT': tgt_height,
             'MAX_DISTANCE': max_dist,
-            'CURVATURE': curvature,
-            'REFRACTION': refraction,
-            'IV': refraction_coeff if refraction else 0, # Pass coefficient if enabled
+            'EXTRA': extra,
             'OUTPUT': raw_output
         }
-        
-        # FOV (Azimuth) logic - only for single viewshed
-        azimuth = self.spinAzimuth.value()
-        azimuth_width = self.spinAngleWidth.value()
-        if azimuth_width < 360:
-            params['AZIMUTH'] = azimuth
-            params['AZIMUTH_WIDTH'] = azimuth_width
         
         try:
             processing.run("gdal:viewshed", params)
@@ -1097,10 +1106,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.show()
             return
 
-        # Calculate distance
-        dx = target.x() - observer.x()
-        dy = target.y() - observer.y()
-        total_dist = math.sqrt(dx*dx + dy*dy)
+        # Transform points to DEM CRS for sampling and output layers
+        canvas_crs = self.canvas.mapSettings().destinationCrs()
+        observer_dem = self.transform_point(observer, canvas_crs, dem_layer.crs())
+        target_dem = self.transform_point(target, canvas_crs, dem_layer.crs())
+
+        # Calculate distance in DEM units
+        dx = target_dem.x() - observer_dem.x()
+        dy = target_dem.y() - observer_dem.y()
+        total_dist = math.sqrt(dx * dx + dy * dy)
         
         # Sample terrain along line
         num_samples = max(200, int(total_dist / 5)) # Higher density for segmented LOS
@@ -1110,8 +1124,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         for i in range(num_samples + 1):
             frac = i / num_samples
-            x = observer.x() + frac * dx
-            y = observer.y() + frac * dy
+            x = observer_dem.x() + frac * dx
+            y = observer_dem.y() + frac * dy
             dist = frac * total_dist
             
             # Sample elevation from DEM
@@ -1143,43 +1157,28 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         ])
         layer.updateFields()
         
-        # Segment the profile using MAX-ANGLE algorithm
-        # A point is visible if its angle (from observer) >= max angle seen so far
-        segments = []
-        current_segment = []
-        last_status = None
+        # Determine obstruction against the LOS line to the TARGET height.
+        # A point blocks the target if terrain elevation exceeds the LOS elevation at that distance.
         first_obstruction = None
         is_visible_overall = True
-        max_angle = -float('inf')
-        
-        for i, pt in enumerate(profile_data):
-            if pt['distance'] == 0:
-                # Observer point is always "visible"
-                status = "보임"
-            else:
-                # Calculate angle from observer to this terrain point
-                angle = (pt['elevation'] - obs_elev) / pt['distance']
-                
-                if angle >= max_angle:
-                    max_angle = angle
-                    status = "보임"  # Visible - new max angle
-                else:
-                    status = "안보임"  # Hidden in shadow
-                    if is_visible_overall:
-                        is_visible_overall = False
-                        first_obstruction = pt
-            
-            if status != last_status:
-                if current_segment:
-                    segments.append((last_status, current_segment))
-                    current_segment = [current_segment[-1]]  # Continue from last point
-                current_segment.append(QgsPointXY(pt['x'], pt['y']))
-                last_status = status
-            else:
-                current_segment.append(QgsPointXY(pt['x'], pt['y']))
-        
-        if current_segment:
-            segments.append((last_status, current_segment))
+        for pt in profile_data[1:-1]:
+            frac = pt['distance'] / total_dist if total_dist > 0 else 0
+            sight = obs_elev + frac * (tgt_elev - obs_elev)
+            if pt['elevation'] > sight:
+                first_obstruction = pt
+                is_visible_overall = False
+                break
+
+        segments = []
+        if is_visible_overall or not first_obstruction:
+            segments.append(("보임", [QgsPointXY(observer_dem.x(), observer_dem.y()),
+                                     QgsPointXY(target_dem.x(), target_dem.y())]))
+        else:
+            obs_pt = QgsPointXY(observer_dem.x(), observer_dem.y())
+            block_pt = QgsPointXY(first_obstruction['x'], first_obstruction['y'])
+            tgt_pt = QgsPointXY(target_dem.x(), target_dem.y())
+            segments.append(("보임", [obs_pt, block_pt]))
+            segments.append(("안보임", [block_pt, tgt_pt]))
 
         # Add features for each segment
         for status, pts in segments:
@@ -1524,6 +1523,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.hide()
         QtWidgets.QApplication.processEvents()
 
+        extra = self._build_gdal_viewshed_extra(curvature, refraction, refraction_coeff)
+
         # Setup progress dialog
         progress = QtWidgets.QProgressDialog("다중점 가시권 분석 초기화 중...", "취소", 0, len(points), self)
         progress.setWindowModality(QtCore.Qt.WindowModal)
@@ -1581,12 +1582,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             output_raw = os.path.join(tempfile.gettempdir(), f'archt_vs_raw_{i}_{uuid.uuid4().hex[:8]}.tif')
             pt_dem = self.transform_point(point, p_crs, dem_layer.crs())
-            
+             
             try:
                 processing.run("gdal:viewshed", {
                     'INPUT': dem_layer.source(), 'BAND': 1, 'OBSERVER': f"{pt_dem.x()},{pt_dem.y()}",
                     'OBSERVER_HEIGHT': obs_height, 'TARGET_HEIGHT': tgt_height, 'MAX_DISTANCE': max_dist,
-                    'CC': 1 if curvature else 0, 'IV': refraction_coeff if refraction else 0, 'OUTPUT': output_raw
+                    'EXTRA': extra, 'OUTPUT': output_raw
                 })
                 
                 if os.path.exists(output_raw):
@@ -1818,10 +1819,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     
     def apply_higuchi_style(self, layer, observer_point, max_dist, dem_layer):
         """Apply Higuchi (1975) distance-based landscape zone styling"""
-        # Higuchi zones (in meters)
-        NEAR_LIMIT = 500      # 근경: 세부 질감 인지
-        MIDDLE_LIMIT = 2500   # 중경: 실루엣 파악
-        
         # Set NoData value to ensure corners are transparent
         layer.dataProvider().setNoDataValue(1, -9999)
         
