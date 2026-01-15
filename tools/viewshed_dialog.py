@@ -1704,6 +1704,23 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.observer_point: # Also check the single selection if any
             points.append((self.observer_point, canvas_crs))
         
+        # [v1.6.16] Handle manually drawn lines (from Line Viewshed tool)
+        if hasattr(self, 'drawn_line_points') and self.drawn_line_points and len(self.drawn_line_points) >= 2:
+            pts_for_geom = list(self.drawn_line_points)
+            if getattr(self, 'is_line_closed', False):
+                pts_for_geom.append(self.drawn_line_points[0])
+            
+            line_geom = QgsGeometry.fromPolylineXY(pts_for_geom)
+            length = line_geom.length()
+            
+            if length > 0:
+                num_pts = max(1, int(length / interval))
+                for i in range(num_pts + 1):
+                    frac = i / num_pts if num_pts > 0 else 0
+                    pt = line_geom.interpolate(frac * length)
+                    if pt and not pt.isEmpty():
+                        points.append((pt.asPoint(), canvas_crs))
+        
         # 2. Add points from layer if selected
         if self.radioFromLayer.isChecked():
             obs_layer = self.cmbObserverLayer.currentLayer()
