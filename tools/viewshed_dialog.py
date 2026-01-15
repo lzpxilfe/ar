@@ -154,6 +154,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.lblScienceHelp.setToolTip("지구 곡률 보정(R=6,371km) 및 대기 굴절(k) 보정 공식입니다.")
             layout.addWidget(self.lblScienceHelp, 6, 0, 1, 2)
             
+        # [v1.6.19] Connect projects signals for automatic cleanup of markers/labels
+        QgsProject.instance().layersRemoved.connect(self.on_layers_removed)
+            
         self.chkRefraction.toggled.connect(self.spinRefraction.setEnabled)
         
         # [v1.5.90] Code-level UI overrides for terminology and defaults
