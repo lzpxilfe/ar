@@ -686,7 +686,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     max_distance, curvature, refraction, refraction_coeff
                 )
             elif self.radioLineViewshed.isChecked():
-                self.run_line_viewshed(
+                # [v1.6.13] Line Viewshed now uses run_multi_viewshed for proper union logic
+                self.run_multi_viewshed(
                     dem_layer, observer_height, target_height,
                     max_distance, curvature, refraction, refraction_coeff
                 )
