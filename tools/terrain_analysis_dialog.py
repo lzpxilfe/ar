@@ -30,7 +30,7 @@ from qgis.core import (
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
 import processing
-from .utils import restore_ui_focus, push_message
+from .utils import restore_ui_focus, push_message, cleanup_files
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
 # No external plugins or libraries (like numpy, matplotlib) are required.
@@ -361,14 +361,6 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 })
             else:
                 # Pure GDAL approach for custom radius:
-                # 1. Downsample DEM by factor of radius (reduces resolution)
-                # 2. Compute TPI on downsampled version
-                # 3. Resample back to original - this approximates larger window effect
-                
-                from qgis.core import QgsRasterLayer
-                dem_layer = QgsRasterLayer(dem_source, "temp")
-                if not dem_layer.isValid():
-                    raise Exception("DEM 레이어 로드 실패")
                 
                 # Get original resolution
                 pixel_size_x = dem_layer.rasterUnitsPerPixelX()
@@ -442,6 +434,8 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
         except Exception as e:
             self.iface.messageBar().pushMessage("경고", f"TPI 분석 오류: {str(e)}", level=1)
+        finally:
+            cleanup_files([downsampled, mean_approx])
     
     def run_slope_position_analysis(self, dem_source, slope_thresh, tpi_low, tpi_high, results):
         """Run Weiss (2001) 6-class Landform Classification using GDAL with user thresholds
@@ -536,3 +530,5 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 
         except Exception as e:
             self.iface.messageBar().pushMessage("경고", f"지형분류 분석 오류: {str(e)}", level=1)
+        finally:
+            cleanup_files([tpi_path, slope_path])

@@ -22,6 +22,7 @@ from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsProject, QgsVectorLayer, QgsMapLayerProxyModel
 import processing
+from .utils import push_message
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -109,12 +110,12 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
         """Extract contours by filtering DXF layers (supports multiple layers)"""
         layers = self.get_selected_layers()
         if not layers:
-            self.iface.messageBar().pushMessage("오류", "벡터 레이어를 선택해주세요", level=2)
+            push_message(self.iface, "오류", "벡터 레이어를 선택해주세요", level=2)
             return
         
         codes = self.get_selected_contour_codes()
         if not codes:
-            self.iface.messageBar().pushMessage("오류", "추출할 등고선 유형을 선택해주세요", level=2)
+            push_message(self.iface, "오류", "추출할 등고선 유형을 선택해주세요", level=2)
             return
         
         try:
@@ -131,8 +132,8 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
                 layer.setSubsetString(query)
                 filtered_count += 1
             
-            self.iface.messageBar().pushMessage(
-                "완료", 
+            push_message(
+                self.iface, "완료", 
                 f"{filtered_count}개 레이어에 등고선 필터 적용 완료 ({len(codes)}개 유형)", 
                 level=0
             )

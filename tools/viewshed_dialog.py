@@ -154,8 +154,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.lblScienceHelp.setToolTip("지구 곡률 보정(R=6,371km) 및 대기 굴절(k) 보정 공식입니다.")
             layout.addWidget(self.lblScienceHelp, 6, 0, 1, 2)
             
-        # [v1.6.19] Connect projects signals for automatic cleanup of markers/labels
-        QgsProject.instance().layersRemoved.connect(self.on_layers_removed)
+        # [v1.6.19] Connect signal for automatic cleanup (Line 88 already uses layersWillBeRemoved)
+        # Consolidating to line 88 for redundancy reduction.
             
         self.chkRefraction.toggled.connect(self.spinRefraction.setEnabled)
         
@@ -634,10 +634,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.canvas.setMapTool(self.original_tool)
             self.show()
     
-    def transform_to_dem_crs(self, point, dem_layer):
-        """Transform point from Map Canvas CRS to DEM CRS - DEPRECATED (use transform_point)"""
-        canvas_crs = self.canvas.mapSettings().destinationCrs()
-        return self.transform_point(point, canvas_crs, dem_layer.crs())
+    # [v1.6.21] transform_to_dem_crs REMOVED - deprecated
     
     def set_line_from_tool(self, points, is_closed=False):
         """Set a user-drawn line for line viewshed analysis"""
@@ -1878,7 +1875,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         pr = layer.dataProvider()
         
         # We need point in DEM CRS for buffer
-        center_dem = self.transform_to_dem_crs(center_point, dem_layer)
+        center_dem = self.transform_point(center_point, self.canvas.mapSettings().destinationCrs(), dem_layer.crs())
         zones = [
             (500, "근경 (500m)", QColor(255, 80, 80)),      # Red
             (2500, "중경 (2.5km)", QColor(255, 200, 0)),    # Yellow

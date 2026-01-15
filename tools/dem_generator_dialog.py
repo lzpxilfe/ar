@@ -321,7 +321,6 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             query = None
         
         # Notify if bridge points were excluded
-        excluded = len(selected_codes) - len(filtered_codes)
         if excluded > 0:
             push_message(self.iface, "알림", f"교량/구조물 표고점 {excluded}개 유형 자동 제외됨", level=0)
         
@@ -403,6 +402,10 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             push_message(self.iface, "오류", f"처리 중 오류: {str(e)}", level=2)
             restore_ui_focus(self)
+        finally:
+            if temp_merged and os.path.exists(temp_merged):
+                from .utils import cleanup_files
+                cleanup_files([temp_merged])
 
 
 
