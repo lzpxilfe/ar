@@ -1279,13 +1279,26 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         observer_dem = self.transform_point(observer, canvas_crs, dem_layer.crs())
         target_dem = self.transform_point(target, canvas_crs, dem_layer.crs())
 
-        # Calculate distance in DEM units
+        # Calculate distance in DEM units (meters expected)
         dx = target_dem.x() - observer_dem.x()
         dy = target_dem.y() - observer_dem.y()
-        total_dist = math.sqrt(dx * dx + dy * dy)
+        total_dist = math.hypot(dx, dy)
+
+        if total_dist <= 0:
+            push_message(self.iface, "오류", "관측점과 대상점이 동일합니다.", level=2)
+            restore_ui_focus(self)
+            return
         
         # Sample terrain along line
-        num_samples = max(200, int(total_dist / 5)) # Higher density for segmented LOS
+        pixel_x = abs(dem_layer.rasterUnitsPerPixelX())
+        pixel_y = abs(dem_layer.rasterUnitsPerPixelY())
+        pixel_sizes = [v for v in (pixel_x, pixel_y) if v and v > 0]
+        min_pixel = min(pixel_sizes) if pixel_sizes else 5.0
+        desired_step = max(min_pixel, 5.0)
+
+        num_samples = int(total_dist / desired_step) if desired_step > 0 else 200
+        num_samples = max(200, min(num_samples, 5000))
+
         profile_data = []
         
         provider = dem_layer.dataProvider()
@@ -1314,46 +1327,99 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Observer and target elevations (with height added)
         obs_elev = profile_data[0]['elevation'] + obs_height
         tgt_elev = profile_data[-1]['elevation'] + tgt_height
-        
-        # Create result layer
-        layer = QgsVectorLayer("LineString?crs=" + dem_layer.crs().authid(), 
-                              f"가시선_분석_{int(total_dist)}m", "memory")
-        pr = layer.dataProvider()
-        pr.addAttributes([
-            QgsField("status", QVariant.String), # "보임" or "안보임"
-            QgsField("distance", QVariant.Double)
-        ])
-        layer.updateFields()
-        
-        # Determine obstruction against the LOS line to the TARGET height.
-        # A point blocks the target if terrain elevation exceeds the LOS elevation at that distance.
+
+        # Compute terrain visibility along the line (max-angle algorithm)
+        terrain_visibility = [True]  # Observer point is always visible
+        max_angle = -float('inf')
+        start_elev = obs_elev
+
+        for pt in profile_data[1:]:
+            d = pt['distance']
+            if d <= 0:
+                terrain_visibility.append(True)
+                continue
+
+            angle = (pt['elevation'] - start_elev) / d
+            if angle >= max_angle:
+                max_angle = angle
+                terrain_visibility.append(True)
+            else:
+                terrain_visibility.append(False)
+
+        # Determine obstruction against the LOS line to the TARGET height (target visibility)
         first_obstruction = None
         is_visible_overall = True
+        prev_pt = profile_data[0]
+        prev_delta = prev_pt['elevation'] - obs_elev
+
         for pt in profile_data[1:-1]:
-            frac = pt['distance'] / total_dist if total_dist > 0 else 0
+            frac = pt['distance'] / total_dist
             sight = obs_elev + frac * (tgt_elev - obs_elev)
-            if pt['elevation'] > sight:
-                first_obstruction = pt
+            delta = pt['elevation'] - sight
+
+            if delta > 0:
                 is_visible_overall = False
+                if prev_delta <= 0:
+                    denom = (prev_delta - delta)
+                    t = (prev_delta / denom) if denom != 0 else 0.0
+                    t = max(0.0, min(1.0, t))
+                    first_obstruction = {
+                        'distance': prev_pt['distance'] + t * (pt['distance'] - prev_pt['distance']),
+                        'elevation': prev_pt['elevation'] + t * (pt['elevation'] - prev_pt['elevation']),
+                        'x': prev_pt['x'] + t * (pt['x'] - prev_pt['x']),
+                        'y': prev_pt['y'] + t * (pt['y'] - prev_pt['y']),
+                    }
+                else:
+                    first_obstruction = pt
                 break
 
+            prev_pt = pt
+            prev_delta = delta
+
+        # Create result layer (Viscode-style segmented line)
+        layer = QgsVectorLayer(
+            "LineString?crs=" + dem_layer.crs().authid(),
+            f"가시선_Viscode_{int(total_dist)}m",
+            "memory",
+        )
+        pr = layer.dataProvider()
+        pr.addAttributes([
+            QgsField("status", QVariant.String),  # "보임" / "안보임"
+            QgsField("from_m", QVariant.Double),
+            QgsField("to_m", QVariant.Double),
+            QgsField("length_m", QVariant.Double),
+        ])
+        layer.updateFields()
+
+        # Build merged segments (reduce feature count while keeping color breaks)
         segments = []
-        if is_visible_overall or not first_obstruction:
-            segments.append(("보임", [QgsPointXY(observer_dem.x(), observer_dem.y()),
-                                     QgsPointXY(target_dem.x(), target_dem.y())]))
-        else:
-            obs_pt = QgsPointXY(observer_dem.x(), observer_dem.y())
-            block_pt = QgsPointXY(first_obstruction['x'], first_obstruction['y'])
-            tgt_pt = QgsPointXY(target_dem.x(), target_dem.y())
-            segments.append(("보임", [obs_pt, block_pt]))
-            segments.append(("안보임", [block_pt, tgt_pt]))
+        if len(profile_data) >= 2:
+            current_status = "보임" if terrain_visibility[1] else "안보임"
+            current_pts = [QgsPointXY(profile_data[0]['x'], profile_data[0]['y'])]
+            seg_from = 0.0
+
+            for idx in range(1, len(profile_data)):
+                status = "보임" if terrain_visibility[idx] else "안보임"
+                if status != current_status:
+                    seg_to = profile_data[idx - 1]['distance']
+                    segments.append((current_status, seg_from, seg_to, current_pts))
+                    current_pts = [current_pts[-1]]
+                    seg_from = seg_to
+                    current_status = status
+
+                current_pts.append(QgsPointXY(profile_data[idx]['x'], profile_data[idx]['y']))
+
+            seg_to = profile_data[-1]['distance']
+            segments.append((current_status, seg_from, seg_to, current_pts))
 
         # Add features for each segment
-        for status, pts in segments:
-            if len(pts) < 2: continue
+        for status, from_m, to_m, pts in segments:
+            if len(pts) < 2:
+                continue
             feat = QgsFeature(layer.fields())
             feat.setGeometry(QgsGeometry.fromPolylineXY(pts))
-            feat.setAttributes([status, total_dist])
+            length_m = max(0.0, float(to_m) - float(from_m))
+            feat.setAttributes([status, float(from_m), float(to_m), length_m])
             pr.addFeature(feat)
             
         layer.updateExtents()
@@ -1364,7 +1430,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 'color': '0,200,0', 'width': '0.8'
             }), "보임"),
             QgsRendererCategory("안보임", QgsLineSymbol.createSimple({
-                'color': '255,0,0', 'width': '0.6', 'line_style': 'dash'
+                'color': '255,0,0', 'width': '0.8'
             }), "안보임")
         ]
         layer.setRenderer(QgsCategorizedSymbolRenderer("status", categories))
@@ -1374,42 +1440,72 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Ensure label layer is on top
         self.update_layer_order()
         
-        # Add Start/End point markers on the map
-        marker_layer = QgsVectorLayer("Point?crs=" + dem_layer.crs().authid(),
-                                      "가시선_마커", "memory")
-        m_pr = marker_layer.dataProvider()
-        m_pr.addAttributes([QgsField("유형", QVariant.String)])
-        marker_layer.updateFields()
-        
-        # Start point
-        start_feat = QgsFeature(marker_layer.fields())
-        start_feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(profile_data[0]['x'], profile_data[0]['y'])))
-        start_feat.setAttributes(["시작 (S)"])
-        m_pr.addFeature(start_feat)
-        
-        # End point
-        end_feat = QgsFeature(marker_layer.fields())
-        end_feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(profile_data[-1]['x'], profile_data[-1]['y'])))
-        end_feat.setAttributes(["끝 (E)"])
-        m_pr.addFeature(end_feat)
-        marker_layer.updateExtents()
-        
-        # Style markers
-        marker_categories = [
-            QgsRendererCategory("시작 (S)", QgsMarkerSymbol.createSimple({
-                'name': 'circle', 'color': '0,100,255', 'size': '3'
-            }), "시작 (S)"),
-            QgsRendererCategory("끝 (E)", QgsMarkerSymbol.createSimple({
-                'name': 'circle', 'color': '255,140,0', 'size': '3'
-            }), "끝 (E)")
+        # Create observer/target point layers (reference-style legend)
+        observer_layer = QgsVectorLayer(
+            "Point?crs=" + dem_layer.crs().authid(),
+            f"가시선_Observers_{int(total_dist)}m",
+            "memory",
+        )
+        observer_pr = observer_layer.dataProvider()
+        observer_pr.addAttributes([QgsField("status", QVariant.String)])
+        observer_layer.updateFields()
+
+        observer_status = "보이는 대상 있음" if is_visible_overall else "보이는 대상 없음"
+        observer_feat = QgsFeature(observer_layer.fields())
+        observer_feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(observer_dem.x(), observer_dem.y())))
+        observer_feat.setAttributes([observer_status])
+        observer_pr.addFeature(observer_feat)
+        observer_layer.updateExtents()
+
+        observer_categories = [
+            QgsRendererCategory("보이는 대상 있음", QgsMarkerSymbol.createSimple({
+                'name': 'triangle',
+                'color': '0,200,0',
+                'outline_color': '255,255,255',
+                'size': '3.2',
+            }), "보이는 대상 있음"),
+            QgsRendererCategory("보이는 대상 없음", QgsMarkerSymbol.createSimple({
+                'name': 'triangle',
+                'color': '255,0,0',
+                'outline_color': '255,255,255',
+                'size': '3.2',
+            }), "보이는 대상 없음"),
         ]
-        marker_layer.setRenderer(QgsCategorizedSymbolRenderer("유형", marker_categories))
-        # Create persistent markers
-        if not self.radioFromLayer.isChecked():
-            self.create_observer_layer("가시선_관측점", [(observer, self.canvas.mapSettings().destinationCrs()), 
-                                                      (target, self.canvas.mapSettings().destinationCrs())])
-        
-        QgsProject.instance().addMapLayers([marker_layer])
+        observer_layer.setRenderer(QgsCategorizedSymbolRenderer("status", observer_categories))
+
+        target_layer = QgsVectorLayer(
+            "Point?crs=" + dem_layer.crs().authid(),
+            f"가시선_Targets_{int(total_dist)}m",
+            "memory",
+        )
+        target_pr = target_layer.dataProvider()
+        target_pr.addAttributes([QgsField("status", QVariant.String)])
+        target_layer.updateFields()
+
+        target_status = "보임" if is_visible_overall else "안보임"
+        target_feat = QgsFeature(target_layer.fields())
+        target_feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(target_dem.x(), target_dem.y())))
+        target_feat.setAttributes([target_status])
+        target_pr.addFeature(target_feat)
+        target_layer.updateExtents()
+
+        target_categories = [
+            QgsRendererCategory("보임", QgsMarkerSymbol.createSimple({
+                'name': 'circle',
+                'color': '0,200,0',
+                'outline_color': '255,255,255',
+                'size': '3.2',
+            }), "보임"),
+            QgsRendererCategory("안보임", QgsMarkerSymbol.createSimple({
+                'name': 'circle',
+                'color': '255,0,0',
+                'outline_color': '255,255,255',
+                'size': '3.2',
+            }), "안보임"),
+        ]
+        target_layer.setRenderer(QgsCategorizedSymbolRenderer("status", target_categories))
+
+        QgsProject.instance().addMapLayers([observer_layer, target_layer])
         
         # If obstructed, mark the first obstacle
         if first_obstruction:
@@ -1440,37 +1536,49 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             })
             obs_layer.setRenderer(QgsSingleSymbolRenderer(marker_symbol))
             QgsProject.instance().addMapLayer(obs_layer)
+
+        # Ensure label layer is on top (if present from other analyses)
+        self.update_layer_order()
         
         # Show result message
         if is_visible_overall:
             self.iface.messageBar().pushMessage(
                 "가시선 분석", 
-                f"✅ 직시 가능! 거리: {total_dist:.0f}m", 
+                f"직시 가능 (보임) | 거리: {total_dist:.0f}m",
                 level=0
             )
         else:
             if first_obstruction:
                 self.iface.messageBar().pushMessage(
                     "가시선 분석", 
-                    f"❌ 직시 불가! 장애물: {first_obstruction['distance']:.0f}m 지점 (고도 {first_obstruction['elevation']:.1f}m)", 
+                    f"직시 불가 (안보임) | 장애물: {first_obstruction['distance']:.0f}m (고도 {first_obstruction['elevation']:.1f}m)",
                     level=1
                 )
             else:
                 self.iface.messageBar().pushMessage(
                     "가시선 분석", 
-                    "❌ 직시 불가!",
+                    "직시 불가 (안보임)",
                     level=1
                 )
         
         # Open Profiler for visualization
-        self.show_profiler(profile_data, obs_height, tgt_height, total_dist)
+        self.show_profiler(profile_data, obs_height, tgt_height, total_dist, is_visible_overall, first_obstruction)
         
         self.accept()
         
-    def show_profiler(self, profile_data, obs_height, tgt_height, total_dist):
+    def show_profiler(self, profile_data, obs_height, tgt_height, total_dist, is_visible_overall=True, first_obstruction=None):
         """Open the 2D Profiler dialog"""
         try:
-            profiler = ViewshedProfilerDialog(self.iface, profile_data, obs_height, tgt_height, total_dist, self)
+            profiler = ViewshedProfilerDialog(
+                self.iface,
+                profile_data,
+                obs_height,
+                tgt_height,
+                total_dist,
+                is_visible_overall=is_visible_overall,
+                first_obstruction=first_obstruction,
+                parent=self,
+            )
             profiler.exec_()
         except Exception as e:
             log_message(f"Profiler error: {e}", level=Qgis.Warning)
@@ -2477,11 +2585,13 @@ class ViewshedLineTool(QgsMapToolEmitPoint):
 
 class ProfilePlotWidget(QWidget):
     """Custom widget to draw 2D terrain profile for Viewshed Profiler"""
-    def __init__(self, profile_data, obs_height, tgt_height, parent=None):
+    def __init__(self, profile_data, obs_height, tgt_height, is_visible_overall=True, first_obstruction=None, parent=None):
         super().__init__(parent)
         self.profile_data = profile_data
         self.obs_height = obs_height
         self.tgt_height = tgt_height
+        self.is_visible_overall = is_visible_overall
+        self.first_obstruction = first_obstruction
         self.setMinimumSize(700, 350)
         
     def paintEvent(self, event):
@@ -2615,9 +2725,25 @@ class ProfilePlotWidget(QWidget):
         # --- 6. Draw Sight Line (Dashed Blue) ---
         obs_screen = to_screen(0, obs_elev)
         tgt_screen = to_screen(max_dist, tgt_elev)
-        
-        painter.setPen(QPen(QColor(0, 100, 255, 150), 1, Qt.DashLine))
-        painter.drawLine(QPointF(*obs_screen), QPointF(*tgt_screen))
+
+        if self.first_obstruction and not self.is_visible_overall:
+            obstruction_dist = float(self.first_obstruction.get('distance', 0.0))
+            obstruction_dist = max(0.0, min(max_dist, obstruction_dist))
+            frac = (obstruction_dist / max_dist) if max_dist > 0 else 0.0
+            obstruction_sight_elev = obs_elev + frac * (tgt_elev - obs_elev)
+            obstruct_screen = to_screen(obstruction_dist, obstruction_sight_elev)
+
+            painter.setPen(QPen(QColor(0, 100, 255, 150), 1, Qt.DashLine))
+            painter.drawLine(QPointF(*obs_screen), QPointF(*obstruct_screen))
+            painter.setPen(QPen(QColor(255, 0, 0, 150), 1, Qt.DashLine))
+            painter.drawLine(QPointF(*obstruct_screen), QPointF(*tgt_screen))
+
+            painter.setBrush(QBrush(QColor(255, 0, 0)))
+            painter.setPen(QPen(Qt.white, 1))
+            painter.drawEllipse(QPointF(*obstruct_screen), 4, 4)
+        else:
+            painter.setPen(QPen(QColor(0, 100, 255, 150), 1, Qt.DashLine))
+            painter.drawLine(QPointF(*obs_screen), QPointF(*tgt_screen))
         
         # --- 7. Draw Start (S) and End (E) Markers ---
         painter.setFont(QFont("Arial", 9, QFont.Bold))
@@ -2654,25 +2780,42 @@ class ProfilePlotWidget(QWidget):
 
 class ViewshedProfilerDialog(QDialog):
     """Dialog to show 2D Viewshed Profile chart"""
-    def __init__(self, iface, profile_data, obs_height, tgt_height, total_dist, parent=None):
+    def __init__(self, iface, profile_data, obs_height, tgt_height, total_dist, is_visible_overall=True, first_obstruction=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("가시권 프로파일러 (Viewshed Profiler)")
+        self.setWindowTitle("가시선 프로파일 (Line of Sight Profile)")
         self.setMinimumSize(800, 500)
         
         layout = QVBoxLayout()
         
         # Info Header
-        header = QLabel(f"<b>거리:</b> {total_dist:.1f}m | <b>관측고:</b> {obs_height}m | <b>대상고:</b> {tgt_height}m")
+        target_visibility = "보임" if is_visible_overall else "안보임"
+        obstruction_txt = ""
+        if (not is_visible_overall) and first_obstruction and first_obstruction.get('distance') is not None:
+            obstruction_txt = f" | <b>장애물:</b> {float(first_obstruction['distance']):.0f}m"
+
+        header = QLabel(
+            f"<b>거리:</b> {total_dist:.1f}m"
+            f" | <b>관측고:</b> {obs_height}m"
+            f" | <b>대상고:</b> {tgt_height}m"
+            f" | <b>대상점:</b> {target_visibility}"
+            f"{obstruction_txt}"
+        )
         header.setStyleSheet("font-size: 14px; padding: 10px; background: #f0f0f0; border-radius: 5px;")
         layout.addWidget(header)
         
         # Plot area
-        self.plot = ProfilePlotWidget(profile_data, obs_height, tgt_height)
+        self.plot = ProfilePlotWidget(
+            profile_data,
+            obs_height,
+            tgt_height,
+            is_visible_overall=is_visible_overall,
+            first_obstruction=first_obstruction,
+        )
         layout.addWidget(self.plot)
         
         # Footer buttons
         btn_layout = QHBoxLayout()
-        btn_save = QPushButton("🖼️ 이미지로 저장 (.png)")
+        btn_save = QPushButton("이미지로 저장 (.png)")
         btn_save.clicked.connect(self.save_image)
         btn_close = QPushButton("닫기")
         btn_close.clicked.connect(self.close)
