@@ -1628,10 +1628,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_nodata = vs_band.GetNoDataValue()
                 vs_data = vs_band.ReadAsArray().astype(np.float32)
                 
-                # [v1.6.11] Simplified Merging (Aligning is already handled by gdal:warpreproject)
+                # [v1.6.12] Simplified Merging (Aligning is already handled by gdal:warpreproject)
                 v_h, v_w = vs_data.shape
                 h_overlap = min(target_height, v_h)
                 w_overlap = min(target_width, v_w)
+                
+                # Define val_to_add for cumulative mode
+                if not union_mode:
+                    val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
                 # Robust Visibility Detection
                 if union_mode:
@@ -1658,10 +1662,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_ds = None
             
             # 4. Final NoData masking
-            # [v1.6.11] In Union Mode, we allow everything that GDAL returned to be shown.
+            # [v1.6.12] Define nodata_value unconditionally to prevent NameError
+            nodata_value = -9999
+            
+            # In Union Mode, we allow everything that GDAL returned to be shown.
             # Final transparency is handled by Style (0=Transparent).
             if not union_mode:
-                nodata_value = -9999
                 cumulative[~circular_mask] = nodata_value
             
             # Save Result
