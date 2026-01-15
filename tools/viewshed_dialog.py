@@ -1759,7 +1759,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # [v1.5.85] Robust point management for cumulative analysis
         total_needed = len(points)
-        MAX_POINTS = 500 
+        # [v1.6.15] Use UI spinMaxPoints value, default 50
+        MAX_POINTS = 50
+        if hasattr(self, 'spinMaxPoints'):
+            MAX_POINTS = self.spinMaxPoints.value() 
         
         if total_needed > MAX_POINTS:
             from qgis.PyQt.QtWidgets import QMessageBox
