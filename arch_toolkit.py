@@ -35,6 +35,7 @@ class ArchToolkit:
         self.menu_name = u'Archaeology Toolkit'
         self.toolbar = None
         self.main_action = None
+        self.viewshed_dlg = None # [v1.6.20] Persistent reference for marker cleanup
 
     def initGui(self):
         try:
@@ -166,8 +167,13 @@ class ArchToolkit:
 
     def run_viewshed_tool(self):
         try:
-            dlg = ViewshedDialog(self.iface)
-            dlg.exec_()
+            # [v1.6.20] Maintain persistent dialog instance so layersRemoved signal persists
+            if self.viewshed_dlg is None:
+                self.viewshed_dlg = ViewshedDialog(self.iface)
+            
+            # Show the dialog. exec_() is modal and blocks until closed.
+            # In v1.7.0 we might switch to .show() for non-modal interaction.
+            self.viewshed_dlg.exec_()
         except Exception as e:
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
