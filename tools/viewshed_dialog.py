@@ -67,6 +67,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.last_result_layer_id = None
         self.result_marker_map = {} # layer_id -> [markers]
         self.result_annotation_map = {} # layer_id -> [annotations] [v1.6.02]
+        self.result_observer_layer_map = {} # [v1.6.18] viewshed_layer_id -> observer_layer_id
         self.label_layer = None # Core reference to prevent GC issues
 
         
@@ -492,6 +493,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     except Exception as e:
                         print(f"Annotation cleanup error: {e}")
                 del self.result_annotation_map[lid]
+            
+            # 3. [v1.6.18] Clean up linked Observer Layer (red points layer)
+            if lid in self.result_observer_layer_map:
+                obs_layer_id = self.result_observer_layer_map[lid]
+                try:
+                    QgsProject.instance().removeMapLayer(obs_layer_id)
+                except:
+                    pass
+                del self.result_observer_layer_map[lid]
         
         if self.last_result_layer_id in layer_ids:
             self.reset_selection()
@@ -1663,10 +1673,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 
                 # [v1.5.80] Always create a numbered observer layer for cumulative analysis.
                 # This ensures Point 1, 2, 3... are clearly visible and match the legend V(1,2).
-                self.create_observer_layer("누적가시권_관측점", points)
+                observer_layer = self.create_observer_layer("누적가시권_관측점", points)
                 
                 QgsProject.instance().addMapLayer(viewshed_layer)
                 self.last_result_layer_id = viewshed_layer.id()
+                
+                # [v1.6.18] Link observer layer for cleanup when viewshed layer is deleted
+                if observer_layer:
+                    self.result_observer_layer_map[viewshed_layer.id()] = observer_layer.id()
                 
                 # Ensure label layer is on top
                 self.update_layer_order()
