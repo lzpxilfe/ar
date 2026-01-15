@@ -310,6 +310,31 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 horizon = math.sqrt(max(0.0, 2.0 * r_eff * obs_h)) + math.sqrt(max(0.0, 2.0 * r_eff * tgt_h))
                 horizon_text = f"평탄 지형 기준 지평선 근사 ≈ {horizon:,.0f} m (관측/대상 높이 반영)"
 
+            def curvature_drop(distance_m):
+                return (distance_m ** 2) / (2.0 * r_earth)
+
+            # Rule-of-thumb examples (flat terrain): how big curvature/refraction is at km scales
+            d5 = 5000.0
+            d10 = 10000.0
+            d20 = 20000.0
+            drop5 = curvature_drop(d5)
+            drop10 = curvature_drop(d10)
+            drop20 = curvature_drop(d20)
+            refr_relief_5 = drop5 * k
+            refr_relief_10 = drop10 * k
+            refr_relief_20 = drop20 * k
+
+            # Distance where refraction (0 ~ k) changes curvature drop by 1m / 5m.
+            if k > 0:
+                d_for_1m = math.sqrt((2.0 * r_earth * 1.0) / k)
+                d_for_5m = math.sqrt((2.0 * r_earth * 5.0) / k)
+                ref_meaning_text = (
+                    f"k={k:.2f} 기준: 굴절 보정(=곡률 낙하 차이) "
+                    f"1m≈{d_for_1m/1000:.1f}km, 5m≈{d_for_5m/1000:.1f}km"
+                )
+            else:
+                ref_meaning_text = "k=0이면 굴절 효과 없음"
+
             self.lblScienceHelp.setText(
                 "<font size='2' color='#444'>"
                 "<b>[근거]</b> Δh≈d²/(2R)·cc, R=6,371km. "
@@ -324,6 +349,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 f"<b>[규모]</b> 반경 {max_dist:,.0f} m에서 곡률 하강량(굴절없음)≈{drop_curv:.2f} m, "
                 f"현재 설정 적용≈{drop_apparent:.2f} m. "
                 "※ d² 비례라 짧은 반경에서는 차이가 매우 작을 수 있습니다.<br>"
+                f"<b>[언제 체감?]</b> {ref_meaning_text} (굴절에 따른 곡률 하강량 차이 기준)<br>"
+                f"<b>[예시]</b> 5km 곡률≈{drop5:.1f}m(굴절로≈{refr_relief_5:.2f}m 완화), "
+                f"10km≈{drop10:.1f}m(≈{refr_relief_10:.2f}m), "
+                f"20km≈{drop20:.1f}m(≈{refr_relief_20:.2f}m)<br>"
                 f"<b>[직관]</b> {horizon_text}"
                 "</font>"
             )
