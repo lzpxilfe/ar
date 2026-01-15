@@ -304,7 +304,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # TPI with user parameters (radius and threshold)
             if self.chkTPI.isChecked():
-                self.run_tpi_analysis(dem_source, tpi_radius, tpi_threshold, results)
+                self.run_tpi_analysis(dem_layer, dem_source, tpi_radius, tpi_threshold, results)
             
             # Roughness
             if self.chkRoughness.isChecked():
@@ -337,7 +337,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             if not success:
                 restore_ui_focus(self)
     
-    def run_tpi_analysis(self, dem_source, radius, threshold, results):
+    def run_tpi_analysis(self, dem_layer, dem_source, radius, threshold, results):
         """Run TPI analysis with user-specified radius and classification threshold
         
         TPI = Elevation - Mean of Neighborhood
@@ -348,6 +348,8 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         - radius: Number of cells for neighborhood window (larger = broader terrain features)
         - threshold: Classification boundary for valley/flat/ridge (smaller = more sensitive)
         """
+        downsampled = None
+        mean_approx = None
         try:
             output = os.path.join(tempfile.gettempdir(), 'archtoolkit_tpi.tif')
             

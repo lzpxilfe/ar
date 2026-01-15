@@ -313,6 +313,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Auto-exclude bridge/structure elevation points
         BRIDGE_CODES = ['F0027217']  # 교량/구조물 표고점
+        excluded = len([c for c in selected_codes if c in BRIDGE_CODES])
         filtered_codes = [c for c in selected_codes if c not in BRIDGE_CODES]
         
         if filtered_codes:

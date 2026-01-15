@@ -735,10 +735,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         color-coded result showing visible (green) vs obstructed (red) directions.
         """
         center = self.observer_point
+        center_crs = self.canvas.mapSettings().destinationCrs()
         # If observer_point is None, but we are in fromLayer mode, we need to pick the centroid
         if not center:
             pts = self.get_context_point_and_crs()
-            if pts: center, _ = pts[0]
+            if pts:
+                center, center_crs = pts[0]
 
         if not center:
             push_message(self.iface, "오류", "중심점을 선택해주세요", level=2)
@@ -746,7 +748,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             return
 
         # Transform to DEM CRS for accurate distance calculations
-        center_dem = self.transform_to_dem_crs(center, dem_layer)
+        center_dem = self.transform_point(center, center_crs, dem_layer.crs())
         
         buffer_radius = self.spinMaxDistance.value()  # Use max distance as buffer radius
         interval = self.spinLineInterval.value()
@@ -766,11 +768,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Run LOS from each perimeter point to center
         provider = dem_layer.dataProvider()
         visible_results = []
-        
-        # Transform for visualization
-        dem_to_canvas = QgsCoordinateTransform(dem_layer.crs(), 
-                                               self.canvas.mapSettings().destinationCrs(), 
-                                               QgsProject.instance())
         
         # Consolidate perimeter points into a single ring styling
         # Instead of rays, we draw the perimeter itself, colored by visibility from center.
@@ -841,13 +838,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             p2 = perimeter_points[(i+1) % len(perimeter_points)]
             
             status = point_status[i]
-            
-            # Transform for visualization
-            p1_can = dem_to_canvas.transform(p1)
-            p2_can = dem_to_canvas.transform(p2)
-            
+
             feat = QgsFeature(layer.fields())
-            feat.setGeometry(QgsGeometry.fromPolylineXY([p1_can, p2_can]))
+            feat.setGeometry(QgsGeometry.fromPolylineXY([p1, p2]))
             feat.setAttributes(["감시 가능" if status else "사각지대", 1 if status else 0])
             pr.addFeature(feat)
         
@@ -870,7 +863,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.update_layer_order()
         
         # Link center marker
-        self.link_current_marker_to_layer(layer.id(), [(center, self.canvas.mapSettings().destinationCrs())])
+        self.link_current_marker_to_layer(layer.id(), [(center, center_crs)])
         
         # Summary message
         visibility_pct = (visible_count / len(perimeter_points) * 100) if perimeter_points else 0
@@ -1230,7 +1223,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # End point
         end_feat = QgsFeature(marker_layer.fields())
         end_feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(profile_data[-1]['x'], profile_data[-1]['y'])))
-        end_feat.setAttributes(["끓 (E)"])
+        end_feat.setAttributes(["끝 (E)"])
         m_pr.addFeature(end_feat)
         marker_layer.updateExtents()
         
@@ -1239,9 +1232,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             QgsRendererCategory("시작 (S)", QgsMarkerSymbol.createSimple({
                 'name': 'circle', 'color': '0,100,255', 'size': '3'
             }), "시작 (S)"),
-            QgsRendererCategory("끓 (E)", QgsMarkerSymbol.createSimple({
+            QgsRendererCategory("끝 (E)", QgsMarkerSymbol.createSimple({
                 'name': 'circle', 'color': '255,140,0', 'size': '3'
-            }), "끓 (E)")
+            }), "끝 (E)")
         ]
         marker_layer.setRenderer(QgsCategorizedSymbolRenderer("유형", marker_categories))
         # Create persistent markers
