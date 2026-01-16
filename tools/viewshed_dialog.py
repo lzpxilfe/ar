@@ -83,6 +83,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Listen for layer removal for marker cleanup
         QgsProject.instance().layersWillBeRemoved.connect(self.on_layers_removed)
+
+        # LOS profile reopen: selecting the Viscode layer can reopen its profile
+        try:
+            self.iface.currentLayerChanged.connect(self._on_current_layer_changed)
+        except Exception:
+            pass
         
         # Mode radio buttons
         self.radioSinglePoint.toggled.connect(self.on_mode_changed)
@@ -704,6 +710,16 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.last_result_layer_id in layer_ids:
             self.reset_selection()
             self.last_result_layer_id = None
+
+    def _on_current_layer_changed(self, layer):
+        try:
+            if not layer:
+                return
+            layer_id = layer.id()
+            if layer_id in getattr(self, "_los_profile_data", {}):
+                self.open_los_profile(layer_id)
+        except Exception as e:
+            log_message(f"Current layer handler error: {e}", level=Qgis.Warning)
 
     def get_context_point_and_crs(self):
         """Helper to get observer point(s) and their source CRS
@@ -3248,6 +3264,14 @@ class ViewshedProfilerDialog(QDialog):
         sync_layout.addWidget(self.chkSync)
         sync_layout.addStretch()
         layout.addLayout(sync_layout)
+
+        ref = QLabel(
+            '참고: <a href="https://github.com/zoran-cuckovic/QGIS-visibility-analysis">Visibility Analysis</a> '
+            '(Zoran Čučković) 플러그인의 출력 레이어 구성(Observers/Targets/Viscode)에서 아이디어를 얻었습니다.'
+        )
+        ref.setOpenExternalLinks(True)
+        ref.setStyleSheet("font-size: 11px; color: #555; padding: 0 10px 6px 10px;")
+        layout.addWidget(ref)
         
         # Plot area
         self.plot = ProfilePlotWidget(
