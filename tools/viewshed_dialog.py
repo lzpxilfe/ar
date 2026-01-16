@@ -1370,24 +1370,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         obs_elev = profile_data[0]['elevation'] + obs_height
         tgt_elev = profile_data[-1]['elevation'] + tgt_height
 
-        # Compute terrain visibility along the line (max-angle algorithm)
-        terrain_visibility = [True]  # Observer point is always visible
-        max_angle = -float('inf')
-        start_elev = obs_elev
-
-        for pt in profile_data[1:]:
-            d = pt['distance']
-            if d <= 0:
-                terrain_visibility.append(True)
-                continue
-
-            angle = (pt['elevation'] - start_elev) / d
-            if angle >= max_angle:
-                max_angle = angle
-                terrain_visibility.append(True)
-            else:
-                terrain_visibility.append(False)
-
         # Determine obstruction against the LOS line to the TARGET height (target visibility)
         first_obstruction = None
         is_visible_overall = True
@@ -1433,26 +1415,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         ])
         layer.updateFields()
 
-        # Build merged segments (reduce feature count while keeping color breaks)
         segments = []
-        if len(profile_data) >= 2:
-            current_status = "보임" if terrain_visibility[1] else "안보임"
-            current_pts = [QgsPointXY(profile_data[0]['x'], profile_data[0]['y'])]
-            seg_from = 0.0
+        obs_pt = QgsPointXY(observer_dem.x(), observer_dem.y())
+        tgt_pt = QgsPointXY(target_dem.x(), target_dem.y())
 
-            for idx in range(1, len(profile_data)):
-                status = "보임" if terrain_visibility[idx] else "안보임"
-                if status != current_status:
-                    seg_to = profile_data[idx - 1]['distance']
-                    segments.append((current_status, seg_from, seg_to, current_pts))
-                    current_pts = [current_pts[-1]]
-                    seg_from = seg_to
-                    current_status = status
-
-                current_pts.append(QgsPointXY(profile_data[idx]['x'], profile_data[idx]['y']))
-
-            seg_to = profile_data[-1]['distance']
-            segments.append((current_status, seg_from, seg_to, current_pts))
+        if is_visible_overall or not first_obstruction:
+            segments.append(("보임", 0.0, total_dist, [obs_pt, tgt_pt]))
+        else:
+            block_dist = float(first_obstruction['distance'])
+            block_pt = QgsPointXY(float(first_obstruction['x']), float(first_obstruction['y']))
+            segments.append(("보임", 0.0, block_dist, [obs_pt, block_pt]))
+            segments.append(("안보임", block_dist, total_dist, [block_pt, tgt_pt]))
 
         # Add features for each segment
         for status, from_m, to_m, pts in segments:
