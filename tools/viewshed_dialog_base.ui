@@ -101,29 +101,19 @@
         </property>
        </widget>
       </item>
-      <item row="2" column="0">
-       <widget class="QRadioButton" name="radioLineOfSight">
-        <property name="text">
-         <string>가시선 분석 (Line of Sight)</string>
-        </property>
-        <property name="toolTip">
-         <string>두 지점 사이의 시야가 확보되는지 단면을 통해 확인합니다.</string>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="1">
-       <widget class="QRadioButton" name="radioBufferVisibility">
-        <property name="text">
-         <string>원형 조망 분석 (Visual Magnitude)</string>
-        </property>
-        <property name="toolTip">
-         <string>중심점에서 주변 360도를 둘러볼 때의 조망량을 계산합니다.</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
+       <item row="2" column="0">
+        <widget class="QRadioButton" name="radioLineOfSight">
+         <property name="text">
+          <string>가시선 분석 (Line of Sight)</string>
+         </property>
+         <property name="toolTip">
+          <string>두 지점 사이의 시야가 확보되는지 단면을 통해 확인합니다.</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
    <item>
     <widget class="QGroupBox" name="groupObserver">
      <property name="title">

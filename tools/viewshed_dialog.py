@@ -57,7 +57,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.point_labels = []  # Text annotations for point numbers
         self.multi_point_mode = False
         self.los_mode = False
-        self.buffer_mode = False
         self.los_click_count = 0
         self.last_result_layer_id = None
         self.result_marker_map = {} # layer_id -> [markers]
@@ -100,7 +99,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.radioReverseViewshed.toggled.connect(self.on_mode_changed)
         self.radioMultiPoint.toggled.connect(self.on_mode_changed)
         self.radioLineOfSight.toggled.connect(self.on_mode_changed)
-        self.radioBufferVisibility.toggled.connect(self.on_mode_changed)
         
         # Layer source radio buttons
         self.radioClickMap.toggled.connect(self.on_source_changed)
@@ -492,11 +490,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         is_line_mode = self.radioLineViewshed.isChecked()
         is_multi_mode = self.radioMultiPoint.isChecked()
         is_los_mode = self.radioLineOfSight.isChecked()
-        is_buffer_mode = self.radioBufferVisibility.isChecked()
         is_reverse_mode = self.radioReverseViewshed.isChecked()
         
         # Enable line options for appropriate modes
-        self.groupLineOptions.setEnabled(is_line_mode or is_multi_mode or is_buffer_mode)
+        self.groupLineOptions.setEnabled(is_line_mode or is_multi_mode)
         
         # Show/Hide Count Only checkbox - relevant for Line and Multi-point
         if hasattr(self, 'chkCountOnly'):
@@ -505,7 +502,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Update internal mode flags
         self.multi_point_mode = is_multi_mode
         self.los_mode = is_los_mode
-        self.buffer_mode = is_buffer_mode
         
         # === Mode-specific UI adjustments ===
         
@@ -561,13 +557,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     "레이어에서 직접 선택(관측점/대상점 지정) 기능은 단순화를 위해 현재 비활성화되어 있습니다."
                 )
                 self.lblLayerHint.setVisible(True)
-        
-        elif is_buffer_mode:
-            self.radioClickMap.setEnabled(True)
-            self.groupObserver.setTitle("3. 중심점 설정")
-            self.btnSelectPoint.setText("🖱️ 중심점 선택")
-            if hasattr(self, 'lblLayerHint'):
-                self.lblLayerHint.setVisible(False)
         
         elif is_reverse_mode:
             self.radioClickMap.setEnabled(True)
@@ -901,7 +890,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(
                 self.iface,
                 "오류",
-                f"DEM CRS 단위가 미터가 아닙니다 (현재: {unit_name}). 가시권/히구치/버퍼 분석은 미터 단위 투영 CRS가 필요합니다.",
+                f"DEM CRS 단위가 미터가 아닙니다 (현재: {unit_name}). 가시권/히구치 분석은 미터 단위 투영 CRS가 필요합니다.",
                 level=2,
                 duration=8,
             )
@@ -954,14 +943,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     self.show()
                     return
                 self.run_line_of_sight(
-                    dem_layer, observer_height, target_height
-                )
-            elif self.radioBufferVisibility.isChecked():
-                if not self.observer_point:
-                    self.iface.messageBar().pushMessage("오류", "중심점을 선택해주세요", level=2)
-                    self.show()
-                    return
-                self.run_buffer_visibility(
                     dem_layer, observer_height, target_height
                 )
             else:  # Reverse viewshed
