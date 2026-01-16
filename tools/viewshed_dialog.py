@@ -64,6 +64,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.result_annotation_map = {} # layer_id -> [annotations] [v1.6.02]
         self.result_observer_layer_map = {} # [v1.6.18] viewshed_layer_id -> observer_layer_id
         self.label_layer = None # Core reference to prevent GC issues
+        self._los_profile_data = {}  # viscode_layer_id -> profile payload
+        self._los_profile_dialogs = {}  # viscode_layer_id -> dialog instance
 
         
         
@@ -538,7 +540,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.target_point = None
             self.los_click_count = 0
             if hasattr(self, 'lblLayerHint'):
-                self.lblLayerHint.setVisible(False)
+                self.lblLayerHint.setText(
+                    "팁: 정확한 클릭을 원하면 포인트(점) 벡터 레이어를 만든 뒤 스냅(자석 아이콘)을 켜고 찍으세요.\n"
+                    "레이어에서 직접 선택(관측점/대상점 지정) 기능은 단순화를 위해 현재 비활성화되어 있습니다."
+                )
+                self.lblLayerHint.setVisible(True)
         
         elif is_buffer_mode:
             self.radioClickMap.setEnabled(True)
@@ -679,6 +685,21 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 except Exception:
                     pass
                 del self.result_observer_layer_map[lid]
+
+            # 4. Clean up LOS profile payload/dialogs
+            if lid in getattr(self, "_los_profile_data", {}):
+                try:
+                    del self._los_profile_data[lid]
+                except Exception:
+                    pass
+
+            if lid in getattr(self, "_los_profile_dialogs", {}):
+                try:
+                    dlg = self._los_profile_dialogs.pop(lid, None)
+                    if dlg:
+                        dlg.close()
+                except Exception:
+                    pass
         
         if self.last_result_layer_id in layer_ids:
             self.reset_selection()
@@ -1475,11 +1496,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             }), "안보임")
         ]
         layer.setRenderer(QgsCategorizedSymbolRenderer("status", categories))
-        QgsProject.instance().addMapLayers([layer])
-        self.last_result_layer_id = layer.id()
-        
-        # Ensure label layer is on top
-        self.update_layer_order()
         
         # Create observer/target point layers (reference-style legend)
         observer_layer = QgsVectorLayer(
@@ -1545,9 +1561,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             }), "안보임"),
         ]
         target_layer.setRenderer(QgsCategorizedSymbolRenderer("status", target_categories))
-
-        QgsProject.instance().addMapLayers([observer_layer, target_layer])
         
+        obs_layer = None
+
         # If obstructed, mark the first obstacle
         if first_obstruction:
             obs_layer = QgsVectorLayer("Point?crs=" + dem_layer.crs().authid(),
@@ -1576,7 +1592,45 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 'size': '4'
             })
             obs_layer.setRenderer(QgsSingleSymbolRenderer(marker_symbol))
-            QgsProject.instance().addMapLayer(obs_layer)
+        
+        # Add result layers under a group (to reduce clutter)
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        parent_group = root.findGroup("ArchToolkit - 가시선")
+        if parent_group is None:
+            parent_group = root.addGroup("ArchToolkit - 가시선")
+
+        run_id = str(uuid.uuid4())[:8]
+        group_name = f"가시선_{int(total_dist)}m_{run_id}"
+        run_group = parent_group.insertGroup(0, group_name)
+        run_group.setExpanded(False)
+
+        layers_to_add = [observer_layer, target_layer, layer]
+        if obs_layer:
+            layers_to_add.append(obs_layer)
+
+        for lyr in layers_to_add:
+            project.addMapLayer(lyr, False)
+            run_group.addLayer(lyr)
+
+        self.last_result_layer_id = layer.id()
+
+        # Store profile payload for later reopening (selecting the line can reopen the profile)
+        self._los_profile_data[layer.id()] = {
+            "profile_data": profile_data,
+            "obs_height": obs_height,
+            "tgt_height": tgt_height,
+            "total_dist": total_dist,
+            "is_visible_overall": is_visible_overall,
+            "first_obstruction": first_obstruction,
+            "line_start_canvas": observer,
+            "line_end_canvas": target,
+        }
+
+        try:
+            layer.selectionChanged.connect(lambda *_args, lid=layer.id(): self._on_los_layer_selection_changed(lid))
+        except Exception:
+            pass
 
         # Ensure label layer is on top (if present from other analyses)
         self.update_layer_order()
@@ -1612,10 +1666,36 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             first_obstruction,
             line_start_canvas=observer,
             line_end_canvas=target,
+            result_layer_id=layer.id(),
         )
         
         self.accept()
         
+    def _on_los_layer_selection_changed(self, layer_id):
+        try:
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if not layer or layer.selectedFeatureCount() <= 0:
+                return
+            self.open_los_profile(layer_id)
+        except Exception as e:
+            log_message(f"LOS selection handler error: {e}", level=Qgis.Warning)
+
+    def open_los_profile(self, layer_id):
+        payload = self._los_profile_data.get(layer_id)
+        if not payload:
+            return
+        self.show_profiler(
+            payload.get("profile_data") or [],
+            payload.get("obs_height", 0.0),
+            payload.get("tgt_height", 0.0),
+            payload.get("total_dist", 0.0),
+            payload.get("is_visible_overall", True),
+            payload.get("first_obstruction"),
+            line_start_canvas=payload.get("line_start_canvas"),
+            line_end_canvas=payload.get("line_end_canvas"),
+            result_layer_id=layer_id,
+        )
+
     def show_profiler(
         self,
         profile_data,
@@ -1626,17 +1706,22 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         first_obstruction=None,
         line_start_canvas=None,
         line_end_canvas=None,
+        result_layer_id=None,
     ):
         """Open the 2D Profiler dialog (modeless)"""
         try:
             from qgis.PyQt.QtCore import Qt
 
-            if hasattr(self, "_active_los_profiler") and self._active_los_profiler:
-                try:
-                    self._active_los_profiler.close()
-                except Exception:
-                    pass
-                self._active_los_profiler = None
+            if result_layer_id and result_layer_id in self._los_profile_dialogs:
+                dlg = self._los_profile_dialogs.get(result_layer_id)
+                if dlg:
+                    try:
+                        dlg.show()
+                        dlg.raise_()
+                        dlg.activateWindow()
+                        return
+                    except Exception:
+                        self._los_profile_dialogs.pop(result_layer_id, None)
 
             profiler = ViewshedProfilerDialog(
                 self.iface,
@@ -1652,11 +1737,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             )
             profiler.setWindowModality(Qt.NonModal)
             profiler.setAttribute(Qt.WA_DeleteOnClose, True)
-            profiler.destroyed.connect(lambda *_: setattr(self, "_active_los_profiler", None))
+            if result_layer_id:
+                self._los_profile_dialogs[result_layer_id] = profiler
+                profiler.destroyed.connect(
+                    lambda *_args, lid=result_layer_id: self._los_profile_dialogs.pop(lid, None)
+                )
             profiler.show()
             profiler.raise_()
             profiler.activateWindow()
-            self._active_los_profiler = profiler
         except Exception as e:
             log_message(f"Profiler error: {e}", level=Qgis.Warning)
     
@@ -2672,8 +2760,25 @@ class ProfilePlotWidget(QWidget):
         self.hover_distance = None
         self.hover_elevation = None
         self.on_hover_callback = None  # Function(distance_m|None) for map synchronization
+        self.zoom_level = 1.0
+        self.pan_offset = 0.0  # Horizontal offset in meters
+        self.is_dragging = False
+        self.drag_start_x = 0
+        self.drag_start_offset = 0.0
+
+        # Margins
+        self.margin_left = 60
+        self.margin_right = 30
+        self.margin_top = 30
+        self.margin_bottom = 40
         self.setMinimumSize(700, 350)
         self.setMouseTracking(True)
+
+    def reset_view(self):
+        self.zoom_level = 1.0
+        self.pan_offset = 0.0
+        self.set_hover_distance(None)
+        self.update()
 
     def set_hover_distance(self, distance_m):
         if distance_m is None or not self.profile_data:
@@ -2695,33 +2800,67 @@ class ProfilePlotWidget(QWidget):
         self.hover_elevation = float(closest["elevation"])
         self.update()
 
-    def _distance_from_mouse(self, x, y):
+    def _get_view_params(self):
         if not self.profile_data:
-            return None
-
-        width = self.width()
-        height = self.height()
-        margin_left = 60
-        margin_right = 30
-        margin_top = 30
-        margin_bottom = 40
-
-        plot_w = width - margin_left - margin_right
-        plot_h = height - margin_top - margin_bottom
-        if plot_w <= 0 or plot_h <= 0:
-            return None
-
-        if not (margin_left <= x <= margin_left + plot_w and margin_top <= y <= margin_top + plot_h):
             return None
 
         max_dist = float(self.profile_data[-1]["distance"]) if float(self.profile_data[-1]["distance"]) > 0 else 0.0
         if max_dist <= 0:
             return None
 
-        rel_x = (x - margin_left) / plot_w
-        return rel_x * max_dist
+        plot_w = self.width() - self.margin_left - self.margin_right
+        plot_h = self.height() - self.margin_top - self.margin_bottom
+        if plot_w <= 0 or plot_h <= 0:
+            return None
+
+        zoom = max(1.0, float(self.zoom_level))
+        visible_range = max_dist / zoom
+        visible_range = max(1e-6, visible_range)
+
+        max_offset = max(0.0, max_dist - visible_range)
+        self.pan_offset = max(0.0, min(max_offset, float(self.pan_offset)))
+        view_start = float(self.pan_offset)
+        view_end = view_start + visible_range
+
+        return {
+            "max_dist": max_dist,
+            "plot_w": plot_w,
+            "plot_h": plot_h,
+            "visible_range": visible_range,
+            "view_start": view_start,
+            "view_end": view_end,
+        }
+
+    def _distance_from_mouse(self, x, y):
+        if not self.profile_data:
+            return None
+
+        view = self._get_view_params()
+        if not view:
+            return None
+
+        if not (
+            self.margin_left <= x <= self.margin_left + view["plot_w"]
+            and self.margin_top <= y <= self.margin_top + view["plot_h"]
+        ):
+            return None
+
+        rel_x = (x - self.margin_left) / view["plot_w"]
+        return view["view_start"] + rel_x * view["visible_range"]
 
     def mouseMoveEvent(self, event):
+        if self.is_dragging and self.zoom_level > 1.0:
+            view = self._get_view_params()
+            if view:
+                delta_x = event.x() - self.drag_start_x
+                delta_distance = (delta_x / view["plot_w"]) * view["visible_range"]
+                self.pan_offset = self.drag_start_offset - delta_distance
+                self.set_hover_distance(None)
+                if self.on_hover_callback:
+                    self.on_hover_callback(None)
+                self.update()
+            return
+
         distance = self._distance_from_mouse(event.x(), event.y())
         if distance is None:
             self.setToolTip("")
@@ -2739,6 +2878,75 @@ class ProfilePlotWidget(QWidget):
             self.on_hover_callback(self.hover_distance)
         self.update()
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            view = self._get_view_params()
+            if view and self.zoom_level > 1.0:
+                self.is_dragging = True
+                self.drag_start_x = event.x()
+                self.drag_start_offset = float(self.pan_offset)
+                self.setCursor(Qt.ClosedHandCursor)
+                return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.is_dragging:
+            self.is_dragging = False
+            self.setCursor(Qt.ArrowCursor)
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.reset_view()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def wheelEvent(self, event):
+        if not self.profile_data:
+            return
+
+        view = self._get_view_params()
+        if not view:
+            return
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+
+        factor = 1.2 if delta > 0 else (1.0 / 1.2)
+        new_zoom = max(1.0, min(25.0, float(self.zoom_level) * factor))
+        if abs(new_zoom - float(self.zoom_level)) < 1e-6:
+            return
+
+        try:
+            pos = event.position()
+            mx, my = pos.x(), pos.y()
+        except AttributeError:
+            pos = event.pos()
+            mx, my = pos.x(), pos.y()
+
+        anchor = self._distance_from_mouse(mx, my)
+        if anchor is None:
+            anchor = view["view_start"] + (view["visible_range"] / 2.0)
+
+        rel = (anchor - view["view_start"]) / view["visible_range"] if view["visible_range"] > 0 else 0.5
+        rel = max(0.0, min(1.0, rel))
+
+        max_dist = view["max_dist"]
+        new_visible_range = max_dist / new_zoom
+        new_visible_range = max(1e-6, new_visible_range)
+        new_view_start = anchor - rel * new_visible_range
+        new_view_start = max(0.0, min(max_dist - new_visible_range, new_view_start))
+
+        self.zoom_level = new_zoom
+        self.pan_offset = new_view_start
+        self.set_hover_distance(None)
+        if self.on_hover_callback:
+            self.on_hover_callback(None)
+        self.update()
+        event.accept()
+
     def leaveEvent(self, event):
         self.setToolTip("")
         self.set_hover_distance(None)
@@ -2754,13 +2962,16 @@ class ProfilePlotWidget(QWidget):
         
         width = self.width()
         height = self.height()
-        margin_left = 60
-        margin_right = 30
-        margin_top = 30
-        margin_bottom = 40
         
-        plot_w = width - margin_left - margin_right
-        plot_h = height - margin_top - margin_bottom
+        view = self._get_view_params()
+        if not view:
+            return
+
+        plot_w = view["plot_w"]
+        plot_h = view["plot_h"]
+        view_start = view["view_start"]
+        view_end = view["view_end"]
+        visible_range = view["visible_range"]
         
         # Data extraction
         distances = [p['distance'] for p in self.profile_data]
@@ -2775,25 +2986,25 @@ class ProfilePlotWidget(QWidget):
         elev_range = max_elev - min_elev if max_elev > min_elev else 10
         
         def to_screen(d, e):
-            sx = margin_left + (d / max_dist) * plot_w
-            sy = margin_top + plot_h - ((e - min_elev) / elev_range) * plot_h
+            sx = self.margin_left + ((d - view_start) / visible_range) * plot_w
+            sy = self.margin_top + plot_h - ((e - min_elev) / elev_range) * plot_h
             return sx, sy
 
         # --- 1. Draw Axes ---
         painter.setPen(QPen(Qt.black, 1))
-        painter.drawLine(margin_left, margin_top + plot_h, margin_left + plot_w, margin_top + plot_h)  # X
-        painter.drawLine(margin_left, margin_top, margin_left, margin_top + plot_h)  # Y
+        painter.drawLine(self.margin_left, self.margin_top + plot_h, self.margin_left + plot_w, self.margin_top + plot_h)  # X
+        painter.drawLine(self.margin_left, self.margin_top, self.margin_left, self.margin_top + plot_h)  # Y
         
         # Axis Labels
         painter.setFont(QFont("Arial", 8))
-        painter.drawText(margin_left - 5, height - 10, "0")
-        painter.drawText(width - margin_right - 40, height - 10, f"{int(max_dist)}m")
-        painter.drawText(5, margin_top + plot_h, f"{int(min_elev)}m")
-        painter.drawText(5, margin_top + 10, f"{int(max_elev)}m")
+        painter.drawText(self.margin_left - 5, height - 10, f"{int(view_start)}")
+        painter.drawText(width - self.margin_right - 60, height - 10, f"{int(view_end)}m")
+        painter.drawText(5, self.margin_top + plot_h, f"{int(min_elev)}m")
+        painter.drawText(5, self.margin_top + 10, f"{int(max_elev)}m")
         
         # Title
         painter.setFont(QFont("Arial", 10, QFont.Bold))
-        painter.drawText(margin_left, 18, "지형 단면 및 가시선 (Terrain Profile & Line of Sight)")
+        painter.drawText(self.margin_left, 18, "지형 단면 및 가시선 (Terrain Profile & Line of Sight)")
         
         # --- 2. Calculate Visibility using Max-Angle Algorithm ---
         # Compute visibility status for each profile point
@@ -2824,10 +3035,29 @@ class ProfilePlotWidget(QWidget):
             d1, e1 = distances[i], elevations[i]
             d2, e2 = distances[i + 1], elevations[i + 1]
 
-            x1, y1 = to_screen(d1, e1)
-            x2, y2 = to_screen(d2, e2)
-            xb1, yb1 = to_screen(d1, min_elev)
-            xb2, yb2 = to_screen(d2, min_elev)
+            if d2 < view_start or d1 > view_end:
+                continue
+
+            d1c, e1c = d1, e1
+            d2c, e2c = d2, e2
+
+            if d1c < view_start and d2c > d1c:
+                t = (view_start - d1c) / (d2c - d1c)
+                d1c = view_start
+                e1c = e1c + t * (e2c - e1c)
+
+            if d2c > view_end and d2c > d1c:
+                t = (view_end - d1c) / (d2c - d1c)
+                d2c = view_end
+                e2c = e1c + t * (e2c - e1c)
+
+            if d2c <= d1c:
+                continue
+
+            x1, y1 = to_screen(d1c, e1c)
+            x2, y2 = to_screen(d2c, e2c)
+            xb1, yb1 = to_screen(d1c, min_elev)
+            xb2, yb2 = to_screen(d2c, min_elev)
 
             poly = QPolygonF([
                 QPointF(xb1, yb1),
@@ -2844,8 +3074,30 @@ class ProfilePlotWidget(QWidget):
         pen_hidden = QPen(QColor(255, 0, 0), 2.0)   # Red
         
         for i in range(len(distances) - 1):
-            x1, y1 = to_screen(distances[i], elevations[i])
-            x2, y2 = to_screen(distances[i+1], elevations[i+1])
+            d1, e1 = distances[i], elevations[i]
+            d2, e2 = distances[i + 1], elevations[i + 1]
+
+            if d2 < view_start or d1 > view_end:
+                continue
+
+            d1c, e1c = d1, e1
+            d2c, e2c = d2, e2
+
+            if d1c < view_start and d2c > d1c:
+                t = (view_start - d1c) / (d2c - d1c)
+                d1c = view_start
+                e1c = e1c + t * (e2c - e1c)
+
+            if d2c > view_end and d2c > d1c:
+                t = (view_end - d1c) / (d2c - d1c)
+                d2c = view_end
+                e2c = e1c + t * (e2c - e1c)
+
+            if d2c <= d1c:
+                continue
+
+            x1, y1 = to_screen(d1c, e1c)
+            x2, y2 = to_screen(d2c, e2c)
             
             # Use status of the endpoint to determine color
             if visibility[i+1]:
@@ -2856,17 +3108,17 @@ class ProfilePlotWidget(QWidget):
 
         # Redraw axes on top of fills for readability
         painter.setPen(QPen(Qt.black, 1))
-        painter.drawLine(margin_left, margin_top + plot_h, margin_left + plot_w, margin_top + plot_h)  # X
-        painter.drawLine(margin_left, margin_top, margin_left, margin_top + plot_h)  # Y
+        painter.drawLine(self.margin_left, self.margin_top + plot_h, self.margin_left + plot_w, self.margin_top + plot_h)  # X
+        painter.drawLine(self.margin_left, self.margin_top, self.margin_left, self.margin_top + plot_h)  # Y
 
         # Hover indicator (distance cursor)
         if self.hover_distance is not None and self.hover_elevation is not None:
             hover_x, _ = to_screen(self.hover_distance, min_elev)
-            hover_x = max(margin_left, min(margin_left + plot_w, hover_x))
+            hover_x = max(self.margin_left, min(self.margin_left + plot_w, hover_x))
             hover_y = to_screen(self.hover_distance, self.hover_elevation)[1]
 
             painter.setPen(QPen(QColor(255, 0, 0, 160), 1, Qt.DashLine))
-            painter.drawLine(int(hover_x), margin_top, int(hover_x), margin_top + plot_h)
+            painter.drawLine(int(hover_x), self.margin_top, int(hover_x), self.margin_top + plot_h)
 
             painter.setPen(QPen(QColor(255, 0, 0), 2))
             painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -2877,48 +3129,61 @@ class ProfilePlotWidget(QWidget):
             painter.drawText(int(hover_x) + 8, int(hover_y) - 6, f"{self.hover_distance:.0f}m")
         
         # --- 6. Draw Sight Line (Dashed Blue) ---
-        obs_screen = to_screen(0, obs_elev)
-        tgt_screen = to_screen(max_dist, tgt_elev)
+        def sight_elev_at(d):
+            frac = (d / max_dist) if max_dist > 0 else 0.0
+            return obs_elev + frac * (tgt_elev - obs_elev)
+
+        def draw_sight_segment(d1, d2, color):
+            if d2 < view_start or d1 > view_end or d2 <= d1:
+                return
+            sd1 = max(view_start, d1)
+            sd2 = min(view_end, d2)
+            if sd2 <= sd1:
+                return
+            p1 = QPointF(*to_screen(sd1, sight_elev_at(sd1)))
+            p2 = QPointF(*to_screen(sd2, sight_elev_at(sd2)))
+            painter.setPen(QPen(color, 1, Qt.DashLine))
+            painter.drawLine(p1, p2)
 
         if self.first_obstruction and not self.is_visible_overall:
-            obstruction_dist = float(self.first_obstruction.get('distance', 0.0))
+            obstruction_dist = float(self.first_obstruction.get("distance", 0.0))
             obstruction_dist = max(0.0, min(max_dist, obstruction_dist))
-            frac = (obstruction_dist / max_dist) if max_dist > 0 else 0.0
-            obstruction_sight_elev = obs_elev + frac * (tgt_elev - obs_elev)
-            obstruct_screen = to_screen(obstruction_dist, obstruction_sight_elev)
 
-            painter.setPen(QPen(QColor(0, 100, 255, 150), 1, Qt.DashLine))
-            painter.drawLine(QPointF(*obs_screen), QPointF(*obstruct_screen))
-            painter.setPen(QPen(QColor(255, 0, 0, 150), 1, Qt.DashLine))
-            painter.drawLine(QPointF(*obstruct_screen), QPointF(*tgt_screen))
+            draw_sight_segment(0.0, obstruction_dist, QColor(0, 100, 255, 150))
+            draw_sight_segment(obstruction_dist, max_dist, QColor(255, 0, 0, 150))
 
-            painter.setBrush(QBrush(QColor(255, 0, 0)))
-            painter.setPen(QPen(Qt.white, 1))
-            painter.drawEllipse(QPointF(*obstruct_screen), 4, 4)
+            if view_start <= obstruction_dist <= view_end:
+                obstruct_screen = to_screen(obstruction_dist, sight_elev_at(obstruction_dist))
+                painter.setBrush(QBrush(QColor(255, 0, 0)))
+                painter.setPen(QPen(Qt.white, 1))
+                painter.drawEllipse(QPointF(*obstruct_screen), 4, 4)
         else:
-            painter.setPen(QPen(QColor(0, 100, 255, 150), 1, Qt.DashLine))
-            painter.drawLine(QPointF(*obs_screen), QPointF(*tgt_screen))
+            draw_sight_segment(0.0, max_dist, QColor(0, 100, 255, 150))
         
         # --- 7. Draw Start (S) and End (E) Markers ---
         painter.setFont(QFont("Arial", 9, QFont.Bold))
-        
+
         # Observer (Blue Circle with S)
-        painter.setBrush(QBrush(QColor(0, 100, 255)))
-        painter.setPen(QPen(Qt.white, 1))
-        painter.drawEllipse(QPointF(*obs_screen), 8, 8)
-        painter.setPen(Qt.white)
-        painter.drawText(int(obs_screen[0]) - 4, int(obs_screen[1]) + 4, "S")
-        
+        if view_start <= 0.0 <= view_end:
+            obs_screen = to_screen(0.0, obs_elev)
+            painter.setBrush(QBrush(QColor(0, 100, 255)))
+            painter.setPen(QPen(Qt.white, 1))
+            painter.drawEllipse(QPointF(*obs_screen), 8, 8)
+            painter.setPen(Qt.white)
+            painter.drawText(int(obs_screen[0]) - 4, int(obs_screen[1]) + 4, "S")
+
         # Target (Orange Circle with E)
-        painter.setBrush(QBrush(QColor(255, 140, 0)))
-        painter.setPen(QPen(Qt.white, 1))
-        painter.drawEllipse(QPointF(*tgt_screen), 8, 8)
-        painter.setPen(Qt.white)
-        painter.drawText(int(tgt_screen[0]) - 4, int(tgt_screen[1]) + 4, "E")
+        if view_start <= max_dist <= view_end:
+            tgt_screen = to_screen(max_dist, tgt_elev)
+            painter.setBrush(QBrush(QColor(255, 140, 0)))
+            painter.setPen(QPen(Qt.white, 1))
+            painter.drawEllipse(QPointF(*tgt_screen), 8, 8)
+            painter.setPen(Qt.white)
+            painter.drawText(int(tgt_screen[0]) - 4, int(tgt_screen[1]) + 4, "E")
         
         # --- 8. Draw Legend ---
-        legend_x = margin_left + 10
-        legend_y = margin_top + 10
+        legend_x = self.margin_left + 10
+        legend_y = self.margin_top + 10
         painter.setFont(QFont("Arial", 8))
         
         painter.setPen(pen_visible)
