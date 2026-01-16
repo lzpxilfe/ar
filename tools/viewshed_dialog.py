@@ -89,6 +89,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.iface.currentLayerChanged.connect(self._on_current_layer_changed)
         except Exception:
             pass
+        try:
+            self.iface.layerTreeView().clicked.connect(self._on_layer_tree_clicked)
+        except Exception:
+            pass
         
         # Mode radio buttons
         self.radioSinglePoint.toggled.connect(self.on_mode_changed)
@@ -720,6 +724,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.open_los_profile(layer_id)
         except Exception as e:
             log_message(f"Current layer handler error: {e}", level=Qgis.Warning)
+
+    def _on_layer_tree_clicked(self, _index):
+        try:
+            layer = self.iface.activeLayer()
+            if not layer:
+                return
+            layer_id = layer.id()
+            if layer_id in getattr(self, "_los_profile_data", {}):
+                self.open_los_profile(layer_id)
+        except Exception as e:
+            log_message(f"Layer tree handler error: {e}", level=Qgis.Warning)
 
     def get_context_point_and_crs(self):
         """Helper to get observer point(s) and their source CRS
