@@ -18,7 +18,7 @@ import math
 import shutil
 import processing
 import numpy as np
-from osgeo import gdal
+from osgeo import gdal, ogr
 from qgis.PyQt import uic, QtWidgets, QtCore
 from qgis.PyQt.QtCore import Qt, QVariant, QPointF
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QImage, QPolygonF
@@ -624,9 +624,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         elif is_reverse_mode:
             self.radioClickMap.setEnabled(True)
             self.groupObserver.setTitle("3. 대상물 위치 설정")
-            self.btnSelectPoint.setText("🖱️ 지도에서 대상물 위치 선택")
+            self.btnSelectPoint.setText("🖱️ 지도에서 대상물/영역 지정")
             if hasattr(self, 'lblLayerHint'):
-                self.lblLayerHint.setVisible(False)
+                self.lblLayerHint.setText(
+                    "팁: 점=1회 클릭 후 우클릭/Enter로 완료, 폴리곤=여러 점을 찍고 우클릭/Enter로 완료(3점 이상).\n"
+                    "기존 폴리곤 위를 클릭하면 해당 폴리곤이 자동 선택됩니다."
+                )
+                self.lblLayerHint.setVisible(True)
         
         else:
             self.radioClickMap.setEnabled(True)
@@ -841,13 +845,23 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.original_tool = self.canvas.mapTool()
 
         
-        # Use line drawing tool for Line Viewshed mode
-        if self.radioLineViewshed.isChecked():
+        # Use line drawing tool for Line Viewshed and Reverse Viewshed (polygon drawing)
+        if self.radioLineViewshed.isChecked() or self.radioReverseViewshed.isChecked():
             self.map_tool = ViewshedLineTool(self.canvas, self)
             self.canvas.setMapTool(self.map_tool)
-            self.iface.messageBar().pushMessage(
-                "선형 및 둘레 가시권", "지도에서 라인을 그리세요. 클릭으로 점 추가, 시작점 클릭 시 자동 닫힘(Snap), 우클릭으로 완료", level=0
-            )
+
+            if self.radioReverseViewshed.isChecked():
+                self.iface.messageBar().pushMessage(
+                    "역방향 가시권",
+                    "지도에서 대상 영역을 그리세요. 클릭으로 점 추가, 우클릭/Enter로 완료 (3점 이상이면 폴리곤). 1점만 찍으면 대상점으로 처리됩니다.",
+                    level=0,
+                )
+            else:
+                self.iface.messageBar().pushMessage(
+                    "선형 및 둘레 가시권",
+                    "지도에서 라인을 그리세요. 클릭으로 점 추가, 시작점 클릭 시 자동 닫힘(Snap), 우클릭으로 완료",
+                    level=0,
+                )
         else:
             self.map_tool = ViewshedPointTool(self.canvas, self)
             self.canvas.setMapTool(self.map_tool)
@@ -975,21 +989,58 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     # [v1.6.21] transform_to_dem_crs REMOVED - deprecated
     
     def set_line_from_tool(self, points, is_closed=False):
-        """Set a user-drawn line for line viewshed analysis"""
-        if not points: return
-        
-        # Store the drawn line points and closure state
+        """Handle a user-drawn line/polygon from the map tool."""
+        if not points:
+            return
+
+        # Reverse viewshed: treat drawn vertices as a closed polygon target.
+        if self.radioReverseViewshed.isChecked():
+            if len(points) < 3:
+                push_message(self.iface, "오류", "역방향 폴리곤은 최소 3개 점이 필요합니다.", level=2)
+                return
+
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+            ring = list(points)
+            if ring[0] != ring[-1]:
+                ring.append(ring[0])
+
+            geom = QgsGeometry.fromPolygonXY([ring])
+            if not geom or geom.isEmpty():
+                push_message(self.iface, "오류", "폴리곤 생성에 실패했습니다. 점을 다시 선택해주세요.", level=2)
+                return
+
+            self._reverse_target_geom = geom
+            self._reverse_target_crs = canvas_crs
+            self._reverse_target_layer_name = "사용자 정의 영역"
+            self._reverse_target_fid = None
+
+            # Show the polygon outline on map (selection marker)
+            self.point_marker.reset(QgsWkbTypes.LineGeometry)
+            for pt in ring:
+                self.point_marker.addPoint(pt)
+
+            # Store centroid as observer_point for downstream single-point fallback / UI state
+            try:
+                self.observer_point = geom.centroid().asPoint()
+            except Exception:
+                self.observer_point = points[0]
+
+            self.lblSelectedPoint.setText("선택된 폴리곤: 사용자 정의 영역")
+            self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
+            return
+
+        # Default: line viewshed path storage
         self.drawn_line_points = points
         self.is_line_closed = is_closed
         self.observer_point = points[0]
-        
+
         # [v1.5.85] Maintain vertex visibility on the map
         self.point_marker.reset(QgsWkbTypes.LineGeometry)
         for pt in points:
             self.point_marker.addPoint(pt)
         if is_closed:
             self.point_marker.addPoint(points[0])
-        
+
         self.lblSelectedPoint.setText(f"선택된 경로: {len(points)}개 정점 {'(폐곡선)' if is_closed else '(개곡선)'}")
         self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
     
@@ -1519,6 +1570,58 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
         return points
 
+    def _burn_nodata_for_geometries_in_raster(self, raster_path, geometries, nodata_value=-9999):
+        """Burn NoData value into a raster where geometries cover (to 'cut out' areas)."""
+        if not raster_path or not geometries:
+            return
+
+        ds = None
+        try:
+            ds = gdal.Open(raster_path, gdal.GA_Update)
+            if ds is None:
+                raise Exception("출력 래스터를 열 수 없습니다.")
+
+            band = ds.GetRasterBand(1)
+            try:
+                band.SetNoDataValue(float(nodata_value))
+            except Exception:
+                pass
+
+            ogr_geoms = []
+            for geom in geometries:
+                if not geom or geom.isEmpty():
+                    continue
+                try:
+                    ogr_geom = ogr.CreateGeometryFromWkt(geom.asWkt())
+                    if ogr_geom:
+                        ogr_geoms.append(ogr_geom)
+                except Exception:
+                    continue
+
+            if not ogr_geoms:
+                return
+
+            gdal.RasterizeGeometries(
+                ds,
+                [1],
+                ogr_geoms,
+                burn_values=[float(nodata_value)],
+                options=["ALL_TOUCHED=TRUE"],
+            )
+
+            try:
+                band.FlushCache()
+            except Exception:
+                pass
+            try:
+                ds.FlushCache()
+            except Exception:
+                pass
+        except Exception as e:
+            log_message(f"Raster mask error: {e}", level=Qgis.Warning)
+        finally:
+            ds = None
+
     def _run_union_viewshed_for_points(
         self,
         dem_layer,
@@ -1531,6 +1634,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         refraction_coeff,
         layer_name,
         marker_points_with_crs=None,
+        mask_geometries_dem=None,
     ):
         """Run a union (binary) viewshed for multiple observer points.
 
@@ -1709,6 +1813,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if not success or not os.path.exists(final_output):
                 raise Exception("역방향 가시권 결과 생성 실패 (Union)")
 
+            # Optional: Cut out polygon interior (NoData) so "outside visibility" is emphasized.
+            if mask_geometries_dem:
+                self._burn_nodata_for_geometries_in_raster(final_output, mask_geometries_dem, nodata_value=-9999)
+
             viewshed_layer = QgsRasterLayer(final_output, layer_name)
             if not viewshed_layer.isValid():
                 raise Exception("결과 레이어 로드 실패")
@@ -1802,6 +1910,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 refraction_coeff=refraction_coeff,
                 layer_name=f"역방향_가시권_테두리_{int(max_dist)}m",
                 marker_points_with_crs=marker,
+                mask_geometries_dem=[geom_dem],
             )
             return
 
@@ -1870,6 +1979,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     # Boundary mode (Union)
                     interval = self.spinLineInterval.value() if hasattr(self, "spinLineInterval") else 50
                     pts = []
+                    mask_geoms_dem = []
                     try:
                         transform = QgsCoordinateTransform(obs_layer.crs(), dem_layer.crs(), QgsProject.instance())
                     except Exception:
@@ -1882,6 +1992,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                                 g_dem.transform(transform)
                             except Exception:
                                 pass
+                        mask_geoms_dem.append(g_dem)
                         for pt in self._sample_polygon_boundary_points(g_dem, interval):
                             pts.append((pt, dem_layer.crs()))
 
@@ -1907,6 +2018,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         refraction_coeff=refraction_coeff,
                         layer_name=f"역방향_가시권_테두리_{int(max_dist)}m",
                         marker_points_with_crs=marker,
+                        mask_geometries_dem=mask_geoms_dem,
                     )
                     return
 
@@ -3356,6 +3468,22 @@ class ViewshedLineTool(QgsMapToolEmitPoint):
         
         res = self.canvas().snappingUtils().snapToMap(event.pos())
         point = res.point() if res.isValid() else self.toMapCoordinates(event.pos())
+
+        # Reverse viewshed: first click on an existing polygon selects it directly (no drawing needed).
+        if (
+            self.dialog is not None
+            and getattr(self.dialog, "radioReverseViewshed", None) is not None
+            and self.dialog.radioReverseViewshed.isChecked()
+            and not self.points
+        ):
+            try:
+                hit = self.dialog._identify_polygon_feature_at_canvas_point(point)
+            except Exception:
+                hit = None
+            if hit:
+                self.dialog.set_observer_point(point)
+                self.cleanup()
+                return
         
         # Check for snapping to start point (Close Loop)
         if len(self.points) >= 2:
@@ -3381,12 +3509,36 @@ class ViewshedLineTool(QgsMapToolEmitPoint):
             self.finish_line(close_line=False)
     
     def finish_line(self, close_line=False):
+        # Reverse viewshed: allow 1-point target or polygon (3+ points).
+        if (
+            self.dialog is not None
+            and getattr(self.dialog, "radioReverseViewshed", None) is not None
+            and self.dialog.radioReverseViewshed.isChecked()
+        ):
+            if len(self.points) == 1:
+                # Treat as a single target point (reverse viewshed point)
+                self.dialog.set_observer_point(self.points[0])
+                self.cleanup()
+                return
+            if len(self.points) >= 3:
+                self.dialog.set_line_from_tool(self.points, is_closed=True)
+                self.cleanup()
+                self.dialog.show()
+                return
+            self.dialog.iface.messageBar().pushMessage(
+                "알림",
+                "역방향 폴리곤은 최소 3개 점이 필요합니다 (또는 1개 점으로 대상점 선택).",
+                level=1,
+            )
+            return
+
         if len(self.points) >= 2:
             self.dialog.set_line_from_tool(self.points, is_closed=close_line)
             self.cleanup()
             self.dialog.show()
-        else:
-            self.dialog.iface.messageBar().pushMessage("알림", "최소 2개 점이 필요합니다", level=1)
+            return
+
+        self.dialog.iface.messageBar().pushMessage("알림", "최소 2개 점이 필요합니다", level=1)
     
     def cleanup(self):
         self.rubber_band.reset(QgsWkbTypes.LineGeometry)
