@@ -16,14 +16,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import os
-import tempfile
 import uuid
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsProject, QgsVectorLayer, QgsMapLayerProxyModel
-import processing
-from .utils import push_message
+from .utils import ProcessingCancelled, ProcessingRunner, get_archtoolkit_output_dir, push_message, warn_if_temp_output
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -185,23 +183,26 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Use temp file instead of memory layer
             run_id = uuid.uuid4().hex[:8]
-            temp_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_contour_{interval}m_{run_id}.gpkg')
+            output_dir = get_archtoolkit_output_dir("Contours")
+            output_path = os.path.join(output_dir, f"archtoolkit_contour_{interval}m_{run_id}.gpkg")
             
             # Run GDAL contour
-            result = processing.run("gdal:contour", {
-                'INPUT': layer.source(),
-                'BAND': 1,
-                'INTERVAL': interval,
-                'FIELD_NAME': 'ELEV',
-                'CREATE_3D': False,
-                'IGNORE_NODATA': True,
-                'NODATA': None,
-                'OUTPUT': temp_output
-            })
+            with ProcessingRunner(self.iface, "등고선 생성", "GDAL 등고선 처리 중...") as runner:
+                result = runner.run("gdal:contour", {
+                    'INPUT': layer.source(),
+                    'BAND': 1,
+                    'INTERVAL': interval,
+                    'FIELD_NAME': 'ELEV',
+                    'CREATE_3D': False,
+                    'IGNORE_NODATA': True,
+                    'NODATA': None,
+                    'OUTPUT': output_path
+                }, text="등고선 생성 중...")
             
             # Add result to map
-            if result and os.path.exists(temp_output):
-                output_layer = QgsVectorLayer(temp_output, f"등고선_{interval}m", "ogr")
+            if result and os.path.exists(output_path):
+                warn_if_temp_output(self.iface, output_path, what="등고선 결과")
+                output_layer = QgsVectorLayer(output_path, f"등고선_{interval}m", "ogr")
                 if output_layer.isValid():
                     QgsProject.instance().addMapLayer(output_layer)
                     self.iface.messageBar().pushMessage("완료", f"등고선 생성 완료 (간격: {interval}m)", level=0)
@@ -212,6 +213,10 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 self.iface.messageBar().pushMessage("오류", "등고선 생성에 실패했습니다.", level=2)
                 self.show()
+
+        except ProcessingCancelled:
+            self.iface.messageBar().pushMessage("취소", "등고선 생성이 취소되었습니다.", level=1)
+            self.show()
             
         except Exception as e:
             self.iface.messageBar().pushMessage("오류", f"처리 중 오류: {str(e)}", level=2)

@@ -35,7 +35,18 @@ from qgis.core import (
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator, QgsMapCanvasAnnotationItem
 from qgis.PyQt.QtGui import QTextDocument
 
-from .utils import cleanup_files, is_metric_crs, log_message, restore_ui_focus, push_message, transform_point
+from .utils import (
+    ProcessingCancelled,
+    ProcessingRunner,
+    cleanup_files,
+    get_archtoolkit_output_dir,
+    is_metric_crs,
+    log_message,
+    restore_ui_focus,
+    push_message,
+    transform_point,
+    warn_if_temp_output,
+)
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -87,12 +98,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # LOS profile reopen: selecting the Viscode layer can reopen its profile
         try:
             self.iface.currentLayerChanged.connect(self._on_current_layer_changed)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"LOS profile reopen connect failed (currentLayerChanged): {e}", level=Qgis.Warning)
         try:
             self.iface.layerTreeView().clicked.connect(self._on_layer_tree_clicked)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"LOS profile reopen connect failed (layerTreeView.clicked): {e}", level=Qgis.Warning)
         
         # Mode radio buttons
         self.radioSinglePoint.toggled.connect(self.on_mode_changed)
@@ -387,8 +398,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
             dlg.resize(640, 480)
             dlg.exec_()
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"Curvature/Refraction help dialog error: {e}", level=Qgis.Warning)
     
     def reset_selection(self):
         """Reset all manual point selections and markers"""
@@ -461,8 +472,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         for layer in layers:
             try:
                 QgsProject.instance().removeMapLayer(layer.id())
-            except Exception:
-                pass
+            except Exception as e:
+                log_message(f"Label layer cleanup error: {e}", level=Qgis.Warning)
         self.label_layer = None
 
                 
@@ -695,27 +706,29 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # 3. [v1.6.18] Clean up linked Observer Layer (red points layer)
             if lid in self.result_observer_layer_map:
-                obs_layer_id = self.result_observer_layer_map[lid]
-                try:
-                    QgsProject.instance().removeMapLayer(obs_layer_id)
-                except Exception:
-                    pass
-                del self.result_observer_layer_map[lid]
+                obs_layer_id = self.result_observer_layer_map.pop(lid, None)
+                if obs_layer_id:
+                    try:
+                        QgsProject.instance().removeMapLayer(obs_layer_id)
+                    except Exception as e:
+                        log_message(f"Observer layer cleanup error: {e}", level=Qgis.Warning)
 
             # 4. Clean up LOS profile payload/dialogs
-            if lid in getattr(self, "_los_profile_data", {}):
-                try:
-                    del self._los_profile_data[lid]
-                except Exception:
-                    pass
+            try:
+                self._los_profile_data.pop(lid, None)
+            except Exception as e:
+                log_message(f"LOS profile payload cleanup error: {e}", level=Qgis.Warning)
 
-            if lid in getattr(self, "_los_profile_dialogs", {}):
+            dlg = None
+            try:
+                dlg = self._los_profile_dialogs.pop(lid, None)
+            except Exception as e:
+                log_message(f"LOS profile dialog map cleanup error: {e}", level=Qgis.Warning)
+            if dlg:
                 try:
-                    dlg = self._los_profile_dialogs.pop(lid, None)
-                    if dlg:
-                        dlg.close()
-                except Exception:
-                    pass
+                    dlg.close()
+                except Exception as e:
+                    log_message(f"LOS profile dialog close error: {e}", level=Qgis.Warning)
         
         if self.last_result_layer_id in layer_ids:
             self.reset_selection()
@@ -1225,8 +1238,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.create_observer_layer("가시권_관측점", points_info)
         
         run_id = str(uuid.uuid4())[:12]
+        output_dir = get_archtoolkit_output_dir("Viewshed")
         raw_output = os.path.join(tempfile.gettempdir(), f'archt_vs_raw_{run_id}.tif')
-        final_output = os.path.join(tempfile.gettempdir(), f'archt_vs_final_{run_id}.tif')
+        final_output = os.path.join(output_dir, f'archt_vs_final_{run_id}.tif')
         
         # Transform point to DEM CRS
         point_dem = self.transform_point(point, src_crs, dem_layer.crs())
@@ -1246,33 +1260,34 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         }
         
         try:
-            processing.run("gdal:viewshed", params)
-            
-            # Circular Masking: Clip raw output by a circular buffer
-            if os.path.exists(raw_output):
-                # Create a temporary memory layer for the circular mask
-                mask_layer = QgsVectorLayer("Polygon?crs=" + dem_layer.crs().authid(), "temp_mask", "memory")
-                pr = mask_layer.dataProvider()
-                circle_feat = QgsFeature()
-                # Create extremely detailed circle buffer for smooth edges
-                circle_feat.setGeometry(QgsGeometry.fromPointXY(point_dem).buffer(max_dist, 128))
-                pr.addFeatures([circle_feat])
-                
-                # Clip using universal algorithm
-                # Force Float32 (6) and set NoData to -9999 to ensure absolute transparency
-                processing.run("gdal:cliprasterbymasklayer", {
-                    'INPUT': raw_output,
-                    'MASK': mask_layer,
-                    'NODATA': -9999,
-                    'DATA_TYPE': 6, # Float32
-                    'ALPHA_BAND': False,
-                    'CROP_TO_CUTLINE': True,
-                    'KEEP_RESOLUTION': True,
-                    'OUTPUT': final_output
-                })
-                
-                if not os.path.exists(final_output):
-                    shutil.copy(raw_output, final_output)
+            with ProcessingRunner(self.iface, "가시권 분석", "처리 중...") as runner:
+                runner.run("gdal:viewshed", params, text="가시권 계산 중...")
+             
+                # Circular Masking: Clip raw output by a circular buffer
+                if os.path.exists(raw_output):
+                    # Create a temporary memory layer for the circular mask
+                    mask_layer = QgsVectorLayer("Polygon?crs=" + dem_layer.crs().authid(), "temp_mask", "memory")
+                    pr = mask_layer.dataProvider()
+                    circle_feat = QgsFeature()
+                    # Create extremely detailed circle buffer for smooth edges
+                    circle_feat.setGeometry(QgsGeometry.fromPointXY(point_dem).buffer(max_dist, 128))
+                    pr.addFeatures([circle_feat])
+
+                    # Clip using universal algorithm
+                    # Force Float32 (6) and set NoData to -9999 to ensure absolute transparency
+                    runner.run("gdal:cliprasterbymasklayer", {
+                        'INPUT': raw_output,
+                        'MASK': mask_layer,
+                        'NODATA': -9999,
+                        'DATA_TYPE': 6, # Float32
+                        'ALPHA_BAND': False,
+                        'CROP_TO_CUTLINE': True,
+                        'KEEP_RESOLUTION': True,
+                        'OUTPUT': final_output
+                    }, text="원형 마스킹 중...")
+
+                    if not os.path.exists(final_output):
+                        shutil.copy(raw_output, final_output)
             
             if os.path.exists(final_output):
                 use_higuchi = self.chkHiguchi.isChecked()
@@ -1281,7 +1296,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 raster_path = final_output
                 if use_higuchi:
                     layer_name = f"가시권_히구치_{int(max_dist)}m"
-                    higuchi_output = os.path.join(tempfile.gettempdir(), f'archt_vs_higuchi_{run_id}.tif')
+                    higuchi_output = os.path.join(output_dir, f'archt_vs_higuchi_{run_id}.tif')
                     self._create_higuchi_viewshed_raster(
                         final_output, higuchi_output, point, src_crs, dem_layer
                     )
@@ -1298,6 +1313,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     else:
                         self.apply_viewshed_style(viewshed_layer)
                     
+                    warn_if_temp_output(self.iface, raster_path, what="가시권 결과")
                     QgsProject.instance().addMapLayers([viewshed_layer])
                     if use_higuchi:
                         # Add rings after raster so they draw on top.
@@ -1310,6 +1326,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     self.accept()
                 else:
                     raise Exception("결과 레이어 로드 실패")
+        except ProcessingCancelled:
+            push_message(self.iface, "취소", "가시권 분석이 취소되었습니다.", level=1)
+            restore_ui_focus(self)
+
         except Exception as e:
             push_message(self.iface, "오류", f"분석 중 오류: {str(e)}", level=2)
             restore_ui_focus(self)
@@ -1642,8 +1662,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 label_node = root.findLayer(label_layers[0].id())
                 if label_node and label_node.parent() == root:
                     insert_index = 1  # keep labels on top
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"LOS group insert position check failed: {e}", level=Qgis.Warning)
 
         parent_group = root.findGroup(los_root_group_name)
         if parent_group is None:
@@ -1660,8 +1680,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     root.insertChildNode(insert_index, clone)
                     root.removeChildNode(parent_group)
                     parent_group = clone
-            except Exception:
-                pass
+            except Exception as e:
+                log_message(f"LOS group move-to-top failed: {e}", level=Qgis.Warning)
 
         run_id = str(uuid.uuid4())[:8]
         group_name = f"가시선_{int(total_dist)}m_{run_id}"
@@ -1692,8 +1712,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
         try:
             layer.selectionChanged.connect(lambda *_args, lid=layer.id(): self._on_los_layer_selection_changed(lid))
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"LOS viscode selectionChanged hook failed: {e}", level=Qgis.Warning)
 
         # Ensure label layer is on top (if present from other analyses)
         self.update_layer_order()
@@ -1811,7 +1831,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             log_message(f"Profiler error: {e}", level=Qgis.Warning)
     
-    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info, union_mode=False):
+    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info, union_mode=False, cancel_check=None):
         """Highly optimized cumulative viewshed merging with unified grid alignment.
         """
         try:
@@ -1836,6 +1856,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # 3. Process each viewshed
             for pt_idx, vs_file in viewshed_files:
+                if cancel_check and cancel_check():
+                    return False
                 if not os.path.exists(vs_file): continue
                 vs_ds = gdal.Open(vs_file, gdal.GA_ReadOnly)
                 if not vs_ds: continue
@@ -1945,8 +1967,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 # [v1.6.02] Auto-hide labels to reduce clutter
                 try:
                     obs_layer.setLabelsEnabled(False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_message(f"Observer layer label disable failed: {e}", level=Qgis.Warning)
                 
                 # Use selection if exists
                 selected_features = obs_layer.selectedFeatures()
@@ -2038,6 +2060,16 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.show()
         QtWidgets.QApplication.processEvents() # Ensure visibility
+
+        output_dir = get_archtoolkit_output_dir("Viewshed")
+
+        # Allow Processing algorithms to honor cancel requests from the progress dialog.
+        from qgis.core import QgsProcessingFeedback
+        feedback = QgsProcessingFeedback()
+        try:
+            progress.canceled.connect(feedback.cancel)
+        except Exception as e:
+            log_message(f"Progress cancel hook failed: {e}", level=Qgis.Warning)
         # [v1.5.65] Smart Analysis Extent Optimization
         total_obs_ext = QgsRectangle()
         total_obs_ext.setMinimal()
@@ -2090,14 +2122,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             output_raw = os.path.join(tempfile.gettempdir(), f'archt_vs_raw_{i}_{uuid.uuid4().hex[:8]}.tif')
             pt_dem = self.transform_point(point, p_crs, dem_layer.crs())
-             
+              
             try:
                 processing.run("gdal:viewshed", {
                     'INPUT': dem_layer.source(), 'BAND': 1, 'OBSERVER': f"{pt_dem.x()},{pt_dem.y()}",
                     'OBSERVER_HEIGHT': obs_height, 'TARGET_HEIGHT': tgt_height, 'MAX_DISTANCE': max_dist,
                     'EXTRA': extra, 'OUTPUT': output_raw
-                })
-                
+                }, feedback=feedback)
+
+                if feedback.isCanceled() or progress.wasCanceled():
+                    break
+                 
                 if os.path.exists(output_raw):
                     temp_outputs.append(output_raw)
                     full_vs = os.path.join(tempfile.gettempdir(), f'archt_fullvs_{i}_{uuid.uuid4().hex[:8]}.tif')
@@ -2108,22 +2143,34 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                             'TARGET_EXTENT': target_rect, 
                             'TARGET_EXTENT_CRS': dem_layer.crs().authid(),
                             'NODATA': -9999, 'TARGET_RESOLUTION': res, 'RESAMPLING': 0, 'DATA_TYPE': 5, 'OUTPUT': full_vs
-                        })
+                        }, feedback=feedback)
+
+                        if feedback.isCanceled() or progress.wasCanceled():
+                            break
                         if os.path.exists(full_vs):
                             temp_outputs.append(full_vs)
                             viewshed_results.append((i, full_vs))
                             try:
                                 os.remove(output_raw)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                log_message(f"Intermediate raw viewshed cleanup failed: {e}", level=Qgis.Warning)
                     except Exception as e:
+                        if feedback.isCanceled() or progress.wasCanceled():
+                            break
                         log_message(f"warpreproject failed for viewshed #{i}: {e}", level=Qgis.Warning)
             except Exception as e:
+                if feedback.isCanceled() or progress.wasCanceled():
+                    break
                 log_message(f"viewshed failed for point #{i}: {e}", level=Qgis.Warning)
                 continue
         
         progress.setValue(len(points))
-        
+
+        if progress.wasCanceled() or feedback.isCanceled():
+            cleanup_files(temp_outputs)
+            self.show()
+            return
+         
         if not viewshed_results:
             self.iface.messageBar().pushMessage("오류", "유효한 가시권 분석 결과를 생성하지 못했습니다. 보간 또는 범위 설정을 확인하세요.", level=2)
             self.show()
@@ -2131,7 +2178,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Combine all viewsheds by summing (cumulative viewshed)
         # Using a safer approach with processing.run("gdal:merge")
-        final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{uuid.uuid4().hex[:8]}.tif')
+        final_output = os.path.join(output_dir, f'archtoolkit_viewshed_cumulative_{uuid.uuid4().hex[:8]}.tif')
         
         try:
             # [v1.5.68] Optimized Cumulative Viewshed Merge using NumPy
@@ -2155,7 +2202,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 max_dist=max_dist,
                 is_count_mode=False,
                 grid_info=grid_info,
-                union_mode=is_union_mode
+                union_mode=is_union_mode,
+                cancel_check=lambda: progress.wasCanceled() or feedback.isCanceled(),
             )
             
             if not success or not os.path.exists(final_output):
@@ -2181,6 +2229,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 # This ensures Point 1, 2, 3... are clearly visible and match the legend V(1,2).
                 observer_layer = self.create_observer_layer("누적가시권_관측점", points)
                 
+                warn_if_temp_output(self.iface, final_output, what="누적 가시권 결과")
                 QgsProject.instance().addMapLayer(viewshed_layer)
                 self.last_result_layer_id = viewshed_layer.id()
                 
@@ -2602,7 +2651,6 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         """
         result_marker = QgsRubberBand(self.canvas, QgsWkbTypes.PointGeometry)
         result_marker.setColor(QColor(255, 0, 0, 200)) # Semi-transparent red
-        # ... (rest of rubberband setup is same, skipping lines for brevity if possible, but replace needs context)
         result_marker.setWidth(2)
         result_marker.setIconSize(4) # Small dots
         result_marker.setIcon(QgsRubberBand.ICON_CIRCLE)
@@ -3341,8 +3389,8 @@ class ViewshedProfilerDialog(QDialog):
         # Sync map cursor -> profile cursor
         try:
             self.canvas.xyCoordinates.connect(self._on_canvas_xy)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"Profiler canvas.xyCoordinates connect failed: {e}", level=Qgis.Warning)
         
         # Footer buttons
         btn_layout = QHBoxLayout()
@@ -3430,8 +3478,8 @@ class ViewshedProfilerDialog(QDialog):
     def closeEvent(self, event):
         try:
             self.canvas.xyCoordinates.disconnect(self._on_canvas_xy)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message(f"Profiler canvas.xyCoordinates disconnect failed: {e}", level=Qgis.Warning)
         self._set_map_marker(None)
         super().closeEvent(event)
 

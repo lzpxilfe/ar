@@ -30,8 +30,15 @@ from qgis.core import (
     QgsProject, QgsRasterLayer, QgsMapLayerProxyModel,
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
-import processing
-from .utils import restore_ui_focus, push_message, cleanup_files
+from .utils import (
+    ProcessingCancelled,
+    ProcessingRunner,
+    cleanup_files,
+    get_archtoolkit_output_dir,
+    push_message,
+    restore_ui_focus,
+    warn_if_temp_output,
+)
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
 # No external plugins or libraries (like numpy, matplotlib) are required.
@@ -255,6 +262,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             dem_source = dem_layer.source()
             results = []
             run_id = uuid.uuid4().hex[:8]
+            output_dir = get_archtoolkit_output_dir("TerrainAnalysis")
             
             # Get user parameters
             tpi_radius = self.spinTPIRadius.value()
@@ -263,66 +271,89 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             tpi_low = self.spinTPILow.value()
             tpi_high = self.spinTPIHigh.value()
             tri_max = self.spinTRIMax.value()
-            
-            # Slope
-            if self.chkSlope.isChecked():
-                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_slope_{run_id}.tif')
-                processing.run("gdal:slope", {
-                    'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': output
-                })
-                cls_key = self.get_selected_classification()
-                cls_info = self.SLOPE_CLASSIFICATIONS[cls_key]
-                layer = QgsRasterLayer(output, f"경사도_{cls_info['name']}")
-                if layer.isValid():
-                    QgsProject.instance().addMapLayer(layer)
-                    self.apply_style(layer, cls_info['classes'], 90)
-                    results.append("경사도")
-            
-            # Aspect
-            if self.chkAspect.isChecked():
-                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_aspect_{run_id}.tif')
-                processing.run("gdal:aspect", {
-                    'INPUT': dem_source, 'BAND': 1, 'TRIG_ANGLE': False, 'ZERO_FLAT': True, 'OUTPUT': output
-                })
-                layer = QgsRasterLayer(output, "사면방향_8방위")
-                if layer.isValid():
-                    QgsProject.instance().addMapLayer(layer)
-                    self.apply_style(layer, self.ASPECT_CLASSES, 360)
-                    results.append("사면방향")
-            
-            # TRI with user-defined classification threshold
-            if self.chkTRI.isChecked():
-                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_tri_{run_id}.tif')
-                processing.run("gdal:triterrainruggednessindex", {
-                    'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
-                })
-                tri_classes = self.get_tri_classes(tri_max)
-                layer_name = f"TRI Riley 1999 (험준기준:{tri_max})"
-                layer = QgsRasterLayer(output, layer_name)
-                if layer.isValid():
-                    QgsProject.instance().addMapLayer(layer)
-                    self.apply_style(layer, tri_classes, tri_max * 2.5)
-                    results.append("TRI")
-            
-            # TPI with user parameters (radius and threshold)
-            if self.chkTPI.isChecked():
-                self.run_tpi_analysis(dem_layer, dem_source, tpi_radius, tpi_threshold, results, run_id)
-            
-            # Roughness
-            if self.chkRoughness.isChecked():
-                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_roughness_{run_id}.tif')
-                processing.run("gdal:roughness", {
-                    'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
-                })
-                layer = QgsRasterLayer(output, "Roughness Wilson 2000")
-                if layer.isValid():
-                    QgsProject.instance().addMapLayer(layer)
-                    self.apply_style(layer, self.ROUGHNESS_CLASSES, 20)
-                    results.append("Roughness")
-            
-            # Slope Position - Weiss (2001) 6-class with user thresholds
-            if self.chkSlopePosition.isChecked():
-                self.run_slope_position_analysis(dem_source, slope_threshold, tpi_low, tpi_high, results, run_id)
+
+            with ProcessingRunner(self.iface, "지형 분석", "처리 중...") as runner:
+                # Slope
+                if self.chkSlope.isChecked():
+                    output = os.path.join(output_dir, f'archtoolkit_slope_{run_id}.tif')
+                    runner.run("gdal:slope", {
+                        'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': output
+                    }, text="경사도 계산 중...")
+                    cls_key = self.get_selected_classification()
+                    cls_info = self.SLOPE_CLASSIFICATIONS[cls_key]
+                    layer = QgsRasterLayer(output, f"경사도_{cls_info['name']}")
+                    if layer.isValid():
+                        warn_if_temp_output(self.iface, output, what="지형 분석 결과")
+                        QgsProject.instance().addMapLayer(layer)
+                        self.apply_style(layer, cls_info['classes'], 90)
+                        results.append("경사도")
+
+                # Aspect
+                if self.chkAspect.isChecked():
+                    output = os.path.join(output_dir, f'archtoolkit_aspect_{run_id}.tif')
+                    runner.run("gdal:aspect", {
+                        'INPUT': dem_source, 'BAND': 1, 'TRIG_ANGLE': False, 'ZERO_FLAT': True, 'OUTPUT': output
+                    }, text="사면방향 계산 중...")
+                    layer = QgsRasterLayer(output, "사면방향_8방위")
+                    if layer.isValid():
+                        warn_if_temp_output(self.iface, output, what="지형 분석 결과")
+                        QgsProject.instance().addMapLayer(layer)
+                        self.apply_style(layer, self.ASPECT_CLASSES, 360)
+                        results.append("사면방향")
+
+                # TRI with user-defined classification threshold
+                if self.chkTRI.isChecked():
+                    output = os.path.join(output_dir, f'archtoolkit_tri_{run_id}.tif')
+                    runner.run("gdal:triterrainruggednessindex", {
+                        'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
+                    }, text="TRI 계산 중...")
+                    tri_classes = self.get_tri_classes(tri_max)
+                    layer_name = f"TRI Riley 1999 (험준기준:{tri_max})"
+                    layer = QgsRasterLayer(output, layer_name)
+                    if layer.isValid():
+                        warn_if_temp_output(self.iface, output, what="지형 분석 결과")
+                        QgsProject.instance().addMapLayer(layer)
+                        self.apply_style(layer, tri_classes, tri_max * 2.5)
+                        results.append("TRI")
+
+                # TPI with user parameters (radius and threshold)
+                if self.chkTPI.isChecked():
+                    self.run_tpi_analysis(
+                        dem_layer,
+                        dem_source,
+                        tpi_radius,
+                        tpi_threshold,
+                        results,
+                        run_id,
+                        runner=runner,
+                        output_dir=output_dir,
+                    )
+
+                # Roughness
+                if self.chkRoughness.isChecked():
+                    output = os.path.join(output_dir, f'archtoolkit_roughness_{run_id}.tif')
+                    runner.run("gdal:roughness", {
+                        'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
+                    }, text="Roughness 계산 중...")
+                    layer = QgsRasterLayer(output, "Roughness Wilson 2000")
+                    if layer.isValid():
+                        warn_if_temp_output(self.iface, output, what="지형 분석 결과")
+                        QgsProject.instance().addMapLayer(layer)
+                        self.apply_style(layer, self.ROUGHNESS_CLASSES, 20)
+                        results.append("Roughness")
+
+                # Slope Position - Weiss (2001) 6-class with user thresholds
+                if self.chkSlopePosition.isChecked():
+                    self.run_slope_position_analysis(
+                        dem_source,
+                        slope_threshold,
+                        tpi_low,
+                        tpi_high,
+                        results,
+                        run_id,
+                        runner=runner,
+                        output_dir=output_dir,
+                    )
             
             if results:
                 push_message(self.iface, "완료", f"분석 완료: {', '.join(results)}", level=0)
@@ -332,6 +363,10 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 push_message(self.iface, "오류", "분석 결과가 없습니다.", level=2)
                 restore_ui_focus(self)
                 
+        except ProcessingCancelled:
+            push_message(self.iface, "취소", "지형 분석이 취소되었습니다.", level=1)
+            restore_ui_focus(self)
+
         except Exception as e:
             push_message(self.iface, "오류", f"처리 중 오류: {str(e)}", level=2)
             restore_ui_focus(self)
@@ -339,7 +374,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             if not success:
                 restore_ui_focus(self)
     
-    def run_tpi_analysis(self, dem_layer, dem_source, radius, threshold, results, run_id):
+    def run_tpi_analysis(self, dem_layer, dem_source, radius, threshold, results, run_id, runner=None, output_dir=None):
         """Run TPI analysis with user-specified radius and classification threshold
         
         TPI = Elevation - Mean of Neighborhood
@@ -352,17 +387,24 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         """
         downsampled = None
         mean_approx = None
+        owns_runner = False
         try:
-            output = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_{run_id}.tif')
+            if output_dir is None:
+                output_dir = get_archtoolkit_output_dir("TerrainAnalysis")
+            output = os.path.join(output_dir, f'archtoolkit_tpi_{run_id}.tif')
+
+            if runner is None:
+                runner = ProcessingRunner(self.iface, "TPI 분석", "처리 중...")
+                owns_runner = True
             
             # Calculate window size (must be odd number: 3, 5, 7, ...)
             window_size = radius * 2 + 1 if radius > 1 else 3
             
             if radius <= 1:
                 # Use standard GDAL TPI for radius=1 (3x3 window)
-                processing.run("gdal:tpitopographicpositionindex", {
+                runner.run("gdal:tpitopographicpositionindex", {
                     'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
-                })
+                }, text="TPI 계산 중...")
             else:
                 # Pure GDAL approach for custom radius:
                 
@@ -373,7 +415,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 
                 # Step 1: Downsample (average resampling = approximate focal mean)
                 downsampled = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_down_{run_id}.tif')
-                processing.run("gdal:warpreproject", {
+                runner.run("gdal:warpreproject", {
                     'INPUT': dem_source,
                     'SOURCE_CRS': None,
                     'TARGET_CRS': None,
@@ -387,14 +429,14 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                     'MULTITHREADING': False,
                     'EXTRA': '',
                     'OUTPUT': downsampled
-                })
+                }, text="TPI (다운샘플) 처리 중...")
                 
                 # Step 2: Resample back to original resolution (neighborhood mean approximation)
                 mean_approx = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_mean_{run_id}.tif')
                 extent = dem_layer.extent()
                 extent_str = f"{extent.xMinimum()},{extent.xMaximum()},{extent.yMinimum()},{extent.yMaximum()}"
                 
-                processing.run("gdal:warpreproject", {
+                runner.run("gdal:warpreproject", {
                     'INPUT': downsampled,
                     'SOURCE_CRS': None,
                     'TARGET_CRS': None,
@@ -408,22 +450,22 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                     'MULTITHREADING': False,
                     'EXTRA': '',
                     'OUTPUT': mean_approx
-                })
+                }, text="TPI (재표본화) 처리 중...")
                 
                 # Step 3: Calculate TPI = DEM - Mean
                 if os.path.exists(mean_approx):
-                    processing.run("gdal:rastercalculator", {
+                    runner.run("gdal:rastercalculator", {
                         'INPUT_A': dem_source, 'BAND_A': 1,
                         'INPUT_B': mean_approx, 'BAND_B': 1,
                         'FORMULA': 'A - B',
                         'OUTPUT': output,
                         'RTYPE': 5  # Float32
-                    })
+                    }, text="TPI 계산 중...")
                 else:
                     # Fallback to standard GDAL TPI
-                    processing.run("gdal:tpitopographicpositionindex", {
+                    runner.run("gdal:tpitopographicpositionindex", {
                         'INPUT': dem_source, 'BAND': 1, 'OUTPUT': output
-                    })
+                    }, text="TPI 계산 중...")
                     window_size = 3
             
             # Apply classification with user threshold
@@ -432,16 +474,21 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             layer = QgsRasterLayer(output, layer_name)
             
             if layer.isValid():
+                warn_if_temp_output(self.iface, output, what="지형 분석 결과")
                 QgsProject.instance().addMapLayer(layer)
                 self.apply_style(layer, tpi_classes, 10)
                 results.append("TPI")
             
+        except ProcessingCancelled:
+            raise
         except Exception as e:
             self.iface.messageBar().pushMessage("경고", f"TPI 분석 오류: {str(e)}", level=1)
         finally:
             cleanup_files([downsampled, mean_approx])
+            if owns_runner and runner:
+                runner.close()
     
-    def run_slope_position_analysis(self, dem_source, slope_thresh, tpi_low, tpi_high, results, run_id):
+    def run_slope_position_analysis(self, dem_source, slope_thresh, tpi_low, tpi_high, results, run_id, runner=None, output_dir=None):
         """Run Weiss (2001) 6-class Landform Classification using GDAL with user thresholds
         
         Parameters:
@@ -457,18 +504,27 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         5. 능선 평탄부 (Upland Flat): tpi_high/2 < TPI <= tpi_high
         6. 급경사 능선 (Steep Ridge): TPI > tpi_high
         """
+        tpi_path = None
+        slope_path = None
+        owns_runner = False
         try:
+            if output_dir is None:
+                output_dir = get_archtoolkit_output_dir("TerrainAnalysis")
+            if runner is None:
+                runner = ProcessingRunner(self.iface, "지형분류 분석", "처리 중...")
+                owns_runner = True
+
             # 1. Generate TPI
             tpi_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_tpi_temp_{run_id}.tif')
-            processing.run("gdal:tpitopographicpositionindex", {
+            runner.run("gdal:tpitopographicpositionindex", {
                 'INPUT': dem_source, 'BAND': 1, 'OUTPUT': tpi_path
-            })
+            }, text="TPI 생성 중...")
             
             # 2. Generate Slope
             slope_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_slope_temp_{run_id}.tif')
-            processing.run("gdal:slope", {
+            runner.run("gdal:slope", {
                 'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': slope_path
-            })
+            }, text="경사도 생성 중...")
             
             # 3. Check if files exist
             if not os.path.exists(tpi_path) or not os.path.exists(slope_path):
@@ -495,7 +551,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                     )
             
             # 4. Use gdal_calc.py for classification with thresholds
-            output_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_landform_{run_id}.tif')
+            output_path = os.path.join(output_dir, f'archtoolkit_landform_{run_id}.tif')
             
             # Calculate intermediate thresholds (Weiss 2001: 0.5 SD boundaries)
             tpi_mid_low = tpi_low / 2   # -0.5 SD
@@ -512,18 +568,19 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 f"(A>{tpi_high})*6"
             )
             
-            result = processing.run("gdal:rastercalculator", {
+            result = runner.run("gdal:rastercalculator", {
                 'INPUT_A': tpi_path, 'BAND_A': 1,
                 'INPUT_B': slope_path, 'BAND_B': 1,
                 'FORMULA': calc_expr,
                 'OUTPUT': output_path,
                 'RTYPE': 1  # Int16
-            })
+            }, text="지형 분류 계산 중...")
             
             if result and os.path.exists(output_path):
                 layer_name = f"지형분류 (경사:{slope_thresh}°, TPI:{tpi_low:.1f}~{tpi_high:.1f})"
                 layer = QgsRasterLayer(output_path, layer_name)
                 if layer.isValid():
+                    warn_if_temp_output(self.iface, output_path, what="지형 분석 결과")
                     QgsProject.instance().addMapLayer(layer)
                     self.apply_style(layer, self.SLOPE_POSITION_CLASSES, 6)
                     results.append("지형분류")
@@ -532,7 +589,11 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 self.iface.messageBar().pushMessage("경고", "지형분류 래스터 생성 실패", level=1)
                 
+        except ProcessingCancelled:
+            raise
         except Exception as e:
             self.iface.messageBar().pushMessage("경고", f"지형분류 분석 오류: {str(e)}", level=1)
         finally:
             cleanup_files([tpi_path, slope_path])
+            if owns_runner and runner:
+                runner.close()

@@ -23,9 +23,8 @@ from qgis.PyQt.QtWidgets import QTableWidgetItem, QCheckBox, QWidget, QHBoxLayou
 from qgis.PyQt.QtCore import Qt, QSize
 from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
-import processing
 import tempfile
-from .utils import restore_ui_focus, push_message
+from .utils import ProcessingCancelled, ProcessingRunner, restore_ui_focus, push_message
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -328,69 +327,67 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         push_message(self.iface, "처리 중", f"{len(selected_layers)}개 레이어 병합 중...", level=0)
         self.hide()
         QtWidgets.QApplication.processEvents()
-        
+
+        temp_merged = None
         try:
-            temp_merged = None
-            
-            # Step 1: Merge all selected layers into one temp file
-            if len(selected_layers) > 1:
-                temp_merged = os.path.join(tempfile.gettempdir(), f'archtoolkit_merged_{uuid.uuid4().hex[:8]}.gpkg')
-                processing.run("native:mergevectorlayers", {
-                    'LAYERS': selected_layers,
-                    'CRS': selected_layers[0].crs(),
-                    'OUTPUT': temp_merged
-                })
-                merged_layer = QgsVectorLayer(temp_merged, "merged", "ogr")
-            else:
-                merged_layer = selected_layers[0]
-            
-            if not merged_layer or not merged_layer.isValid():
-                push_message(self.iface, "오류", "레이어 병합에 실패했습니다.", level=2)
-                restore_ui_focus(self)
-                return
-            
-            # Step 2: Apply query filter
-            if query and merged_layer.fields().indexFromName('Layer') >= 0:
-                merged_layer.setSubsetString(query)
-            
-            # Step 3: Find Z field
-            z_field_idx = -1
-            for fn in ['Z_COORD', 'z_coord', 'Elevation', 'ELEVATION', 'z_first']:
-                idx = merged_layer.fields().indexFromName(fn)
-                if idx >= 0:
-                    z_field_idx = idx
-                    break
-            
-            geom_type = merged_layer.geometryType()
-            interp_type = 0 if geom_type == 0 else 1
-            
-            # Use source() for file-based layer
-            source_path = merged_layer.source()
-            
-            if z_field_idx >= 0:
-                interp_data = f'{source_path}::~::0::~::{z_field_idx}::~::{interp_type}'
-            else:
-                interp_data = f'{source_path}::~::1::~::0::~::{interp_type}'
-            
-            combined_extent = merged_layer.extent()
+            with ProcessingRunner(self.iface, "DEM 생성", "처리 중...") as runner:
+                # Step 1: Merge all selected layers into one temp file
+                if len(selected_layers) > 1:
+                    temp_merged = os.path.join(tempfile.gettempdir(), f'archtoolkit_merged_{uuid.uuid4().hex[:8]}.gpkg')
+                    runner.run("native:mergevectorlayers", {
+                        'LAYERS': selected_layers,
+                        'CRS': selected_layers[0].crs(),
+                        'OUTPUT': temp_merged
+                    }, text="레이어 병합 중...")
+                    merged_layer = QgsVectorLayer(temp_merged, "merged", "ogr")
+                else:
+                    merged_layer = selected_layers[0]
 
+                if not merged_layer or not merged_layer.isValid():
+                    push_message(self.iface, "오류", "레이어 병합에 실패했습니다.", level=2)
+                    restore_ui_focus(self)
+                    return
 
-            
-            params = {
-                'INTERPOLATION_DATA': interp_data,
-                'EXTENT': combined_extent,
-                'PIXEL_SIZE': pixel_size,
-                'OUTPUT': output_path
-            }
-            if method_param is not None:
-                params['METHOD'] = method_param
-            
-            push_message(self.iface, "처리 중", "TIN 보간 실행 중...", level=0)
-            QtWidgets.QApplication.processEvents()
-            
-            # Step 4: Run TIN interpolation
-            result = processing.run(algorithm, params)
-            
+                # Step 2: Apply query filter
+                if query and merged_layer.fields().indexFromName('Layer') >= 0:
+                    merged_layer.setSubsetString(query)
+
+                # Step 3: Find Z field
+                z_field_idx = -1
+                for fn in ['Z_COORD', 'z_coord', 'Elevation', 'ELEVATION', 'z_first']:
+                    idx = merged_layer.fields().indexFromName(fn)
+                    if idx >= 0:
+                        z_field_idx = idx
+                        break
+
+                geom_type = merged_layer.geometryType()
+                interp_type = 0 if geom_type == 0 else 1
+
+                # Use source() for file-based layer
+                source_path = merged_layer.source()
+
+                if z_field_idx >= 0:
+                    interp_data = f'{source_path}::~::0::~::{z_field_idx}::~::{interp_type}'
+                else:
+                    interp_data = f'{source_path}::~::1::~::0::~::{interp_type}'
+
+                combined_extent = merged_layer.extent()
+
+                params = {
+                    'INTERPOLATION_DATA': interp_data,
+                    'EXTENT': combined_extent,
+                    'PIXEL_SIZE': pixel_size,
+                    'OUTPUT': output_path
+                }
+                if method_param is not None:
+                    params['METHOD'] = method_param
+
+                push_message(self.iface, "처리 중", "보간 실행 중...", level=0)
+                QtWidgets.QApplication.processEvents()
+
+                # Step 4: Run interpolation
+                result = runner.run(algorithm, params, text="보간 실행 중...")
+
             # Add result to map
             if result and os.path.exists(output_path):
                 self.iface.addRasterLayer(output_path, "생성된 DEM")
@@ -399,10 +396,15 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 push_message(self.iface, "오류", "DEM이 생성되지 않았습니다.", level=2)
                 restore_ui_focus(self)
-            
+
+        except ProcessingCancelled:
+            push_message(self.iface, "취소", "DEM 생성이 취소되었습니다.", level=1)
+            restore_ui_focus(self)
+
         except Exception as e:
             push_message(self.iface, "오류", f"처리 중 오류: {str(e)}", level=2)
             restore_ui_focus(self)
+
         finally:
             if temp_merged and os.path.exists(temp_merged):
                 from .utils import cleanup_files
