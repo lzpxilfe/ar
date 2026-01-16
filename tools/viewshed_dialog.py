@@ -25,6 +25,7 @@ from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QImage, QPoly
 from qgis.PyQt.QtWidgets import QDialog, QVBoxLayout, QPushButton, QWidget, QFileDialog, QHBoxLayout, QLabel, QCheckBox
 from qgis.core import (
     QgsProject, QgsRasterLayer, QgsVectorLayer, QgsMapLayerProxyModel, QgsRectangle,
+    QgsCoordinateTransform, QgsFeatureRequest,
     QgsPointXY, QgsWkbTypes, QgsFeature, QgsGeometry, QgsField,
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer,
     QgsLineSymbol, QgsRendererCategory,
@@ -58,6 +59,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.multi_point_mode = False
         self.los_mode = False
         self.los_click_count = 0
+
+        # Reverse viewshed target (polygon) selected via map click
+        self._reverse_target_geom = None  # QgsGeometry in source CRS
+        self._reverse_target_crs = None
+        self._reverse_target_layer_name = None
+        self._reverse_target_fid = None
         self.last_result_layer_id = None
         self.result_marker_map = {} # layer_id -> [markers]
         self.result_annotation_map = {} # layer_id -> [annotations] [v1.6.02]
@@ -246,6 +253,58 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         """Wrapper method to call the utility transform_point function"""
         return transform_point(point, source_crs, dest_crs)
 
+    def _identify_polygon_feature_at_canvas_point(self, canvas_point):
+        """Identify a polygon feature under a canvas click.
+
+        Returns:
+            (QgsGeometry, QgsCoordinateReferenceSystem, layer_name, fid) or None
+        """
+        try:
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+            layers = list(self.canvas.mapSettings().layers() or [])
+            if not layers:
+                return None
+
+            try:
+                tol = float(self.canvas.mapUnitsPerPixel()) * 5.0
+            except Exception:
+                tol = 0.0
+            if tol <= 0.0:
+                tol = 1.0
+
+            for layer in reversed(layers):  # top-most first
+                if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+                    continue
+                if layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+                    continue
+
+                try:
+                    pt_layer = self.transform_point(canvas_point, canvas_crs, layer.crs())
+                except Exception:
+                    continue
+
+                rect = QgsRectangle(
+                    pt_layer.x() - tol,
+                    pt_layer.y() - tol,
+                    pt_layer.x() + tol,
+                    pt_layer.y() + tol,
+                )
+                request = QgsFeatureRequest().setFilterRect(rect).setLimit(10)
+                click_geom = QgsGeometry.fromPointXY(pt_layer)
+                for feat in layer.getFeatures(request):
+                    geom = feat.geometry()
+                    if not geom or geom.isEmpty():
+                        continue
+                    try:
+                        if geom.contains(click_geom) or geom.intersects(click_geom):
+                            return geom, layer.crs(), layer.name(), feat.id()
+                    except Exception:
+                        # If geometry predicates fail due to invalid geometry, still accept bbox match.
+                        return geom, layer.crs(), layer.name(), feat.id()
+        except Exception as e:
+            log_message(f"Polygon identify error: {e}", level=Qgis.Warning)
+        return None
+
     def _build_gdal_viewshed_extra(self, curvature, refraction, refraction_coeff):
         """
         Build GDAL viewshed command-line args for QGIS Processing's `gdal:viewshed`.
@@ -393,6 +452,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.observer_point = None
         self.target_point = None
         self.observer_points = []
+        self._reverse_target_geom = None
+        self._reverse_target_crs = None
+        self._reverse_target_layer_name = None
+        self._reverse_target_fid = None
         if hasattr(self, 'drawn_line_points'):
             self.drawn_line_points = []
         self.los_click_count = 0
@@ -788,8 +851,21 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         else:
             self.map_tool = ViewshedPointTool(self.canvas, self)
             self.canvas.setMapTool(self.map_tool)
+
+            title = "가시권 분석"
+            text = "지도에서 관측점을 클릭하세요"
+            if self.los_mode:
+                title = "가시선 분석"
+                text = "지도에서 관측점 → 대상점 순서로 클릭하세요 (2번)"
+            elif self.radioReverseViewshed.isChecked():
+                title = "역방향 가시권"
+                text = "지도에서 대상물(점/폴리곤)을 클릭하세요. 폴리곤은 영역을 클릭하면 선택됩니다."
+            elif self.multi_point_mode:
+                title = "다중점 가시권"
+                text = "지도에서 관측점을 여러 번 클릭하세요 (ESC로 완료)"
+
             self.iface.messageBar().pushMessage(
-                "가시권 분석", "지도에서 관측점을 클릭하세요", level=0
+                title, text, level=0
             )
         self.hide()
     
@@ -843,6 +919,47 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         else:
             # Single point mode
+            # Reset reverse-viewshed polygon selection (if any)
+            self._reverse_target_geom = None
+            self._reverse_target_crs = None
+            self._reverse_target_layer_name = None
+            self._reverse_target_fid = None
+
+            # Reverse viewshed: allow polygon selection by clicking on a polygon feature.
+            if self.radioReverseViewshed.isChecked() and not self.radioFromLayer.isChecked():
+                hit = self._identify_polygon_feature_at_canvas_point(point)
+                if hit:
+                    geom, src_crs, layer_name, fid = hit
+                    self._reverse_target_geom = geom
+                    self._reverse_target_crs = src_crs
+                    self._reverse_target_layer_name = layer_name
+                    self._reverse_target_fid = fid
+
+                    # Show marker at polygon centroid (more intuitive than the clicked interior point)
+                    marker_pt = point
+                    try:
+                        centroid_src = geom.centroid().asPoint()
+                        marker_pt = self.transform_point(
+                            centroid_src,
+                            src_crs,
+                            self.canvas.mapSettings().destinationCrs(),
+                        )
+                    except Exception:
+                        pass
+
+                    self.observer_point = marker_pt
+                    self.point_marker.reset(QgsWkbTypes.PointGeometry)
+                    self.point_marker.addPoint(marker_pt)
+
+                    self.lblSelectedPoint.setText(f"선택된 폴리곤: {layer_name} (FID: {fid})")
+                    self.lblSelectedPoint.setStyleSheet("color: #2196F3; font-weight: bold;")
+
+                    # Restore original tool and show dialog
+                    if self.original_tool:
+                        self.canvas.setMapTool(self.original_tool)
+                    self.show()
+                    return
+
             self.observer_point = point
             self.point_marker.reset(QgsWkbTypes.PointGeometry)
             self.point_marker.addPoint(point)
@@ -1203,7 +1320,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # If manual selection, create persistent point layer
         if not self.radioFromLayer.isChecked():
-            self.create_observer_layer("가시권_관측점", points_info)
+            observer_layer_name = "가시권_관측점"
+            if self.radioReverseViewshed.isChecked():
+                observer_layer_name = "역방향_대상물"
+            self.create_observer_layer(observer_layer_name, points_info)
         
         run_id = str(uuid.uuid4())[:12]
         raw_output = os.path.join(tempfile.gettempdir(), f'archt_vs_raw_{run_id}.tif')
@@ -1299,25 +1419,506 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     
     # [v1.6.17] run_line_viewshed REMOVED - Line Viewshed now uses run_multi_viewshed
 
+    def _ask_reverse_polygon_target_mode(self, allow_boundary=True):
+        """Ask how to interpret polygon targets for reverse viewshed.
+
+        Returns: "centroid", "boundary", or None (cancel)
+        """
+        from qgis.PyQt.QtWidgets import QMessageBox
+
+        interval = 50
+        if hasattr(self, "spinLineInterval"):
+            try:
+                interval = int(self.spinLineInterval.value())
+            except Exception:
+                interval = 50
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle("역방향 가시권: 폴리곤 처리")
+        msg.setText("폴리곤(면) 대상물을 선택했습니다.\n어떤 기준으로 역방향 가시권을 계산할까요?")
+        if allow_boundary:
+            msg.setInformativeText(
+                f"테두리 모드는 경계선을 약 {interval}m 간격으로 샘플링해 합집합(Union)으로 계산합니다."
+            )
+        else:
+            msg.setInformativeText("히구치 거리대는 폴리곤 테두리(다중점) 모드에서 지원되지 않습니다.")
+
+        btn_centroid = msg.addButton("중심점(빠름)", QMessageBox.AcceptRole)
+        btn_boundary = None
+        if allow_boundary:
+            btn_boundary = msg.addButton("테두리(합집합)", QMessageBox.AcceptRole)
+        btn_cancel = msg.addButton("취소", QMessageBox.RejectRole)
+        msg.setDefaultButton(btn_centroid)
+
+        msg.exec_()
+        clicked = msg.clickedButton()
+        if clicked == btn_centroid:
+            return "centroid"
+        if btn_boundary is not None and clicked == btn_boundary:
+            return "boundary"
+        if clicked == btn_cancel:
+            return None
+        return None
+
+    def _get_sampling_max_points(self):
+        max_points = 50
+        if hasattr(self, "spinLineMaxPoints"):
+            try:
+                max_points = int(self.spinLineMaxPoints.value())
+            except Exception:
+                pass
+        elif hasattr(self, "spinMaxPoints"):
+            try:
+                max_points = int(self.spinMaxPoints.value())
+            except Exception:
+                pass
+        return max(1, max_points)
+
+    def _sample_polygon_boundary_points(self, polygon_geom, interval):
+        """Sample points along polygon exterior ring.
+
+        Args:
+            polygon_geom: QgsGeometry (Polygon/MultiPolygon), assumed to be in a metric CRS.
+            interval: sampling distance in map units (meters).
+
+        Returns:
+            List[QgsPointXY]
+        """
+        points = []
+        try:
+            interval = float(interval)
+        except Exception:
+            interval = 50.0
+        if interval <= 0:
+            interval = 50.0
+
+        if not polygon_geom or polygon_geom.isEmpty():
+            return points
+
+        if polygon_geom.isMultipart():
+            polygons = polygon_geom.asMultiPolygon()
+        else:
+            polygons = [polygon_geom.asPolygon()]
+
+        for poly in polygons:
+            if not poly or len(poly) < 1 or not poly[0]:
+                continue
+            exterior_ring = poly[0]
+            ring_geom = QgsGeometry.fromPolylineXY(exterior_ring)
+            length = ring_geom.length()
+            if length <= 0:
+                continue
+
+            num_pts = max(1, int(length / interval))
+            for i in range(num_pts + 1):
+                frac = i / num_pts if num_pts > 0 else 0
+                pt_geom = ring_geom.interpolate(frac * length)
+                if pt_geom and not pt_geom.isEmpty():
+                    points.append(QgsPointXY(pt_geom.asPoint()))
+
+        return points
+
+    def _run_union_viewshed_for_points(
+        self,
+        dem_layer,
+        points,
+        obs_height,
+        tgt_height,
+        max_dist,
+        curvature,
+        refraction,
+        refraction_coeff,
+        layer_name,
+        marker_points_with_crs=None,
+    ):
+        """Run a union (binary) viewshed for multiple observer points.
+
+        This is a simplified variant of multi-viewshed intended for reverse-viewshed polygon targets.
+        """
+        if not points:
+            push_message(self.iface, "오류", "대상점이 최소 1개 이상 필요합니다", level=2)
+            restore_ui_focus(self)
+            return
+
+        # Performance guard
+        max_points = self._get_sampling_max_points()
+        if len(points) > max_points:
+            from qgis.PyQt.QtWidgets import QMessageBox
+
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("대상점 개수 경고")
+            msg.setText(
+                f"전체 분석에 {len(points)}개의 대상점이 포함되어 있습니다.\n"
+                f"성능을 위해 기본적으로 {max_points}개로 제한됩니다."
+            )
+            msg.setInformativeText(
+                "고해상도 DEM과 많은 대상점은 수 분 이상 소요될 수 있습니다.\n\n"
+                f"예(Yes): {max_points}개로 축소하여 안전하게 진행\n"
+                f"아니오(No): 전체 {len(points)}개 분석 (매우 느림)\n"
+                "취소(Cancel): 취소 및 설정으로 복귀"
+            )
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Yes)
+
+            res_msg = msg.exec_()
+            if res_msg == QMessageBox.Cancel:
+                restore_ui_focus(self)
+                return
+            if res_msg == QMessageBox.Yes:
+                step = max(1, len(points) // max_points)
+                points = points[::step][:max_points]
+                self.iface.messageBar().pushMessage("알림", f"대상점이 {len(points)}개로 샘플링되었습니다.", level=1)
+
+        # Hide dialog only when processing starts
+        self.hide()
+        QtWidgets.QApplication.processEvents()
+
+        extra = self._build_gdal_viewshed_extra(curvature, refraction, refraction_coeff)
+
+        progress = QtWidgets.QProgressDialog("역방향 가시권 분석 실행 중...", "취소", 0, len(points), self)
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+
+        temp_outputs = []
+        viewshed_results = []
+        final_output = None
+        try:
+            # Smart analysis extent
+            total_obs_ext = QgsRectangle()
+            total_obs_ext.setMinimal()
+            for pt, p_crs in points:
+                pt_dem = self.transform_point(pt, p_crs, dem_layer.crs())
+                total_obs_ext.combineExtentWith(pt_dem.x(), pt_dem.y())
+
+            smart_ext = QgsRectangle(
+                total_obs_ext.xMinimum() - max_dist * 1.2,
+                total_obs_ext.yMinimum() - max_dist * 1.2,
+                total_obs_ext.xMaximum() + max_dist * 1.2,
+                total_obs_ext.yMaximum() + max_dist * 1.2,
+            )
+            final_ext = smart_ext.intersect(dem_layer.extent())
+            if final_ext.isEmpty():
+                final_ext = dem_layer.extent()
+
+            # Unified grid snapping
+            res = dem_layer.rasterUnitsPerPixelX()
+            dem_ext = dem_layer.extent()
+
+            snap_xmin = dem_ext.xMinimum() + math.floor((final_ext.xMinimum() - dem_ext.xMinimum()) / res) * res
+            snap_ymax = dem_ext.yMaximum() - math.floor((dem_ext.yMaximum() - final_ext.yMaximum()) / res) * res
+            snap_xmax = dem_ext.xMinimum() + math.ceil((final_ext.xMaximum() - dem_ext.xMinimum()) / res) * res
+            snap_ymin = dem_ext.yMaximum() - math.ceil((dem_ext.yMaximum() - final_ext.yMinimum()) / res) * res
+
+            target_rect = QgsRectangle(snap_xmin, snap_ymin, snap_xmax, snap_ymax)
+            grid_info = {
+                "xmin": snap_xmin,
+                "ymax": snap_ymax,
+                "xmax": snap_xmax,
+                "ymin": snap_ymin,
+                "res": res,
+                "width": int(round((snap_xmax - snap_xmin) / res)),
+                "height": int(round((snap_ymax - snap_ymin) / res)),
+            }
+
+            for i, (point, p_crs) in enumerate(points):
+                if progress.wasCanceled():
+                    break
+                progress.setValue(i)
+                QtWidgets.QApplication.processEvents()
+
+                output_raw = os.path.join(tempfile.gettempdir(), f"archt_rvs_raw_{i}_{uuid.uuid4().hex[:8]}.tif")
+                pt_dem = self.transform_point(point, p_crs, dem_layer.crs())
+                try:
+                    processing.run(
+                        "gdal:viewshed",
+                        {
+                            "INPUT": dem_layer.source(),
+                            "BAND": 1,
+                            "OBSERVER": f"{pt_dem.x()},{pt_dem.y()}",
+                            "OBSERVER_HEIGHT": obs_height,
+                            "TARGET_HEIGHT": tgt_height,
+                            "MAX_DISTANCE": max_dist,
+                            "EXTRA": extra,
+                            "OUTPUT": output_raw,
+                        },
+                    )
+                except Exception as e:
+                    log_message(f"reverse viewshed failed for point #{i}: {e}", level=Qgis.Warning)
+                    continue
+
+                if not os.path.exists(output_raw):
+                    continue
+
+                temp_outputs.append(output_raw)
+                full_vs = os.path.join(tempfile.gettempdir(), f"archt_rvs_full_{i}_{uuid.uuid4().hex[:8]}.tif")
+                try:
+                    processing.run(
+                        "gdal:warpreproject",
+                        {
+                            "INPUT": output_raw,
+                            "TARGET_EXTENT": target_rect,
+                            "TARGET_EXTENT_CRS": dem_layer.crs().authid(),
+                            "NODATA": -9999,
+                            "TARGET_RESOLUTION": res,
+                            "RESAMPLING": 0,
+                            "DATA_TYPE": 5,
+                            "OUTPUT": full_vs,
+                        },
+                    )
+                    if os.path.exists(full_vs):
+                        temp_outputs.append(full_vs)
+                        viewshed_results.append((i, full_vs))
+                        try:
+                            os.remove(output_raw)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    log_message(f"warpreproject failed for reverse viewshed #{i}: {e}", level=Qgis.Warning)
+
+            progress.setValue(len(points))
+
+            if progress.wasCanceled():
+                push_message(self.iface, "취소", "역방향 가시권 분석이 취소되었습니다.", level=1)
+                restore_ui_focus(self)
+                return
+
+            if not viewshed_results:
+                raise Exception("유효한 역방향 가시권 결과를 생성하지 못했습니다.")
+
+            progress.setLabelText("결과 통합 중 (Union)...")
+            QtWidgets.QApplication.processEvents()
+
+            final_output = os.path.join(
+                tempfile.gettempdir(),
+                f"archtoolkit_reverse_viewshed_union_{uuid.uuid4().hex[:8]}.tif",
+            )
+
+            success = self.combine_viewsheds_numpy(
+                dem_layer=dem_layer,
+                viewshed_files=viewshed_results,
+                output_path=final_output,
+                observer_points=points,
+                max_dist=max_dist,
+                is_count_mode=False,
+                grid_info=grid_info,
+                union_mode=True,
+            )
+            if not success or not os.path.exists(final_output):
+                raise Exception("역방향 가시권 결과 생성 실패 (Union)")
+
+            viewshed_layer = QgsRasterLayer(final_output, layer_name)
+            if not viewshed_layer.isValid():
+                raise Exception("결과 레이어 로드 실패")
+
+            self.apply_viewshed_style(viewshed_layer)
+            QgsProject.instance().addMapLayer(viewshed_layer)
+            self.last_result_layer_id = viewshed_layer.id()
+
+            # Link marker(s) for cleanup when the raster is removed
+            if marker_points_with_crs:
+                self.link_current_marker_to_layer(viewshed_layer.id(), marker_points_with_crs)
+            else:
+                self.link_current_marker_to_layer(viewshed_layer.id(), points[:1])
+
+            self.update_layer_order()
+            self.iface.messageBar().pushMessage(
+                "완료",
+                f"역방향 가시권 분석 완료 ({len(points)}개 대상점, Union)",
+                level=0,
+            )
+            self.accept()
+        except Exception as e:
+            push_message(self.iface, "오류", f"역방향 가시권 처리 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
+        finally:
+            try:
+                progress.close()
+            except Exception:
+                pass
+            cleanup_files(temp_outputs)
+
     def run_reverse_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run reverse viewshed - from where can the target be seen?
         
         This swaps observer and target heights to answer:
         "From where can a structure of height X be seen?"
         """
-        # For reverse viewshed, we swap the heights conceptually
-        # The target location becomes the "observer" position
-        # And we ask: from which cells can this point be seen by someone at ground level?
-        
-        # This is essentially the same as regular viewshed but with swapped heights
+        # Polygon target (map click)
+        if not self.radioFromLayer.isChecked() and self._reverse_target_geom is not None:
+            src_crs = self._reverse_target_crs or self.canvas.mapSettings().destinationCrs()
+            use_higuchi = hasattr(self, "chkHiguchi") and self.chkHiguchi.isChecked()
+            mode = self._ask_reverse_polygon_target_mode(allow_boundary=not use_higuchi)
+            if mode is None:
+                restore_ui_focus(self)
+                return
+
+            if mode == "centroid":
+                # Existing single-point pipeline (supports Higuchi).
+                self.run_single_viewshed(
+                    dem_layer,
+                    tgt_height,  # Target becomes observer
+                    obs_height,  # Observer height becomes target
+                    max_dist,
+                    curvature,
+                    refraction,
+                    refraction_coeff,
+                )
+                return
+
+            # Boundary mode (Union)
+            interval = self.spinLineInterval.value() if hasattr(self, "spinLineInterval") else 50
+            try:
+                transform = QgsCoordinateTransform(src_crs, dem_layer.crs(), QgsProject.instance())
+                geom_dem = QgsGeometry(self._reverse_target_geom)
+                geom_dem.transform(transform)
+            except Exception:
+                geom_dem = QgsGeometry(self._reverse_target_geom)
+
+            sampled = self._sample_polygon_boundary_points(geom_dem, interval)
+            pts = [(pt, dem_layer.crs()) for pt in sampled]
+            if not pts:
+                push_message(self.iface, "오류", "폴리곤 테두리에서 샘플링할 점을 생성할 수 없습니다.", level=2)
+                restore_ui_focus(self)
+                return
+
+            marker = []
+            try:
+                centroid_src = self._reverse_target_geom.centroid().asPoint()
+                marker = [(centroid_src, src_crs)]
+            except Exception:
+                pass
+
+            self._run_union_viewshed_for_points(
+                dem_layer=dem_layer,
+                points=pts,
+                obs_height=tgt_height,
+                tgt_height=obs_height,
+                max_dist=max_dist,
+                curvature=curvature,
+                refraction=refraction,
+                refraction_coeff=refraction_coeff,
+                layer_name=f"역방향_가시권_테두리_{int(max_dist)}m",
+                marker_points_with_crs=marker,
+            )
+            return
+
+        # Polygon target (layer selection)
+        if self.radioFromLayer.isChecked():
+            obs_layer = self.cmbObserverLayer.currentLayer()
+            if obs_layer and obs_layer.isValid() and obs_layer.geometryType() == QgsWkbTypes.PolygonGeometry:
+                selected = obs_layer.selectedFeatures()
+                features = selected if selected else []
+                if not features:
+                    first_feat = next(obs_layer.getFeatures(), None)
+                    if first_feat:
+                        features = [first_feat]
+
+                geoms = []
+                for feat in features:
+                    geom = feat.geometry() if feat else None
+                    if geom and not geom.isEmpty():
+                        geoms.append(geom)
+
+                if geoms:
+                    use_higuchi = hasattr(self, "chkHiguchi") and self.chkHiguchi.isChecked()
+                    mode = self._ask_reverse_polygon_target_mode(allow_boundary=not use_higuchi)
+                    if mode is None:
+                        restore_ui_focus(self)
+                        return
+
+                    if mode == "centroid":
+                        if len(geoms) == 1:
+                            self.run_single_viewshed(
+                                dem_layer,
+                                tgt_height,
+                                obs_height,
+                                max_dist,
+                                curvature,
+                                refraction,
+                                refraction_coeff,
+                            )
+                            return
+
+                        pts = []
+                        for g in geoms:
+                            try:
+                                pts.append((g.centroid().asPoint(), obs_layer.crs()))
+                            except Exception:
+                                continue
+                        if not pts:
+                            push_message(self.iface, "오류", "폴리곤 중심점을 계산할 수 없습니다.", level=2)
+                            restore_ui_focus(self)
+                            return
+
+                        self._run_union_viewshed_for_points(
+                            dem_layer=dem_layer,
+                            points=pts,
+                            obs_height=tgt_height,
+                            tgt_height=obs_height,
+                            max_dist=max_dist,
+                            curvature=curvature,
+                            refraction=refraction,
+                            refraction_coeff=refraction_coeff,
+                            layer_name=f"역방향_가시권_{int(max_dist)}m",
+                            marker_points_with_crs=pts[:10],
+                        )
+                        return
+
+                    # Boundary mode (Union)
+                    interval = self.spinLineInterval.value() if hasattr(self, "spinLineInterval") else 50
+                    pts = []
+                    try:
+                        transform = QgsCoordinateTransform(obs_layer.crs(), dem_layer.crs(), QgsProject.instance())
+                    except Exception:
+                        transform = None
+
+                    for g in geoms:
+                        g_dem = QgsGeometry(g)
+                        if transform is not None:
+                            try:
+                                g_dem.transform(transform)
+                            except Exception:
+                                pass
+                        for pt in self._sample_polygon_boundary_points(g_dem, interval):
+                            pts.append((pt, dem_layer.crs()))
+
+                    if not pts:
+                        push_message(self.iface, "오류", "폴리곤 테두리에서 샘플링할 점을 생성할 수 없습니다.", level=2)
+                        restore_ui_focus(self)
+                        return
+
+                    marker = []
+                    try:
+                        marker = [(geoms[0].centroid().asPoint(), obs_layer.crs())]
+                    except Exception:
+                        pass
+
+                    self._run_union_viewshed_for_points(
+                        dem_layer=dem_layer,
+                        points=pts,
+                        obs_height=tgt_height,
+                        tgt_height=obs_height,
+                        max_dist=max_dist,
+                        curvature=curvature,
+                        refraction=refraction,
+                        refraction_coeff=refraction_coeff,
+                        layer_name=f"역방향_가시권_테두리_{int(max_dist)}m",
+                        marker_points_with_crs=marker,
+                    )
+                    return
+
+        # Fallback: regular reverse viewshed (single point)
         self.run_single_viewshed(
-            dem_layer, 
+            dem_layer,
             tgt_height,  # Target becomes observer
             obs_height,  # Observer height becomes target
-            max_dist, 
-            curvature, 
+            max_dist,
+            curvature,
             refraction,
-            refraction_coeff
+            refraction_coeff,
         )
     
     def run_line_of_sight(self, dem_layer, obs_height, tgt_height):
@@ -2624,6 +3225,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.observer_point = None
         self.target_point = None
         self.los_click_count = 0
+        self._reverse_target_geom = None
+        self._reverse_target_crs = None
+        self._reverse_target_layer_name = None
+        self._reverse_target_fid = None
         super().accept()
     
     def reject(self):
@@ -2633,6 +3238,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.observer_point = None
         self.target_point = None
         self.los_click_count = 0
+        self._reverse_target_geom = None
+        self._reverse_target_crs = None
+        self._reverse_target_layer_name = None
+        self._reverse_target_fid = None
         # Ensure indicator is hidden if tool was active
         if self.map_tool:
             try:

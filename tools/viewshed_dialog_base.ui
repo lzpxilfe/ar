@@ -353,9 +353,9 @@
    </item>
    <item>
     <widget class="QGroupBox" name="groupLineOptions">
-     <property name="title">
-      <string>경로 분석 옵션 (Line/Multi/Buffer 모드용)</string>
-     </property>
+      <property name="title">
+       <string>샘플링 옵션 (Line/Multi/Reverse-Polygon 모드용)</string>
+      </property>
      <property name="enabled">
       <bool>false</bool>
      </property>
