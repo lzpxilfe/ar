@@ -628,7 +628,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if hasattr(self, 'lblLayerHint'):
                 self.lblLayerHint.setText(
                     "팁: 점=1회 클릭 후 우클릭/Enter로 완료, 폴리곤=여러 점(3점 이상) 찍고 우클릭/Enter로 완료.\n"
-                    "기존 폴리곤 위를 클릭하면 해당 폴리곤이 자동 선택됩니다."
+                    "기존 폴리곤 위를 클릭하면 해당 폴리곤이 자동 선택됩니다.\n"
+                    "직접 그리려면 Shift를 누른 채 첫 점을 찍으세요."
                 )
                 self.lblLayerHint.setVisible(True)
         
@@ -853,7 +854,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if self.radioReverseViewshed.isChecked():
                 self.iface.messageBar().pushMessage(
                     "역방향 가시권",
-                    "점=1회 클릭 후 우클릭/Enter로 완료, 폴리곤=여러 점(3점 이상) 찍고 우클릭/Enter로 완료. 기존 폴리곤 위를 클릭하면 자동 선택됩니다.",
+                    "점=1회 클릭 후 우클릭/Enter로 완료, 폴리곤=여러 점(3점 이상) 찍고 우클릭/Enter로 완료. 기존 폴리곤 위 클릭=자동 선택, Shift+클릭=직접 그리기.",
                     level=0,
                 )
             else:
@@ -1576,6 +1577,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             return
 
         ds = None
+        mem_ds = None
         try:
             ds = gdal.Open(raster_path, gdal.GA_Update)
             if ds is None:
@@ -1587,27 +1589,53 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception:
                 pass
 
-            ogr_geoms = []
+            ogr_driver = ogr.GetDriverByName("Memory")
+            if ogr_driver is None:
+                raise Exception("OGR Memory 드라이버를 찾을 수 없습니다.")
+
+            mem_ds = ogr_driver.CreateDataSource("mask")
+            if mem_ds is None:
+                raise Exception("메모리 벡터 데이터소스를 만들 수 없습니다.")
+
+            mem_lyr = mem_ds.CreateLayer("mask", None, ogr.wkbUnknown)
+            if mem_lyr is None:
+                raise Exception("메모리 레이어를 만들 수 없습니다.")
+
+            added = 0
             for geom in geometries:
                 if not geom or geom.isEmpty():
                     continue
                 try:
-                    ogr_geom = ogr.CreateGeometryFromWkt(geom.asWkt())
-                    if ogr_geom:
-                        ogr_geoms.append(ogr_geom)
+                    ogr_geom = ogr.CreateGeometryFromWkb(bytes(geom.asWkb()))
                 except Exception:
+                    ogr_geom = None
+                if ogr_geom is None:
+                    try:
+                        ogr_geom = ogr.CreateGeometryFromWkt(geom.asWkt())
+                    except Exception:
+                        ogr_geom = None
+                if ogr_geom is None:
                     continue
 
-            if not ogr_geoms:
+                feat = ogr.Feature(mem_lyr.GetLayerDefn())
+                feat.SetGeometry(ogr_geom)
+                mem_lyr.CreateFeature(feat)
+                feat = None
+                added += 1
+
+            if added <= 0:
                 return
 
-            gdal.RasterizeGeometries(
+            # Rasterize into the existing raster (burn NoData)
+            err = gdal.RasterizeLayer(
                 ds,
                 [1],
-                ogr_geoms,
+                mem_lyr,
                 burn_values=[float(nodata_value)],
                 options=["ALL_TOUCHED=TRUE"],
             )
+            if err != 0:
+                raise Exception(f"RasterizeLayer failed (err={err})")
 
             try:
                 band.FlushCache()
@@ -1620,6 +1648,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             log_message(f"Raster mask error: {e}", level=Qgis.Warning)
         finally:
+            mem_ds = None
             ds = None
 
     def _run_union_viewshed_for_points(
@@ -3472,14 +3501,18 @@ class ViewshedLineTool(QgsMapToolEmitPoint):
         res = self.canvas().snappingUtils().snapToMap(event.pos())
         point = res.point() if res.isValid() else self.toMapCoordinates(event.pos())
 
-        # Reverse viewshed: first click on an existing polygon selects it directly (no drawing needed).
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.NoModifier
+        shift_pressed = bool(modifiers & Qt.ShiftModifier)
+
+        # Reverse viewshed: first click on an existing polygon selects it directly
+        # (unless Shift is held to force drawing a custom polygon).
         is_reverse_mode = (
             self.dialog is not None
             and getattr(self.dialog, "radioReverseViewshed", None) is not None
             and self.dialog.radioReverseViewshed.isChecked()
             and (getattr(self.dialog, "radioFromLayer", None) is None or not self.dialog.radioFromLayer.isChecked())
         )
-        if is_reverse_mode and not self.points:
+        if is_reverse_mode and not self.points and not shift_pressed:
             # 1) If clicking on an existing polygon, select it immediately.
             try:
                 hit = self.dialog._identify_polygon_feature_at_canvas_point(point)
