@@ -982,6 +982,26 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             dx = center_dem.x() - pt.x()
             dy = center_dem.y() - pt.y()
             
+            elev_p, ok_p = provider.sample(pt, 1)
+            elev_c, ok_c = provider.sample(center_dem, 1)
+            if not (ok_p and ok_c):
+                point_status.append(False)
+                continue
+
+            try:
+                elev_p = float(elev_p)
+                elev_c = float(elev_c)
+            except (TypeError, ValueError):
+                point_status.append(False)
+                continue
+
+            if math.isnan(elev_p) or math.isnan(elev_c):
+                point_status.append(False)
+                continue
+
+            p_h = elev_p + obs_height
+            c_h = elev_c + tgt_height
+
             # Quick Check: 10 samples
             is_visible = True
             for k in range(1, 11):
@@ -989,14 +1009,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 sx = pt.x() + f * dx
                 sy = pt.y() + f * dy
                 
-                res_s, elev_s = provider.sample(QgsPointXY(sx, sy), 1)
-                res_p, elev_p = provider.sample(pt, 1)
-                res_c, elev_c = provider.sample(center_dem, 1)
-                
-                if not (res_s and res_p and res_c): continue
-                
-                p_h = elev_p + obs_height
-                c_h = elev_c + tgt_height
+                elev_s, ok_s = provider.sample(QgsPointXY(sx, sy), 1)
+                if not ok_s:
+                    continue
+                try:
+                    elev_s = float(elev_s)
+                except (TypeError, ValueError):
+                    continue
+                if math.isnan(elev_s):
+                    continue
                 
                 sight = p_h + f * (c_h - p_h)
                 if elev_s > sight:
@@ -1288,6 +1309,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "관측점과 대상점이 동일합니다.", level=2)
             restore_ui_focus(self)
             return
+
+        if not self.radioFromLayer.isChecked() and total_dist > 1000:
+            from qgis.PyQt.QtWidgets import QMessageBox
+
+            res = QMessageBox.warning(
+                self,
+                "경고",
+                f"가시선 길이({total_dist:.0f}m)가 기본 최대 분석 반경(1000m)을 초과합니다.\n계속 진행할까요?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if res == QMessageBox.No:
+                restore_ui_focus(self)
+                return
         
         # Sample terrain along line
         pixel_x = abs(dem_layer.rasterUnitsPerPixelX())
@@ -1310,14 +1345,21 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             dist = frac * total_dist
             
             # Sample elevation from DEM
-            result, elev = provider.sample(QgsPointXY(x, y), 1)
-            if result and elev is not None and not math.isnan(elev):
-                profile_data.append({
-                    'distance': dist,
-                    'elevation': elev,
-                    'x': x,
-                    'y': y
-                })
+            elev, ok = provider.sample(QgsPointXY(x, y), 1)
+            if not ok:
+                continue
+            try:
+                elev_value = float(elev)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(elev_value):
+                continue
+            profile_data.append({
+                'distance': dist,
+                'elevation': elev_value,
+                'x': x,
+                'y': y
+            })
         
         if len(profile_data) < 2:
             push_message(self.iface, "오류", "지형 데이터를 샘플링할 수 없습니다", level=2)
@@ -2643,18 +2685,7 @@ class ProfilePlotWidget(QWidget):
         painter.setFont(QFont("Arial", 10, QFont.Bold))
         painter.drawText(margin_left, 18, "지형 단면 및 가시선 (Terrain Profile & Line of Sight)")
         
-        # --- 2. Draw Filled Terrain Polygon ---
-        terrain_poly = QPolygonF()
-        terrain_poly.append(QPointF(*to_screen(0, min_elev)))  # Bottom-left
-        for d, e in zip(distances, elevations):
-            terrain_poly.append(QPointF(*to_screen(d, e)))
-        terrain_poly.append(QPointF(*to_screen(max_dist, min_elev)))  # Bottom-right
-        
-        painter.setBrush(QBrush(QColor(139, 119, 101, 200)))  # Brown terrain fill
-        painter.setPen(Qt.NoPen)
-        painter.drawPolygon(terrain_poly)
-        
-        # --- 3. Calculate Visibility using Max-Angle Algorithm ---
+        # --- 2. Calculate Visibility using Max-Angle Algorithm ---
         # Compute visibility status for each profile point
         visibility = []  # True = Visible, False = Hidden
         max_angle = -float('inf')
@@ -2673,10 +2704,34 @@ class ProfilePlotWidget(QWidget):
                 visibility.append(True)
             else:
                 visibility.append(False)
+
+        # --- 3. Fill Terrain by Visibility (Green/Red) ---
+        fill_visible = QColor(0, 200, 0, 70)
+        fill_hidden = QColor(255, 0, 0, 70)
+        painter.setPen(Qt.NoPen)
+
+        for i in range(len(distances) - 1):
+            d1, e1 = distances[i], elevations[i]
+            d2, e2 = distances[i + 1], elevations[i + 1]
+
+            x1, y1 = to_screen(d1, e1)
+            x2, y2 = to_screen(d2, e2)
+            xb1, yb1 = to_screen(d1, min_elev)
+            xb2, yb2 = to_screen(d2, min_elev)
+
+            poly = QPolygonF([
+                QPointF(xb1, yb1),
+                QPointF(x1, y1),
+                QPointF(x2, y2),
+                QPointF(xb2, yb2),
+            ])
+
+            painter.setBrush(QBrush(fill_visible if visibility[i + 1] else fill_hidden))
+            painter.drawPolygon(poly)
         
         # --- 4. Draw Visibility Segments on Terrain Surface ---
-        pen_visible = QPen(QColor(0, 200, 0), 1.5)  # Green, thin
-        pen_hidden = QPen(QColor(255, 0, 0), 1.5)   # Red, thin
+        pen_visible = QPen(QColor(0, 200, 0), 2.0)  # Green
+        pen_hidden = QPen(QColor(255, 0, 0), 2.0)   # Red
         
         for i in range(len(distances) - 1):
             x1, y1 = to_screen(distances[i], elevations[i])
@@ -2688,39 +2743,11 @@ class ProfilePlotWidget(QWidget):
             else:
                 painter.setPen(pen_hidden)
             painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
-        
-        # --- 5. Draw Shadow Zones (Hidden Dips) ---
-        painter.setBrush(QBrush(QColor(80, 80, 80, 60)))  # Very light grey
-        painter.setPen(Qt.NoPen)
-        
-        max_angle_running = -float('inf')
-        for i in range(len(distances) - 1):
-            d1, e1 = distances[i], elevations[i]
-            d2, e2 = distances[i+1], elevations[i+1]
-            
-            if d1 == 0:
-                max_angle_running = (e1 - start_elev + 0.0001) / 0.0001  # Avoid div by zero
-                continue
-            
-            angle1 = (e1 - start_elev) / d1
-            angle2 = (e2 - start_elev) / d2 if d2 > 0 else angle1
-            
-            if angle1 >= max_angle_running:
-                max_angle_running = angle1
-            
-            # If this segment is in shadow
-            if angle2 < max_angle_running:
-                # Height of the "shadow ceiling" at d2
-                shadow_h = start_elev + max_angle_running * d2
-                
-                # Draw polygon from terrain to shadow ceiling
-                p1 = QPointF(*to_screen(d1, e1))
-                p2 = QPointF(*to_screen(d2, e2))
-                p3 = QPointF(*to_screen(d2, shadow_h))
-                p4 = QPointF(*to_screen(d1, start_elev + max_angle_running * d1))
-                
-                shadow_poly = QPolygonF([p1, p2, p3, p4])
-                painter.drawPolygon(shadow_poly)
+
+        # Redraw axes on top of fills for readability
+        painter.setPen(QPen(Qt.black, 1))
+        painter.drawLine(margin_left, margin_top + plot_h, margin_left + plot_w, margin_top + plot_h)  # X
+        painter.drawLine(margin_left, margin_top, margin_left, margin_top + plot_h)  # Y
         
         # --- 6. Draw Sight Line (Dashed Blue) ---
         obs_screen = to_screen(0, obs_elev)
