@@ -22,7 +22,7 @@ from osgeo import gdal
 from qgis.PyQt import uic, QtWidgets, QtCore
 from qgis.PyQt.QtCore import Qt, QVariant, QPointF
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QFont, QImage, QPolygonF
-from qgis.PyQt.QtWidgets import QDialog, QVBoxLayout, QPushButton, QWidget, QFileDialog, QHBoxLayout, QLabel
+from qgis.PyQt.QtWidgets import QDialog, QVBoxLayout, QPushButton, QWidget, QFileDialog, QHBoxLayout, QLabel, QCheckBox
 from qgis.core import (
     QgsProject, QgsRasterLayer, QgsVectorLayer, QgsMapLayerProxyModel, QgsRectangle,
     QgsPointXY, QgsWkbTypes, QgsFeature, QgsGeometry, QgsField,
@@ -1415,17 +1415,43 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         ])
         layer.updateFields()
 
-        segments = []
-        obs_pt = QgsPointXY(observer_dem.x(), observer_dem.y())
-        tgt_pt = QgsPointXY(target_dem.x(), target_dem.y())
+        # Build merged segments matching the profile visibility coloring (max-angle algorithm)
+        terrain_visibility = [True]  # Observer point is always "visible"
+        max_angle = -float("inf")
+        start_elev = obs_elev
 
-        if is_visible_overall or not first_obstruction:
-            segments.append(("보임", 0.0, total_dist, [obs_pt, tgt_pt]))
-        else:
-            block_dist = float(first_obstruction['distance'])
-            block_pt = QgsPointXY(float(first_obstruction['x']), float(first_obstruction['y']))
-            segments.append(("보임", 0.0, block_dist, [obs_pt, block_pt]))
-            segments.append(("안보임", block_dist, total_dist, [block_pt, tgt_pt]))
+        for pt in profile_data[1:]:
+            d = float(pt["distance"])
+            if d <= 0:
+                terrain_visibility.append(True)
+                continue
+
+            angle = (float(pt["elevation"]) - start_elev) / d
+            if angle >= max_angle:
+                max_angle = angle
+                terrain_visibility.append(True)
+            else:
+                terrain_visibility.append(False)
+
+        segments = []
+        if len(profile_data) >= 2:
+            current_status = "보임" if terrain_visibility[1] else "안보임"
+            seg_from = 0.0
+            current_pts = [QgsPointXY(profile_data[0]["x"], profile_data[0]["y"])]
+
+            for idx in range(1, len(profile_data)):
+                status = "보임" if terrain_visibility[idx] else "안보임"
+                if status != current_status:
+                    seg_to = float(profile_data[idx - 1]["distance"])
+                    segments.append((current_status, seg_from, seg_to, current_pts))
+                    current_pts = [current_pts[-1]]
+                    seg_from = seg_to
+                    current_status = status
+
+                current_pts.append(QgsPointXY(profile_data[idx]["x"], profile_data[idx]["y"]))
+
+            seg_to = float(profile_data[-1]["distance"])
+            segments.append((current_status, seg_from, seg_to, current_pts))
 
         # Add features for each segment
         for status, from_m, to_m, pts in segments:
@@ -1577,13 +1603,41 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 )
         
         # Open Profiler for visualization
-        self.show_profiler(profile_data, obs_height, tgt_height, total_dist, is_visible_overall, first_obstruction)
+        self.show_profiler(
+            profile_data,
+            obs_height,
+            tgt_height,
+            total_dist,
+            is_visible_overall,
+            first_obstruction,
+            line_start_canvas=observer,
+            line_end_canvas=target,
+        )
         
         self.accept()
         
-    def show_profiler(self, profile_data, obs_height, tgt_height, total_dist, is_visible_overall=True, first_obstruction=None):
-        """Open the 2D Profiler dialog"""
+    def show_profiler(
+        self,
+        profile_data,
+        obs_height,
+        tgt_height,
+        total_dist,
+        is_visible_overall=True,
+        first_obstruction=None,
+        line_start_canvas=None,
+        line_end_canvas=None,
+    ):
+        """Open the 2D Profiler dialog (modeless)"""
         try:
+            from qgis.PyQt.QtCore import Qt
+
+            if hasattr(self, "_active_los_profiler") and self._active_los_profiler:
+                try:
+                    self._active_los_profiler.close()
+                except Exception:
+                    pass
+                self._active_los_profiler = None
+
             profiler = ViewshedProfilerDialog(
                 self.iface,
                 profile_data,
@@ -1592,9 +1646,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 total_dist,
                 is_visible_overall=is_visible_overall,
                 first_obstruction=first_obstruction,
-                parent=self,
+                line_start_canvas=line_start_canvas,
+                line_end_canvas=line_end_canvas,
+                parent=self.iface.mainWindow(),
             )
-            profiler.exec_()
+            profiler.setWindowModality(Qt.NonModal)
+            profiler.setAttribute(Qt.WA_DeleteOnClose, True)
+            profiler.destroyed.connect(lambda *_: setattr(self, "_active_los_profiler", None))
+            profiler.show()
+            profiler.raise_()
+            profiler.activateWindow()
+            self._active_los_profiler = profiler
         except Exception as e:
             log_message(f"Profiler error: {e}", level=Qgis.Warning)
     
@@ -2607,7 +2669,82 @@ class ProfilePlotWidget(QWidget):
         self.tgt_height = tgt_height
         self.is_visible_overall = is_visible_overall
         self.first_obstruction = first_obstruction
+        self.hover_distance = None
+        self.hover_elevation = None
+        self.on_hover_callback = None  # Function(distance_m|None) for map synchronization
         self.setMinimumSize(700, 350)
+        self.setMouseTracking(True)
+
+    def set_hover_distance(self, distance_m):
+        if distance_m is None or not self.profile_data:
+            self.hover_distance = None
+            self.hover_elevation = None
+            self.update()
+            return
+
+        try:
+            distance_m = float(distance_m)
+        except (TypeError, ValueError):
+            return
+
+        if distance_m < 0:
+            distance_m = 0.0
+
+        closest = min(self.profile_data, key=lambda p: abs(float(p["distance"]) - distance_m))
+        self.hover_distance = float(closest["distance"])
+        self.hover_elevation = float(closest["elevation"])
+        self.update()
+
+    def _distance_from_mouse(self, x, y):
+        if not self.profile_data:
+            return None
+
+        width = self.width()
+        height = self.height()
+        margin_left = 60
+        margin_right = 30
+        margin_top = 30
+        margin_bottom = 40
+
+        plot_w = width - margin_left - margin_right
+        plot_h = height - margin_top - margin_bottom
+        if plot_w <= 0 or plot_h <= 0:
+            return None
+
+        if not (margin_left <= x <= margin_left + plot_w and margin_top <= y <= margin_top + plot_h):
+            return None
+
+        max_dist = float(self.profile_data[-1]["distance"]) if float(self.profile_data[-1]["distance"]) > 0 else 0.0
+        if max_dist <= 0:
+            return None
+
+        rel_x = (x - margin_left) / plot_w
+        return rel_x * max_dist
+
+    def mouseMoveEvent(self, event):
+        distance = self._distance_from_mouse(event.x(), event.y())
+        if distance is None:
+            self.setToolTip("")
+            self.set_hover_distance(None)
+            if self.on_hover_callback:
+                self.on_hover_callback(None)
+            return
+
+        closest = min(self.profile_data, key=lambda p: abs(float(p["distance"]) - distance))
+        self.hover_distance = float(closest["distance"])
+        self.hover_elevation = float(closest["elevation"])
+
+        self.setToolTip(f"거리: {self.hover_distance:.1f}m\n고도: {self.hover_elevation:.1f}m")
+        if self.on_hover_callback:
+            self.on_hover_callback(self.hover_distance)
+        self.update()
+
+    def leaveEvent(self, event):
+        self.setToolTip("")
+        self.set_hover_distance(None)
+        if self.on_hover_callback:
+            self.on_hover_callback(None)
+        super().leaveEvent(event)
         
     def paintEvent(self, event):
         if not self.profile_data: return
@@ -2721,6 +2858,23 @@ class ProfilePlotWidget(QWidget):
         painter.setPen(QPen(Qt.black, 1))
         painter.drawLine(margin_left, margin_top + plot_h, margin_left + plot_w, margin_top + plot_h)  # X
         painter.drawLine(margin_left, margin_top, margin_left, margin_top + plot_h)  # Y
+
+        # Hover indicator (distance cursor)
+        if self.hover_distance is not None and self.hover_elevation is not None:
+            hover_x, _ = to_screen(self.hover_distance, min_elev)
+            hover_x = max(margin_left, min(margin_left + plot_w, hover_x))
+            hover_y = to_screen(self.hover_distance, self.hover_elevation)[1]
+
+            painter.setPen(QPen(QColor(255, 0, 0, 160), 1, Qt.DashLine))
+            painter.drawLine(int(hover_x), margin_top, int(hover_x), margin_top + plot_h)
+
+            painter.setPen(QPen(QColor(255, 0, 0), 2))
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            painter.drawEllipse(QPointF(hover_x, hover_y), 5, 5)
+
+            painter.setPen(QPen(Qt.black))
+            painter.setFont(QFont("Arial", 8))
+            painter.drawText(int(hover_x) + 8, int(hover_y) - 6, f"{self.hover_distance:.0f}m")
         
         # --- 6. Draw Sight Line (Dashed Blue) ---
         obs_screen = to_screen(0, obs_elev)
@@ -2780,8 +2934,26 @@ class ProfilePlotWidget(QWidget):
 
 class ViewshedProfilerDialog(QDialog):
     """Dialog to show 2D Viewshed Profile chart"""
-    def __init__(self, iface, profile_data, obs_height, tgt_height, total_dist, is_visible_overall=True, first_obstruction=None, parent=None):
+    def __init__(
+        self,
+        iface,
+        profile_data,
+        obs_height,
+        tgt_height,
+        total_dist,
+        is_visible_overall=True,
+        first_obstruction=None,
+        line_start_canvas=None,
+        line_end_canvas=None,
+        parent=None,
+    ):
         super().__init__(parent)
+        self.iface = iface
+        self.canvas = iface.mapCanvas()
+        self.line_start_canvas = line_start_canvas
+        self.line_end_canvas = line_end_canvas
+        self.total_dist = float(total_dist) if total_dist is not None else 0.0
+
         self.setWindowTitle("가시선 프로파일 (Line of Sight Profile)")
         self.setMinimumSize(800, 500)
         
@@ -2802,6 +2974,15 @@ class ViewshedProfilerDialog(QDialog):
         )
         header.setStyleSheet("font-size: 14px; padding: 10px; background: #f0f0f0; border-radius: 5px;")
         layout.addWidget(header)
+
+        # Map/Profile synchronization
+        sync_layout = QHBoxLayout()
+        self.chkSync = QCheckBox("지도-프로파일 연동")
+        self.chkSync.setChecked(True)
+        self.chkSync.toggled.connect(self._on_sync_toggled)
+        sync_layout.addWidget(self.chkSync)
+        sync_layout.addStretch()
+        layout.addLayout(sync_layout)
         
         # Plot area
         self.plot = ProfilePlotWidget(
@@ -2811,7 +2992,21 @@ class ViewshedProfilerDialog(QDialog):
             is_visible_overall=is_visible_overall,
             first_obstruction=first_obstruction,
         )
+        self.plot.on_hover_callback = self._on_profile_hover
         layout.addWidget(self.plot)
+
+        # Hover marker on map
+        self.hover_marker = QgsRubberBand(self.canvas, QgsWkbTypes.PointGeometry)
+        self.hover_marker.setColor(QColor(255, 0, 0))
+        self.hover_marker.setWidth(10)
+        self.hover_marker.setIcon(QgsRubberBand.ICON_CIRCLE)
+        self.hover_marker.hide()
+
+        # Sync map cursor -> profile cursor
+        try:
+            self.canvas.xyCoordinates.connect(self._on_canvas_xy)
+        except Exception:
+            pass
         
         # Footer buttons
         btn_layout = QHBoxLayout()
@@ -2830,6 +3025,80 @@ class ViewshedProfilerDialog(QDialog):
         
         self.setLayout(layout)
         
+    def _set_map_marker(self, point):
+        if point is None:
+            self.hover_marker.reset(QgsWkbTypes.PointGeometry)
+            self.hover_marker.hide()
+            return
+
+        self.hover_marker.reset(QgsWkbTypes.PointGeometry)
+        self.hover_marker.addPoint(point)
+        self.hover_marker.show()
+
+    def _on_sync_toggled(self, checked):
+        if not checked:
+            self.plot.set_hover_distance(None)
+            self._set_map_marker(None)
+
+    def _on_profile_hover(self, distance_m):
+        if not self.chkSync.isChecked():
+            self._set_map_marker(None)
+            return
+
+        if distance_m is None or not self.line_start_canvas or not self.line_end_canvas or self.total_dist <= 0:
+            self._set_map_marker(None)
+            return
+
+        frac = max(0.0, min(1.0, float(distance_m) / self.total_dist))
+        sx, sy = self.line_start_canvas.x(), self.line_start_canvas.y()
+        ex, ey = self.line_end_canvas.x(), self.line_end_canvas.y()
+        point = QgsPointXY(sx + frac * (ex - sx), sy + frac * (ey - sy))
+        self._set_map_marker(point)
+
+    def _on_canvas_xy(self, point):
+        if not self.chkSync.isChecked():
+            return
+        if not self.line_start_canvas or not self.line_end_canvas or self.total_dist <= 0:
+            return
+
+        sx, sy = self.line_start_canvas.x(), self.line_start_canvas.y()
+        ex, ey = self.line_end_canvas.x(), self.line_end_canvas.y()
+        vx, vy = (ex - sx), (ey - sy)
+        vv = vx * vx + vy * vy
+        if vv <= 0:
+            return
+
+        px, py = (point.x() - sx), (point.y() - sy)
+        t = (px * vx + py * vy) / vv
+        t = max(0.0, min(1.0, t))
+
+        proj_x = sx + t * vx
+        proj_y = sy + t * vy
+        dx = point.x() - proj_x
+        dy = point.y() - proj_y
+
+        try:
+            units_per_px = float(self.canvas.mapUnitsPerPixel())
+        except Exception:
+            units_per_px = float(self.canvas.mapSettings().mapUnitsPerPixel())
+
+        tolerance = units_per_px * 8.0
+        if (dx * dx + dy * dy) > (tolerance * tolerance):
+            self.plot.set_hover_distance(None)
+            self._set_map_marker(None)
+            return
+
+        self.plot.set_hover_distance(t * self.total_dist)
+        self._set_map_marker(QgsPointXY(proj_x, proj_y))
+
+    def closeEvent(self, event):
+        try:
+            self.canvas.xyCoordinates.disconnect(self._on_canvas_xy)
+        except Exception:
+            pass
+        self._set_map_marker(None)
+        super().closeEvent(event)
+
     def save_image(self):
         filename, _ = QFileDialog.getSaveFileName(self, "이미지 저장", "viewshed_profile.png", "PNG (*.png)")
         if filename:
