@@ -204,6 +204,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # [v1.5.90] Code-level UI overrides for terminology and defaults
         self.radioLineViewshed.setText("선형 및 둘레 가시권 (Line/Perimeter)")
         self.radioLineViewshed.setToolTip("선형 경로(도로, 해안선)나 성곽 둘레(Perimeter)를 따라 이동하며 보이는 영역을 분석합니다.")
+
+        self.radioLineOfSight.setToolTip(
+            "두 지점 사이의 시야가 확보되는지를 단면(프로파일)로 확인합니다.\n"
+            "- 지도/프로파일 색상: 초록=보임, 빨강=안보임\n"
+            "- 결과 Viscode 선을 선택하면 프로파일을 다시 열 수 있습니다."
+        )
         
         if hasattr(self, "spinLineMaxPoints"):
             self.spinLineMaxPoints.setValue(50)
@@ -1627,9 +1633,35 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Add result layers under a group (to reduce clutter)
         project = QgsProject.instance()
         root = project.layerTreeRoot()
-        parent_group = root.findGroup("ArchToolkit - 가시선")
+        los_root_group_name = "ArchToolkit - 가시선"
+
+        insert_index = 0
+        try:
+            label_layers = project.mapLayersByName("관측점_번호_라벨")
+            if label_layers:
+                label_node = root.findLayer(label_layers[0].id())
+                if label_node and label_node.parent() == root:
+                    insert_index = 1  # keep labels on top
+        except Exception:
+            pass
+
+        parent_group = root.findGroup(los_root_group_name)
         if parent_group is None:
-            parent_group = root.addGroup("ArchToolkit - 가시선")
+            parent_group = root.insertGroup(insert_index, los_root_group_name)
+        else:
+            try:
+                current_index = root.children().index(parent_group)
+                if current_index != insert_index:
+                    is_visible = parent_group.isVisible()
+                    is_expanded = parent_group.isExpanded()
+                    clone = parent_group.clone()
+                    clone.setItemVisibilityChecked(is_visible)
+                    clone.setExpanded(is_expanded)
+                    root.insertChildNode(insert_index, clone)
+                    root.removeChildNode(parent_group)
+                    parent_group = clone
+            except Exception:
+                pass
 
         run_id = str(uuid.uuid4())[:8]
         group_name = f"가시선_{int(total_dist)}m_{run_id}"

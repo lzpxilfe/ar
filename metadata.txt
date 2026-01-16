@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=「지식은 전유물이 아닙니다」— 고고학자와 문화유산 연구자를 위한 종합 분석 도구
-version=1.6.31
+version=1.6.33
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -14,4 +14,4 @@ tags=archaeology,dem,topography,고고학,발굴
 icon=icon.png
 experimental=false
 deprecated=false
-about=「지식은 전유물이 아닙니다」— ArchToolkit은 한국 고고학 연구 환경에 최적화된 종합 분석 플러그인입니다. (QGIS 기본 포함 모듈: GDAL/Processing, NumPy 등 사용)
+about=「지식은 전유물이 아닙니다」— ArchToolkit은 한국 고고학 연구 환경에 최적화된 종합 분석 플러그인입니다.
