@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
 import tempfile
-import time
 from typing import Optional
 
 from qgis.PyQt import QtWidgets
@@ -114,30 +113,28 @@ class ProcessingCancelled(RuntimeError):
 class _MessageBarProgress:
     def __init__(self, iface, title: str, text: str = "", level=Qgis.Info):
         self._bar = getattr(iface, "messageBar", lambda: None)() if iface else None
-        self._item = None
         self._widget = None
         self._label = None
         self._progress = None
         self._btn_cancel = None
-        self._last_process_events = 0.0
 
         if not self._bar:
             return
 
-        widget = QWidget(self._bar)
+        widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        label = QLabel(widget)
+        label = QLabel()
         label.setText(f"{title} {text}".strip())
 
-        progress = QProgressBar(widget)
+        progress = QProgressBar()
         progress.setMaximum(100)
         progress.setValue(0)
         progress.setTextVisible(False)
 
-        btn_cancel = QPushButton("취소", widget)
+        btn_cancel = QPushButton("취소")
 
         layout.addWidget(label, 1)
         layout.addWidget(progress)
@@ -148,7 +145,7 @@ class _MessageBarProgress:
         self._progress = progress
         self._btn_cancel = btn_cancel
 
-        self._item = self._bar.pushWidget(widget, level)
+        self._bar.pushWidget(widget, level)
 
     @property
     def cancel_button(self):
@@ -169,32 +166,16 @@ class _MessageBarProgress:
             pass
 
         try:
-            now = time.monotonic()
-            if (now - self._last_process_events) >= 0.05:
-                self._last_process_events = now
-                QtWidgets.QApplication.processEvents()
+            QtWidgets.QApplication.processEvents()
         except Exception:
             pass
 
     def close(self):
-        if not self._bar:
-            return
-
         try:
-            if self._item is not None:
-                try:
-                    self._bar.popWidget(self._item)
-                except TypeError:
-                    # Some bindings expose popWidget(QWidget*) instead of popWidget(QgsMessageBarItem*).
-                    if self._widget:
-                        self._bar.popWidget(self._widget)
-            elif self._widget is not None:
+            if self._bar and self._widget:
                 self._bar.popWidget(self._widget)
         except Exception:
-            # Never crash due to progress UI teardown.
             pass
-
-        self._item = None
         self._widget = None
         self._label = None
         self._progress = None
