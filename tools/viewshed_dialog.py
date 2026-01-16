@@ -556,7 +556,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         is_reverse_mode = self.radioReverseViewshed.isChecked()
         
         # Enable line options for appropriate modes
-        self.groupLineOptions.setEnabled(is_line_mode or is_multi_mode)
+        self.groupLineOptions.setEnabled(is_line_mode or is_multi_mode or is_reverse_mode)
         
         # Show/Hide Count Only checkbox - relevant for Line and Multi-point
         if hasattr(self, 'chkCountOnly'):
