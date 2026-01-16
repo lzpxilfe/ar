@@ -3771,7 +3771,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         )
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
-        QgsProject.instance().addMapLayer(layer)
+        # Ensure the ring is visible even when new layers are added under rasters.
+        QgsProject.instance().addMapLayer(layer, False)
+        try:
+            QgsProject.instance().layerTreeRoot().insertLayer(0, layer)
+        except Exception:
+            QgsProject.instance().addMapLayer(layer)
         return layer
     
     def apply_viewshed_style(self, layer):
