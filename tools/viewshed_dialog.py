@@ -1478,6 +1478,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             cleanup_files([raw_output])
 
     def _is_visual_imbalance_enabled(self):
+        if hasattr(self, "chkHiguchi") and self.chkHiguchi.isChecked():
+            return False
         return (
             hasattr(self, "chkVisualImbalance")
             and self.chkVisualImbalance.isVisible()
@@ -2090,7 +2092,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 "시각적 불균등 분석은 히구치 거리대 모드에서 지원되지 않습니다.",
                 level=1,
             )
-            restore_ui_focus(self)
+            self.run_single_viewshed(
+                dem_layer,
+                tgt_height,  # target becomes observer
+                obs_height,  # observer height becomes target
+                max_dist,
+                curvature,
+                refraction,
+                refraction_coeff,
+            )
             return
 
         # [v1.5.97] Hide dialog only when processing starts
