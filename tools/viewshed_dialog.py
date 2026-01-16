@@ -627,7 +627,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnSelectPoint.setText("🖱️ 지도에서 대상물/영역 지정")
             if hasattr(self, 'lblLayerHint'):
                 self.lblLayerHint.setText(
-                    "팁: 점=1회 클릭 후 우클릭/Enter로 완료, 폴리곤=여러 점을 찍고 우클릭/Enter로 완료(3점 이상).\n"
+                    "팁: 점=그냥 클릭, 폴리곤=Shift 누르고 첫 점부터 그리기(3점 이상).\n"
                     "기존 폴리곤 위를 클릭하면 해당 폴리곤이 자동 선택됩니다."
                 )
                 self.lblLayerHint.setVisible(True)
@@ -853,7 +853,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if self.radioReverseViewshed.isChecked():
                 self.iface.messageBar().pushMessage(
                     "역방향 가시권",
-                    "지도에서 대상 영역을 그리세요. 클릭으로 점 추가, 우클릭/Enter로 완료 (3점 이상이면 폴리곤). 1점만 찍으면 대상점으로 처리됩니다.",
+                    "점=그냥 클릭, 폴리곤=Shift 누르고 첫 점부터 그리세요. 우클릭/Enter로 완료(3점 이상). 기존 폴리곤 위를 클릭하면 자동 선택됩니다.",
                     level=0,
                 )
             else:
@@ -3470,17 +3470,25 @@ class ViewshedLineTool(QgsMapToolEmitPoint):
         point = res.point() if res.isValid() else self.toMapCoordinates(event.pos())
 
         # Reverse viewshed: first click on an existing polygon selects it directly (no drawing needed).
-        if (
+        is_reverse_mode = (
             self.dialog is not None
             and getattr(self.dialog, "radioReverseViewshed", None) is not None
             and self.dialog.radioReverseViewshed.isChecked()
-            and not self.points
-        ):
+            and (getattr(self.dialog, "radioFromLayer", None) is None or not self.dialog.radioFromLayer.isChecked())
+        )
+        if is_reverse_mode and not self.points:
+            # 1) If clicking on an existing polygon, select it immediately.
             try:
                 hit = self.dialog._identify_polygon_feature_at_canvas_point(point)
             except Exception:
                 hit = None
             if hit:
+                self.dialog.set_observer_point(point)
+                self.cleanup()
+                return
+
+            # 2) If Shift is NOT pressed, treat as a single target point (fast workflow).
+            if not (event.modifiers() & Qt.ShiftModifier):
                 self.dialog.set_observer_point(point)
                 self.cleanup()
                 return
