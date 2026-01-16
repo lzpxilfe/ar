@@ -2861,12 +2861,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             progress.setLabelText("결과 통합 중 (NumPy)...")
             QtWidgets.QApplication.processEvents()
             
-            # [v1.6.02] Determine Union Mode (Binary Visibility)
-            # If Line Viewshed or > 20 points, use Union Mode (0/1) instead of bit-flags
+            # Determine merge/style mode
+            # - Default: bit-flag combinations (V(1,2,3...))
+            # - Optional: count-only (0~N) via chkCountOnly
+            # - Safety: for Line mode or too many points, fall back to Union unless count-only is requested
             is_line_mode = self.radioLineViewshed.isChecked()
-            is_union_mode = is_line_mode or len(points) > 20
+            is_count_mode = hasattr(self, "chkCountOnly") and self.chkCountOnly.isChecked()
+            is_union_mode = (not is_count_mode) and (is_line_mode or len(points) > 20)
             
-            mode_str = "합집합(Union)" if is_union_mode else "누적(Cumulative)"
+            if is_union_mode:
+                mode_str = "합집합(Union)"
+            elif is_count_mode:
+                mode_str = "누적 개수(Count)"
+            else:
+                mode_str = "누적 조합(Bit-flag)"
             self.iface.messageBar().pushMessage("분석 시작", f"모드: {mode_str}, 점 개수: {len(points)}", level=0)
             
             # viewshed_results is already [(idx, filepath), ...] as needed by combine_viewsheds_numpy
@@ -2876,7 +2884,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 output_path=final_output,
                 observer_points=points,
                 max_dist=max_dist,
-                is_count_mode=False,
+                is_count_mode=is_count_mode,
                 grid_info=grid_info,
                 union_mode=is_union_mode
             )
@@ -2897,6 +2905,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 # Apply result style
                 if is_union_mode:
                     self.apply_viewshed_style(viewshed_layer)
+                elif is_count_mode:
+                    self.apply_count_style(viewshed_layer, len(points))
                 else:
                     self.apply_cumulative_style(viewshed_layer, len(points))
                 
@@ -2971,6 +2981,56 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         renderer.setClassificationMin(0)
         layer.setRenderer(renderer)
         layer.setOpacity(0.8)
+        layer.triggerRepaint()
+
+    def apply_count_style(self, layer, num_points):
+        """Apply count-based styling for cumulative viewshed.
+
+        Values:
+        - -9999: NoData (outside radius, cut-outs) -> transparent
+        - 0: not visible
+        - 1..N: number of observer points that can see the cell
+        """
+        nodata_value = -9999
+        layer.dataProvider().setNoDataValue(1, nodata_value)
+
+        shader = QgsRasterShader()
+        color_ramp = QgsColorRampShader()
+        color_ramp.setColorRampType(QgsColorRampShader.Discrete)
+
+        not_visible_color = self.btnNotVisibleColor.color()
+        if not_visible_color.alpha() == 255:
+            not_visible_color.setAlpha(180)
+
+        max_count = max(1, int(num_points or 1))
+        colors = [
+            QgsColorRampShader.ColorRampItem(nodata_value, QColor(0, 0, 0, 0), "NoData"),
+            QgsColorRampShader.ColorRampItem(0, not_visible_color, "보이지 않음"),
+        ]
+
+        # Red -> Yellow -> Green gradient by count (HSV hue 0..120)
+        for k in range(1, max_count + 1):
+            if max_count == 1:
+                hue = 120
+            else:
+                t = (k - 1) / (max_count - 1)
+                hue = int(round(t * 120))
+            colors.append(
+                QgsColorRampShader.ColorRampItem(
+                    k,
+                    QColor.fromHsv(hue, 200, 255, 200),
+                    f"{k}개 누적",
+                )
+            )
+
+        color_ramp.setColorRampItemList(colors)
+        shader.setRasterShaderFunction(color_ramp)
+
+        renderer = QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+        renderer.setClassificationMax(max_count)
+        renderer.setClassificationMin(0)
+        layer.setRenderer(renderer)
+        layer.setOpacity(0.7)
         layer.triggerRepaint()
 
     def apply_cumulative_style(self, layer, num_points):

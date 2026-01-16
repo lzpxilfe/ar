@@ -393,19 +393,35 @@
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
-       <widget class="QSpinBox" name="spinLineMaxPoints">
+     <item row="1" column="1">
+      <widget class="QSpinBox" name="spinLineMaxPoints">
         <property name="maximum">
          <number>10000</number>
         </property>
         <property name="value">
          <number>200</number>
         </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
+      </widget>
+     </item>
+     <item row="2" column="0" colspan="2">
+      <widget class="QCheckBox" name="chkCountOnly">
+       <property name="text">
+        <string>누적값을 ‘개수(1~N)’로 표시</string>
+       </property>
+       <property name="toolTip">
+        <string>체크 시 범례가 V(1,2,3...) 조합 대신 “보이지 않음 / 1개 누적 / 2개 누적 / … / N개 누적” 형태로 표시됩니다.</string>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+       <property name="visible">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </item>
    <item>
     <widget class="QLabel" name="lblLayerHint">
      <property name="text">
