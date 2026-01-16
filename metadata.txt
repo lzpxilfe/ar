@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 지형/경관 분석 툴킷 (Viewshed/DEM/프로파일/지형지수)
-version=1.6.46
+version=1.6.47
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -40,7 +40,8 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br><br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.6.46 - plugin metadata 문구 정리(표기 호환성)
+changelog=1.6.47 - 역방향 가시권: 시각적 불균등(상호가시성) 레이어 추가
+  1.6.46 - plugin metadata 문구 정리(표기 호환성)
   1.6.45 - plugin metadata(설명/의존성/참고문헌) 정리
   1.6.44 - 누적 가시권: '개수(Count)' 범례 옵션 추가
   1.6.43 - 역방향 가시권: 폴리곤 내부 컷아웃/그리기 개선

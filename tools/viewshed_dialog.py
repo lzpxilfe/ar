@@ -561,6 +561,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Show/Hide Count Only checkbox - relevant for Line and Multi-point
         if hasattr(self, 'chkCountOnly'):
             self.chkCountOnly.setVisible(is_line_mode or is_multi_mode)
+            if not (is_line_mode or is_multi_mode):
+                self.chkCountOnly.setChecked(False)
+
+        # Show/Hide Visual Imbalance checkbox - reverse viewshed only
+        if hasattr(self, "chkVisualImbalance"):
+            self.chkVisualImbalance.setVisible(is_reverse_mode)
+            if not is_reverse_mode:
+                self.chkVisualImbalance.setChecked(False)
         
         # Update internal mode flags
         self.multi_point_mode = is_multi_mode
@@ -1468,6 +1476,187 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
         finally:
             cleanup_files([raw_output])
+
+    def _is_visual_imbalance_enabled(self):
+        return (
+            hasattr(self, "chkVisualImbalance")
+            and self.chkVisualImbalance.isVisible()
+            and self.chkVisualImbalance.isEnabled()
+            and self.chkVisualImbalance.isChecked()
+            and self.radioReverseViewshed.isChecked()
+        )
+
+    def _compute_viewshed_raster_file(
+        self,
+        dem_layer,
+        point,
+        src_crs,
+        obs_height,
+        tgt_height,
+        max_dist,
+        curvature,
+        refraction,
+        refraction_coeff=0.13,
+        prefix="vs",
+    ):
+        """Compute a binary viewshed raster (0/255) clipped to a circular radius.
+
+        Returns:
+            str: output GeoTIFF path
+        """
+        run_id = f"{prefix}_{uuid.uuid4().hex[:10]}"
+        raw_output = os.path.join(tempfile.gettempdir(), f"archt_vs_raw_{run_id}.tif")
+        final_output = os.path.join(tempfile.gettempdir(), f"archt_vs_final_{run_id}.tif")
+
+        point_dem = self.transform_point(point, src_crs, dem_layer.crs())
+        extra = self._build_gdal_viewshed_extra(curvature, refraction, refraction_coeff)
+
+        params = {
+            "INPUT": dem_layer.source(),
+            "BAND": 1,
+            "OBSERVER": f"{point_dem.x()},{point_dem.y()}",
+            "OBSERVER_HEIGHT": float(obs_height),
+            "TARGET_HEIGHT": float(tgt_height),
+            "MAX_DISTANCE": float(max_dist),
+            "EXTRA": extra,
+            "OUTPUT": raw_output,
+        }
+
+        try:
+            processing.run("gdal:viewshed", params)
+
+            if os.path.exists(raw_output):
+                mask_layer = QgsVectorLayer(
+                    "Polygon?crs=" + dem_layer.crs().authid(),
+                    "temp_mask",
+                    "memory",
+                )
+                pr = mask_layer.dataProvider()
+                circle_feat = QgsFeature()
+                circle_feat.setGeometry(QgsGeometry.fromPointXY(point_dem).buffer(max_dist, 128))
+                pr.addFeatures([circle_feat])
+
+                processing.run(
+                    "gdal:cliprasterbymasklayer",
+                    {
+                        "INPUT": raw_output,
+                        "MASK": mask_layer,
+                        "NODATA": -9999,
+                        "DATA_TYPE": 6,  # Float32
+                        "ALPHA_BAND": False,
+                        "CROP_TO_CUTLINE": True,
+                        "KEEP_RESOLUTION": True,
+                        "OUTPUT": final_output,
+                    },
+                )
+
+                if not os.path.exists(final_output):
+                    shutil.copy(raw_output, final_output)
+
+            if not os.path.exists(final_output):
+                raise Exception("viewshed 결과 래스터 생성 실패")
+
+            return final_output
+        finally:
+            cleanup_files([raw_output])
+
+    def _create_visual_imbalance_raster(
+        self,
+        forward_raster_path,
+        reverse_raster_path,
+        output_raster_path,
+        nodata_value=-9999,
+    ):
+        """Create a raster highlighting where forward/reverse visibility differs.
+
+        Output values (Int16):
+        - -9999: NoData
+        - 0: same (both visible or both invisible) -> transparent in style
+        - 1: forward-only (center can see, but cannot be seen)
+        - 2: reverse-only (center is seen, but cannot see)
+        """
+        ds_f = None
+        ds_r = None
+        out_ds = None
+        try:
+            ds_f = gdal.Open(forward_raster_path, gdal.GA_ReadOnly)
+            ds_r = gdal.Open(reverse_raster_path, gdal.GA_ReadOnly)
+            if ds_f is None or ds_r is None:
+                raise Exception("불균등 분석: 입력 래스터를 열 수 없습니다.")
+
+            xsize = ds_r.RasterXSize
+            ysize = ds_r.RasterYSize
+            if ds_f.RasterXSize != xsize or ds_f.RasterYSize != ysize:
+                raise Exception("불균등 분석: 두 래스터의 해상도/범위가 일치하지 않습니다.")
+
+            gt = ds_r.GetGeoTransform()
+            proj = ds_r.GetProjection()
+
+            f_band = ds_f.GetRasterBand(1)
+            r_band = ds_r.GetRasterBand(1)
+            f_nodata = f_band.GetNoDataValue()
+            r_nodata = r_band.GetNoDataValue()
+
+            driver = gdal.GetDriverByName("GTiff")
+            out_ds = driver.Create(
+                output_raster_path,
+                xsize,
+                ysize,
+                1,
+                gdal.GDT_Int16,
+                options=["TILED=YES", "COMPRESS=LZW"],
+            )
+            if out_ds is None:
+                raise Exception("불균등 분석: 출력 래스터 생성 실패")
+
+            out_ds.SetGeoTransform(gt)
+            out_ds.SetProjection(proj)
+            out_band = out_ds.GetRasterBand(1)
+            out_band.SetNoDataValue(int(nodata_value))
+
+            block_x, block_y = f_band.GetBlockSize()
+            if not block_x or not block_y:
+                block_x, block_y = 512, 512
+
+            for yoff in range(0, ysize, block_y):
+                yblock = min(block_y, ysize - yoff)
+                for xoff in range(0, xsize, block_x):
+                    xblock = min(block_x, xsize - xoff)
+                    f_arr = f_band.ReadAsArray(xoff, yoff, xblock, yblock)
+                    r_arr = r_band.ReadAsArray(xoff, yoff, xblock, yblock)
+                    if f_arr is None or r_arr is None:
+                        continue
+
+                    f_arr = f_arr.astype(np.float32, copy=False)
+                    r_arr = r_arr.astype(np.float32, copy=False)
+
+                    nodata_mask = np.zeros(f_arr.shape, dtype=bool)
+                    if f_nodata is not None:
+                        nodata_mask |= f_arr == f_nodata
+                    if r_nodata is not None:
+                        nodata_mask |= r_arr == r_nodata
+                    nodata_mask |= f_arr == -9999
+                    nodata_mask |= r_arr == -9999
+
+                    f_vis = (~nodata_mask) & (f_arr > 0.5)
+                    r_vis = (~nodata_mask) & (r_arr > 0.5)
+
+                    out = np.zeros(f_arr.shape, dtype=np.int16)
+                    out[f_vis & (~r_vis)] = 1
+                    out[r_vis & (~f_vis)] = 2
+                    out[nodata_mask] = int(nodata_value)
+
+                    out_band.WriteArray(out, xoff, yoff)
+
+            out_band.FlushCache()
+            out_ds.FlushCache()
+        except Exception:
+            cleanup_files([output_raster_path])
+            raise
+        finally:
+            out_ds = None
+            ds_f = None
+            ds_r = None
     
     # [v1.6.17] run_line_viewshed REMOVED - Line Viewshed now uses run_multi_viewshed
 
@@ -1877,6 +2066,107 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 pass
             cleanup_files(temp_outputs)
 
+    def run_reverse_viewshed_with_visual_imbalance(
+        self,
+        dem_layer,
+        obs_height,
+        tgt_height,
+        max_dist,
+        curvature,
+        refraction,
+        refraction_coeff=0.13,
+    ):
+        """Reverse viewshed + visual imbalance (forward vs reverse mismatch) result."""
+        points_info = self.get_context_point_and_crs()
+        if not points_info:
+            push_message(self.iface, "오류", "대상물 위치를 선택해주세요.", level=2)
+            restore_ui_focus(self)
+            return
+
+        if hasattr(self, "chkHiguchi") and self.chkHiguchi.isChecked():
+            push_message(
+                self.iface,
+                "안내",
+                "시각적 불균등 분석은 히구치 거리대 모드에서 지원되지 않습니다.",
+                level=1,
+            )
+            restore_ui_focus(self)
+            return
+
+        # [v1.5.97] Hide dialog only when processing starts
+        self.hide()
+        QtWidgets.QApplication.processEvents()
+
+        point, src_crs = points_info[0]
+
+        # If manual selection, create persistent point layer
+        if not self.radioFromLayer.isChecked():
+            self.create_observer_layer("역방향_대상물", points_info)
+
+        forward_raster = None
+        try:
+            self.iface.messageBar().pushMessage("처리 중", "시각적 불균등: 1/3 (정방향 가시권)", level=0)
+            forward_raster = self._compute_viewshed_raster_file(
+                dem_layer=dem_layer,
+                point=point,
+                src_crs=src_crs,
+                obs_height=obs_height,
+                tgt_height=0.0,
+                max_dist=max_dist,
+                curvature=curvature,
+                refraction=refraction,
+                refraction_coeff=refraction_coeff,
+                prefix="fwd",
+            )
+
+            self.iface.messageBar().pushMessage("처리 중", "시각적 불균등: 2/3 (역방향 가시권)", level=0)
+            reverse_raster = self._compute_viewshed_raster_file(
+                dem_layer=dem_layer,
+                point=point,
+                src_crs=src_crs,
+                obs_height=tgt_height,  # target becomes observer
+                tgt_height=obs_height,  # observer height becomes target
+                max_dist=max_dist,
+                curvature=curvature,
+                refraction=refraction,
+                refraction_coeff=refraction_coeff,
+                prefix="rev",
+            )
+
+            imbalance_raster = os.path.join(
+                tempfile.gettempdir(),
+                f"archt_rvs_imbalance_{uuid.uuid4().hex[:8]}.tif",
+            )
+            self.iface.messageBar().pushMessage("처리 중", "시각적 불균등: 3/3 (불균등 분류)", level=0)
+            self._create_visual_imbalance_raster(forward_raster, reverse_raster, imbalance_raster)
+
+            reverse_layer_name = f"역방향_가시권_{int(max_dist)}m"
+            imbalance_layer_name = f"역방향_불균등_{int(max_dist)}m"
+
+            reverse_layer = QgsRasterLayer(reverse_raster, reverse_layer_name)
+            if not reverse_layer.isValid():
+                raise Exception("역방향 결과 레이어 로드 실패")
+            self.apply_viewshed_style(reverse_layer)
+            QgsProject.instance().addMapLayer(reverse_layer)
+            self.last_result_layer_id = reverse_layer.id()
+
+            imbalance_layer = QgsRasterLayer(imbalance_raster, imbalance_layer_name)
+            if not imbalance_layer.isValid():
+                raise Exception("불균등 결과 레이어 로드 실패")
+            self.apply_visual_imbalance_style(imbalance_layer)
+            QgsProject.instance().addMapLayer(imbalance_layer)
+
+            self.link_current_marker_to_layer(reverse_layer.id(), [(point, src_crs)])
+            self.update_layer_order()
+
+            self.iface.messageBar().pushMessage("완료", "시각적 불균등 분석 완료", level=0)
+            self.accept()
+        except Exception as e:
+            push_message(self.iface, "오류", f"시각적 불균등 처리 중 오류: {str(e)}", level=2)
+            restore_ui_focus(self)
+        finally:
+            cleanup_files([forward_raster] if forward_raster else [])
+
     def run_reverse_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run reverse viewshed - from where can the target be seen?
         
@@ -1893,16 +2183,27 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 return
 
             if mode == "centroid":
-                # Existing single-point pipeline (supports Higuchi).
-                self.run_single_viewshed(
-                    dem_layer,
-                    tgt_height,  # Target becomes observer
-                    obs_height,  # Observer height becomes target
-                    max_dist,
-                    curvature,
-                    refraction,
-                    refraction_coeff,
-                )
+                if self._is_visual_imbalance_enabled():
+                    self.run_reverse_viewshed_with_visual_imbalance(
+                        dem_layer,
+                        obs_height,
+                        tgt_height,
+                        max_dist,
+                        curvature,
+                        refraction,
+                        refraction_coeff,
+                    )
+                else:
+                    # Existing single-point pipeline (supports Higuchi).
+                    self.run_single_viewshed(
+                        dem_layer,
+                        tgt_height,  # Target becomes observer
+                        obs_height,  # Observer height becomes target
+                        max_dist,
+                        curvature,
+                        refraction,
+                        refraction_coeff,
+                    )
                 return
 
             # Boundary mode (Union)
@@ -1969,15 +2270,26 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
                     if mode == "centroid":
                         if len(geoms) == 1:
-                            self.run_single_viewshed(
-                                dem_layer,
-                                tgt_height,
-                                obs_height,
-                                max_dist,
-                                curvature,
-                                refraction,
-                                refraction_coeff,
-                            )
+                            if self._is_visual_imbalance_enabled():
+                                self.run_reverse_viewshed_with_visual_imbalance(
+                                    dem_layer,
+                                    obs_height,
+                                    tgt_height,
+                                    max_dist,
+                                    curvature,
+                                    refraction,
+                                    refraction_coeff,
+                                )
+                            else:
+                                self.run_single_viewshed(
+                                    dem_layer,
+                                    tgt_height,
+                                    obs_height,
+                                    max_dist,
+                                    curvature,
+                                    refraction,
+                                    refraction_coeff,
+                                )
                             return
 
                         pts = []
@@ -2052,15 +2364,26 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     return
 
         # Fallback: regular reverse viewshed (single point)
-        self.run_single_viewshed(
-            dem_layer,
-            tgt_height,  # Target becomes observer
-            obs_height,  # Observer height becomes target
-            max_dist,
-            curvature,
-            refraction,
-            refraction_coeff,
-        )
+        if self._is_visual_imbalance_enabled():
+            self.run_reverse_viewshed_with_visual_imbalance(
+                dem_layer,
+                obs_height,
+                tgt_height,
+                max_dist,
+                curvature,
+                refraction,
+                refraction_coeff,
+            )
+        else:
+            self.run_single_viewshed(
+                dem_layer,
+                tgt_height,  # Target becomes observer
+                obs_height,  # Observer height becomes target
+                max_dist,
+                curvature,
+                refraction,
+                refraction_coeff,
+            )
     
     def run_line_of_sight(self, dem_layer, obs_height, tgt_height):
         """Run Line of Sight analysis between observer and target points
@@ -3031,6 +3354,32 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         renderer.setClassificationMin(0)
         layer.setRenderer(renderer)
         layer.setOpacity(0.7)
+        layer.triggerRepaint()
+
+    def apply_visual_imbalance_style(self, layer):
+        """Apply styling for visual imbalance raster (forward vs reverse mismatch)."""
+        nodata_value = -9999
+        layer.dataProvider().setNoDataValue(1, nodata_value)
+
+        shader = QgsRasterShader()
+        color_ramp = QgsColorRampShader()
+        color_ramp.setColorRampType(QgsColorRampShader.Discrete)
+
+        colors = [
+            QgsColorRampShader.ColorRampItem(nodata_value, QColor(0, 0, 0, 0), "NoData"),
+            QgsColorRampShader.ColorRampItem(0, QColor(0, 0, 0, 0), "동일(상호/비가시)"),
+            QgsColorRampShader.ColorRampItem(1, QColor(0, 150, 255, 200), "관측점만 보임 (내가 보고, 상대는 못봄)"),
+            QgsColorRampShader.ColorRampItem(2, QColor(255, 140, 0, 200), "역방향만 보임 (상대는 보고, 나는 못봄)"),
+        ]
+
+        color_ramp.setColorRampItemList(colors)
+        shader.setRasterShaderFunction(color_ramp)
+
+        renderer = QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+        renderer.setClassificationMax(2)
+        renderer.setClassificationMin(0)
+        layer.setRenderer(renderer)
+        layer.setOpacity(0.8)
         layer.triggerRepaint()
 
     def apply_cumulative_style(self, layer, num_points):
