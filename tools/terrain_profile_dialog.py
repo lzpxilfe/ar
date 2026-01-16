@@ -474,7 +474,10 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             distance_area = QgsDistanceArea()
             distance_area.setSourceCrs(canvas_crs, QgsProject.instance().transformContext())
             distance_area.setEllipsoid(QgsProject.instance().ellipsoid() or "WGS84")
-            distance_area.setEllipsoidalMode(True)
+            try:
+                distance_area.setEllipsoidalMode(True)
+            except AttributeError:
+                pass
             total_distance_m = float(distance_area.measureLine(start_canvas, end_canvas))
             
             push_message(
