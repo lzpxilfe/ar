@@ -69,6 +69,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.result_marker_map = {} # layer_id -> [markers]
         self.result_annotation_map = {} # layer_id -> [annotations] [v1.6.02]
         self.result_observer_layer_map = {} # [v1.6.18] viewshed_layer_id -> observer_layer_id
+        self.result_aux_layer_map = {}  # [v1.6.49] raster_layer_id -> [aux_layer_ids]
         self.label_layer = None # Core reference to prevent GC issues
         self._los_profile_data = {}  # viscode_layer_id -> profile payload
         self._los_profile_dialogs = {}  # viscode_layer_id -> dialog instance
@@ -766,6 +767,16 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 except Exception:
                     pass
                 del self.result_observer_layer_map[lid]
+
+            # 3-1. Clean up linked auxiliary layers (e.g., analysis radius rings)
+            if lid in self.result_aux_layer_map:
+                aux_ids = self.result_aux_layer_map.get(lid, [])
+                for aux_id in aux_ids:
+                    try:
+                        QgsProject.instance().removeMapLayer(aux_id)
+                    except Exception:
+                        pass
+                del self.result_aux_layer_map[lid]
 
             # 4. Clean up LOS profile payload/dialogs
             if lid in getattr(self, "_los_profile_data", {}):
@@ -2166,6 +2177,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.apply_visual_imbalance_style(imbalance_layer)
             QgsProject.instance().addMapLayer(imbalance_layer)
 
+            # Draw a radius ring so the analysis boundary is visible even when "동일" areas are transparent.
+            try:
+                ring_layer = self.create_analysis_radius_ring(
+                    point,
+                    src_crs,
+                    max_dist,
+                    dem_layer,
+                    layer_name=f"역방향_반경_{int(max_dist)}m",
+                )
+                if ring_layer is not None:
+                    self.result_aux_layer_map.setdefault(imbalance_layer.id(), []).append(ring_layer.id())
+            except Exception:
+                pass
+
             self.link_current_marker_to_layer(reverse_layer.id(), [(point, src_crs)])
             self.update_layer_order()
 
@@ -3377,7 +3402,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
 
         colors = [
             QgsColorRampShader.ColorRampItem(nodata_value, QColor(0, 0, 0, 0), "NoData"),
-            QgsColorRampShader.ColorRampItem(0, QColor(0, 0, 0, 0), "동일(상호/비가시)"),
+            QgsColorRampShader.ColorRampItem(0, QColor(0, 0, 0, 0), "표시 안함(둘 다 보임/둘 다 안보임)"),
             QgsColorRampShader.ColorRampItem(1, QColor(0, 150, 255, 200), "관측점만 보임 (내가 보고, 상대는 못봄)"),
             QgsColorRampShader.ColorRampItem(2, QColor(255, 140, 0, 200), "역방향만 보임 (상대는 보고, 나는 못봄)"),
         ]
@@ -3597,6 +3622,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
     
     def on_higuchi_toggled(self, checked):
         """Suggest parameters suited for Higuchi analysis"""
+        # Visual imbalance overlay is not compatible with Higuchi reclassification.
+        if hasattr(self, "chkVisualImbalance"):
+            try:
+                self.chkVisualImbalance.setEnabled(not checked)
+                if checked:
+                    self.chkVisualImbalance.setChecked(False)
+            except Exception:
+                pass
+
         if not checked or not hasattr(self, "spinMaxDistance"):
             return
 
@@ -3701,6 +3735,44 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.setRenderer(renderer)
         
         QgsProject.instance().addMapLayers([layer])
+
+    def create_analysis_radius_ring(self, center_point, center_crs, max_dist, dem_layer, layer_name=None):
+        """Create a single dashed ring showing the analysis radius."""
+        if not layer_name:
+            layer_name = f"관측반경_{int(max_dist)}m"
+
+        layer = QgsVectorLayer("LineString?crs=" + dem_layer.crs().authid(), layer_name, "memory")
+        pr = layer.dataProvider()
+        pr.addAttributes(
+            [
+                QgsField("distance_m", QVariant.Int),
+            ]
+        )
+        layer.updateFields()
+
+        center_dem = self.transform_point(center_point, center_crs, dem_layer.crs())
+        buffer_geom = QgsGeometry.fromPointXY(center_dem).buffer(float(max_dist), 128)
+        if not buffer_geom or buffer_geom.isEmpty():
+            return None
+
+        ring_geom = buffer_geom.boundary()
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(ring_geom)
+        feat.setAttributes([int(max_dist)])
+        pr.addFeature(feat)
+        layer.updateExtents()
+
+        symbol = QgsLineSymbol.createSimple(
+            {
+                "color": "120,120,120,220",
+                "width": "1.0",
+                "line_style": "dash",
+            }
+        )
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+        QgsProject.instance().addMapLayer(layer)
+        return layer
     
     def apply_viewshed_style(self, layer):
         """Apply a binary visibility style to viewshed raster
