@@ -130,7 +130,24 @@ class ArchToolkit:
         # Remove from menu
         for action in self.actions:
             self.iface.removePluginMenu(self.menu_name, action)
-            
+
+        # Close persistent dialogs and disconnect long-lived signals (prevents stale callbacks after reload)
+        if self.viewshed_dlg is not None:
+            try:
+                if hasattr(self.viewshed_dlg, "cleanup_for_unload"):
+                    self.viewshed_dlg.cleanup_for_unload()
+            except Exception:
+                pass
+            try:
+                self.viewshed_dlg.close()
+            except Exception:
+                pass
+            try:
+                self.viewshed_dlg.deleteLater()
+            except Exception:
+                pass
+            self.viewshed_dlg = None
+             
         # Remove toolbar cleanly from mainWindow
         if self.toolbar:
             self.iface.mainWindow().removeToolBar(self.toolbar)

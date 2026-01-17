@@ -73,6 +73,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.label_layer = None # Core reference to prevent GC issues
         self._los_profile_data = {}  # viscode_layer_id -> profile payload
         self._los_profile_dialogs = {}  # viscode_layer_id -> dialog instance
+        self._los_selection_handlers = {}  # viscode_layer_id -> selectionChanged handler (for disconnect)
 
         
         
@@ -782,6 +783,16 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if lid in getattr(self, "_los_profile_data", {}):
                 try:
                     del self._los_profile_data[lid]
+                except Exception:
+                    pass
+
+            # 4-1. Disconnect LOS selection handlers (to avoid keeping dialog alive)
+            if lid in getattr(self, "_los_selection_handlers", {}):
+                try:
+                    handler = self._los_selection_handlers.pop(lid, None)
+                    layer = QgsProject.instance().mapLayer(lid)
+                    if layer and handler:
+                        layer.selectionChanged.disconnect(handler)
                 except Exception:
                     pass
 
@@ -2772,7 +2783,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         }
 
         try:
-            layer.selectionChanged.connect(lambda *_args, lid=layer.id(): self._on_los_layer_selection_changed(lid))
+            handler = lambda *_args, lid=layer.id(): self._on_los_layer_selection_changed(lid)
+            self._los_selection_handlers[layer.id()] = handler
+            layer.selectionChanged.connect(handler)
         except Exception:
             pass
 
@@ -3896,6 +3909,47 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.original_tool:
             self.canvas.setMapTool(self.original_tool)
         event.accept()
+
+    def cleanup_for_unload(self):
+        """Disconnect long-lived signals and close child dialogs (for plugin unload/reload)."""
+        # Disconnect global/project signals that keep this dialog alive across plugin reloads.
+        try:
+            QgsProject.instance().layersWillBeRemoved.disconnect(self.on_layers_removed)
+        except Exception:
+            pass
+        try:
+            self.iface.currentLayerChanged.disconnect(self._on_current_layer_changed)
+        except Exception:
+            pass
+        try:
+            self.iface.layerTreeView().clicked.disconnect(self._on_layer_tree_clicked)
+        except Exception:
+            pass
+
+        # Disconnect per-layer selection handlers for LOS profile reopen.
+        try:
+            for lid, handler in list(getattr(self, "_los_selection_handlers", {}).items()):
+                try:
+                    layer = QgsProject.instance().mapLayer(lid)
+                    if layer and handler:
+                        layer.selectionChanged.disconnect(handler)
+                except Exception:
+                    pass
+            self._los_selection_handlers = {}
+        except Exception:
+            pass
+
+        # Close any open profile dialogs to ensure their canvas signals are released.
+        try:
+            for _lid, dlg in list(getattr(self, "_los_profile_dialogs", {}).items()):
+                try:
+                    if dlg:
+                        dlg.close()
+                except Exception:
+                    pass
+            self._los_profile_dialogs = {}
+        except Exception:
+            pass
 
 
 class ViewshedPointTool(QgsMapToolEmitPoint):
