@@ -34,6 +34,7 @@ from qgis.core import (
     QgsGeometry,
     QgsLineSymbol,
     QgsMapLayerProxyModel,
+    QgsMapLayer,
     QgsMarkerSymbol,
     QgsPointLocator,
     QgsPointXY,
@@ -53,7 +54,7 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator
 
-from .utils import is_metric_crs, log_message, push_message, restore_ui_focus, transform_point
+from .utils import cleanup_files, is_metric_crs, log_message, push_message, restore_ui_focus, transform_point
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -1173,6 +1174,8 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self._task = None
         self._task_running = False
+        self._layer_temp_outputs = {}  # layer_id -> [temporary file paths]
+        QgsProject.instance().layersWillBeRemoved.connect(self._on_project_layers_removed)
 
         # Ensure no lingering preview graphics on startup
         self._reset_preview()
@@ -1632,6 +1635,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             cost_layer = QgsRasterLayer(res.cost_raster_path, layer_name)
             if cost_layer.isValid():
                 self._apply_cost_raster_style(cost_layer, res.cost_min, res.cost_max)
+                self._track_layer_output(cost_layer, res.cost_raster_path)
                 bottom_to_top.append(cost_layer)
 
         if res.energy_raster_path:
@@ -1641,6 +1645,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._apply_energy_raster_style(
                     energy_layer, res.energy_min, res.energy_max
                 )
+                self._track_layer_output(energy_layer, res.energy_raster_path)
                 bottom_to_top.append(energy_layer)
 
         if res.isochrones_vector_path:
@@ -1654,6 +1659,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             )
             if iso_layer.isValid():
                 self._apply_isochrone_style(iso_layer)
+                self._track_layer_output(iso_layer, res.isochrones_vector_path)
                 bottom_to_top.append(iso_layer)
 
         if res.start_xy and res.dem_authid:
@@ -1770,6 +1776,23 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     root.insertChildNode(0, parent_group)
         except Exception:
             pass
+
+    def _track_layer_output(self, layer: QgsMapLayer, path: Optional[str]):
+        if not layer or not path:
+            return
+        self._layer_temp_outputs.setdefault(layer.id(), []).append(path)
+
+    def _cleanup_layer_outputs(self, layer_ids):
+        paths = []
+        for lid in layer_ids:
+            outputs = self._layer_temp_outputs.pop(lid, [])
+            if outputs:
+                paths.extend(outputs)
+        if paths:
+            cleanup_files(paths)
+
+    def _on_project_layers_removed(self, layer_ids):
+        self._cleanup_layer_outputs(layer_ids)
 
     def _apply_isochrone_style(self, layer: QgsVectorLayer):
         try:
@@ -1986,6 +2009,11 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
 
             if self.original_tool:
                 self.canvas.setMapTool(self.original_tool)
+            try:
+                QgsProject.instance().layersWillBeRemoved.disconnect(self._on_project_layers_removed)
+            except Exception:
+                pass
+            self._layer_temp_outputs.clear()
         except Exception:
             pass
 
