@@ -19,6 +19,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from osgeo import gdal, ogr, osr
 
+import re
+
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtGui import QColor, QIcon
@@ -64,6 +66,7 @@ MODEL_NAISMITH = "naismith_time"
 MODEL_HERZOG_METABOLIC = "herzog_metabolic_time"
 MODEL_CONOLLY_LAKE = "conolly_lake_time"
 MODEL_HERZOG_WHEELED = "herzog_wheeled_time"
+MODEL_PANDOLF = "pandolf_energy"
 
 
 @dataclass
@@ -73,15 +76,21 @@ class CostTaskResult:
     cost_raster_path: Optional[str] = None
     cost_min: Optional[float] = None
     cost_max: Optional[float] = None
+    energy_raster_path: Optional[str] = None
+    energy_min: Optional[float] = None
+    energy_max: Optional[float] = None
     path_coords: Optional[List[Tuple[float, float]]] = None  # in DEM CRS
     start_xy: Optional[Tuple[float, float]] = None  # in DEM CRS
     end_xy: Optional[Tuple[float, float]] = None  # in DEM CRS
     dem_authid: Optional[str] = None
     model_label: Optional[str] = None
     total_cost_s: Optional[float] = None
+    total_energy_kcal: Optional[float] = None
     straight_time_s: Optional[float] = None
+    straight_energy_kcal: Optional[float] = None
     straight_dist_m: Optional[float] = None
     lcp_dist_m: Optional[float] = None
+    lcp_time_s: Optional[float] = None
     isochrones_vector_path: Optional[str] = None
 
 
@@ -166,7 +175,7 @@ def _bilinear_elevation(dem, nodata_mask, inv_gt, x, y):
     return (v0 * (1.0 - dy)) + (v1 * dy)
 
 
-def _estimate_straight_line_time_s(
+def _estimate_straight_line_cost(
     model_key,
     model_params,
     start_xy,
@@ -175,8 +184,9 @@ def _estimate_straight_line_time_s(
     nodata_mask,
     win_gt,
     step_m,
+    cost_mode="time_s",
 ):
-    """Estimate travel time along the straight line segment by DEM sampling."""
+    """Estimate cumulative cost along a straight line by DEM sampling."""
     sx, sy = start_xy
     ex, ey = end_xy
     straight_dist = math.hypot(ex - sx, ey - sy)
@@ -191,7 +201,7 @@ def _estimate_straight_line_time_s(
     if z_prev is None:
         return None, straight_dist
 
-    total_s = 0.0
+    total_cost = 0.0
     x_prev, y_prev = float(sx), float(sy)
 
     for i in range(1, n_steps + 1):
@@ -203,10 +213,10 @@ def _estimate_straight_line_time_s(
             return None, straight_dist
         horiz = math.hypot(x - x_prev, y - y_prev)
         dz = float(z) - float(z_prev)
-        total_s += _edge_cost(model_key, horiz, dz, model_params)
+        total_cost += _edge_cost(model_key, horiz, dz, model_params, cost_mode=cost_mode)
         x_prev, y_prev, z_prev = float(x), float(y), float(z)
 
-    return total_s, straight_dist
+    return total_cost, straight_dist
 
 
 def _polyline_length(coords):
@@ -216,6 +226,59 @@ def _polyline_length(coords):
     for (x0, y0), (x1, y1) in zip(coords, coords[1:]):
         total += math.hypot(float(x1) - float(x0), float(y1) - float(y0))
     return total
+
+
+def _default_isochrone_levels_minutes(max_minutes):
+    """Generate isochrone levels (minutes) with coarse spacing as time increases.
+
+    - Up to 60 min: every 15 min
+    - 60~180 min: every 30 min
+    - 180+ min: every 60 min
+    """
+    try:
+        max_minutes = float(max_minutes)
+    except Exception:
+        return []
+    if not math.isfinite(max_minutes) or max_minutes <= 0:
+        return []
+
+    levels = []
+
+    for v in (15, 30, 45, 60):
+        if v <= max_minutes + 1e-6:
+            levels.append(float(v))
+
+    v = 90
+    while v <= 180 and v <= max_minutes + 1e-6:
+        levels.append(float(v))
+        v += 30
+
+    v = 240
+    # Safety cap to avoid producing an excessive number of contours on huge rasters.
+    max_levels = 60
+    while v <= max_minutes + 1e-6 and len(levels) < max_levels:
+        levels.append(float(v))
+        v += 60
+
+    # Ensure sorted unique values
+    uniq = []
+    for t in sorted(set(levels)):
+        if t > 0:
+            uniq.append(t)
+    return uniq
+
+
+def _safe_layer_name_fragment(text):
+    """Sanitize user-visible fragments used in layer/group names."""
+    s = (text or "").strip()
+    if not s:
+        return ""
+    # Prefer the part before the first '(' to avoid overly long mixed labels.
+    s = s.split("(")[0].strip()
+    s = re.sub(r"[\\\\/:*?\"<>|]+", "_", s)
+    s = re.sub(r"\\s+", " ", s).strip()
+    # Keep it short-ish for layer tree readability.
+    return s[:40]
 
 
 def _create_isochrones_gpkg(cost_raster_path, output_gpkg_path, levels_minutes, nodata_value=-9999.0):
@@ -349,7 +412,7 @@ def _neighbors(allow_diagonal, dx, dy):
     return moves
 
 
-def _edge_cost(model_key, horiz_m, dz_m, model_params):
+def _edge_cost(model_key, horiz_m, dz_m, model_params, *, cost_mode="time_s"):
     if horiz_m <= 0:
         return 0.0
 
@@ -369,6 +432,36 @@ def _edge_cost(model_key, horiz_m, dz_m, model_params):
             model_params.get("naismith_horizontal_kmh", 5.0),
             model_params.get("naismith_ascent_m_per_h", 600.0),
         )
+
+    if model_key == MODEL_PANDOLF:
+        # Pandolf et al. (1977) load carriage equation (energy-based).
+        #
+        # M(W) = 1.5W + 2.0(W+L)(L/W)^2 + η(W+L)(1.5V^2 + 0.35VG)
+        # where:
+        #   W: body weight (kg)
+        #   L: load weight (kg)
+        #   V: speed (m/s)
+        #   G: grade (%)  (signed)
+        #   η: terrain factor (dimensionless)
+        #
+        # Edge energy (J) = M * (distance / V)
+        # Edge time (s)   = distance / V
+        W = max(1.0, float(model_params.get("pandolf_body_kg", 70.0)))
+        L = max(0.0, float(model_params.get("pandolf_load_kg", 0.0)))
+        eta = max(0.1, float(model_params.get("pandolf_terrain_factor", 1.0)))
+        V = max(0.05, float(model_params.get("pandolf_speed_mps", 5.0 * 1000.0 / 3600.0)))
+
+        if cost_mode == "time_s":
+            return float(horiz_m) / V
+
+        grade_percent = (float(dz_m) / float(horiz_m)) * 100.0
+        load_ratio = (L / W) if W > 0 else 0.0
+        M = (1.5 * W) + (2.0 * (W + L) * (load_ratio**2)) + (
+            eta * (W + L) * (1.5 * V * V + 0.35 * V * grade_percent)
+        )
+        # Ensure strictly positive to keep the path solver stable.
+        M = max(1.0, float(M))
+        return (float(M) * float(horiz_m)) / V
 
     # Isotropic slope-based models (use absolute slope magnitude)
     slope_abs = abs(float(dz_m)) / float(horiz_m) if horiz_m > 0 else 0.0  # tan(theta)
@@ -430,6 +523,7 @@ def _astar_path(
     allow_diagonal,
     model_key,
     model_params,
+    cost_mode="time_s",
     cancel_check=None,
 ):
     rows, cols = dem.shape
@@ -442,22 +536,29 @@ def _astar_path(
     prev = np.full(rows * cols, -1, dtype=np.int32)
     gscore[start_idx] = 0.0
 
-    if model_key == MODEL_TOBLER:
-        vmax = float(model_params.get("tobler_base_kmh", 6.0)) * 1000.0 / 3600.0
-    elif model_key == MODEL_NAISMITH:
-        vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
-    elif model_key == MODEL_HERZOG_METABOLIC:
-        vmax = float(model_params.get("herzog_base_kmh", 5.0)) * 1000.0 / 3600.0
-    elif model_key == MODEL_CONOLLY_LAKE:
-        vmax = float(model_params.get("conolly_base_kmh", 5.0)) * 1000.0 / 3600.0
-    elif model_key == MODEL_HERZOG_WHEELED:
-        vmax = float(model_params.get("wheeled_base_kmh", 4.0)) * 1000.0 / 3600.0
+    if cost_mode != "time_s":
+        # Keep heuristic admissible (0) for non-time costs (e.g. energy).
+        def hfun(_r, _c):
+            return 0.0
     else:
-        vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
-    vmax = max(0.05, vmax)
+        if model_key == MODEL_TOBLER:
+            vmax = float(model_params.get("tobler_base_kmh", 6.0)) * 1000.0 / 3600.0
+        elif model_key == MODEL_NAISMITH:
+            vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
+        elif model_key == MODEL_HERZOG_METABOLIC:
+            vmax = float(model_params.get("herzog_base_kmh", 5.0)) * 1000.0 / 3600.0
+        elif model_key == MODEL_CONOLLY_LAKE:
+            vmax = float(model_params.get("conolly_base_kmh", 5.0)) * 1000.0 / 3600.0
+        elif model_key == MODEL_HERZOG_WHEELED:
+            vmax = float(model_params.get("wheeled_base_kmh", 4.0)) * 1000.0 / 3600.0
+        elif model_key == MODEL_PANDOLF:
+            vmax = float(model_params.get("pandolf_speed_mps", 5.0 * 1000.0 / 3600.0))
+        else:
+            vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
+        vmax = max(0.05, vmax)
 
-    def hfun(r, c):
-        return math.hypot((ec - c) * dx, (er - r) * dy) / vmax
+        def hfun(r, c):
+            return math.hypot((ec - c) * dx, (er - r) * dy) / vmax
 
     heap = [(hfun(sr, sc), 0.0, start_idx)]
     moves = _neighbors(allow_diagonal, dx, dy)
@@ -485,7 +586,7 @@ def _astar_path(
             if nodata_mask[nr, nc]:
                 continue
             dz = float(dem[nr, nc]) - z0
-            w = _edge_cost(model_key, horiz, dz, model_params)
+            w = _edge_cost(model_key, horiz, dz, model_params, cost_mode=cost_mode)
 
             nidx = nr * cols + nc
             ng = g + w
@@ -506,6 +607,7 @@ def _dijkstra_full(
     allow_diagonal,
     model_key,
     model_params,
+    cost_mode="time_s",
     cancel_check=None,
     progress_cb=None,
 ):
@@ -548,7 +650,7 @@ def _dijkstra_full(
                 continue
 
             dz = float(dem[nr, nc]) - z0
-            w = _edge_cost(model_key, horiz, dz, model_params)
+            w = _edge_cost(model_key, horiz, dz, model_params, cost_mode=cost_mode)
             nidx = nr * cols + nc
             nd = d + w
             if nd < dist[nidx]:
@@ -599,6 +701,7 @@ class CostSurfaceWorker(QgsTask):
         model_params,
         model_label,
         create_cost_raster,
+        create_energy_raster,
         create_path,
         on_done,
     ):
@@ -613,6 +716,7 @@ class CostSurfaceWorker(QgsTask):
         self.model_params = dict(model_params or {})
         self.model_label = model_label
         self.create_cost_raster = bool(create_cost_raster)
+        self.create_energy_raster = bool(create_energy_raster)
         self.create_path = bool(create_path)
         self.on_done = on_done
         self.result_obj = CostTaskResult(ok=False)
@@ -725,12 +829,28 @@ class CostSurfaceWorker(QgsTask):
             except Exception:
                 pass
 
-        dist = None
-        prev = None
-        end_cost = None
+        is_energy_model = self.model_key == MODEL_PANDOLF
+        create_time_raster = bool(self.create_cost_raster)
+        create_energy_raster = bool(self.create_energy_raster and is_energy_model)
+        create_path = bool(self.create_path and has_end)
 
-        if self.create_cost_raster:
-            dist, prev = _dijkstra_full(
+        dist_time = None
+        prev_time = None
+        end_time_s = None
+
+        dist_energy = None
+        prev_energy = None
+        end_energy_j = None
+
+        def progress_part(p, offset, scale):
+            progress_cb(float(offset) + float(p) * float(scale))
+
+        # Time raster (seconds)
+        if create_time_raster:
+            cb = progress_cb
+            if create_energy_raster:
+                cb = lambda p: progress_part(p, 0.0, 0.5)
+            dist_time, prev_time = _dijkstra_full(
                 dem,
                 nodata_mask,
                 start_rc,
@@ -739,39 +859,90 @@ class CostSurfaceWorker(QgsTask):
                 self.allow_diagonal,
                 self.model_key,
                 self.model_params,
+                cost_mode="time_s",
                 cancel_check=cancel_check,
-                progress_cb=progress_cb,
+                progress_cb=cb,
             )
-            if dist is None or prev is None:
+            if dist_time is None or prev_time is None:
                 return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
             if has_end:
-                end_cost = float(dist[end_rc[0] * cols + end_rc[1]])
-        else:
-            if not has_end:
-                return CostTaskResult(ok=False, message="최소비용경로를 생성하려면 도착점이 필요합니다.")
-            prev, end_cost = _astar_path(
+                end_time_s = float(dist_time[end_rc[0] * cols + end_rc[1]])
+
+        # Energy raster (J)
+        if create_energy_raster:
+            cb = progress_cb
+            if create_time_raster:
+                cb = lambda p: progress_part(p, 50.0, 0.5)
+            dist_energy, prev_energy = _dijkstra_full(
                 dem,
                 nodata_mask,
                 start_rc,
-                end_rc,
                 dx,
                 dy,
                 self.allow_diagonal,
                 self.model_key,
                 self.model_params,
+                cost_mode="energy_j",
                 cancel_check=cancel_check,
+                progress_cb=cb,
             )
-            if prev is None:
+            if dist_energy is None or prev_energy is None:
+                return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
+            if has_end:
+                end_energy_j = float(dist_energy[end_rc[0] * cols + end_rc[1]])
+
+        # Path: optimize by the model's primary cost (energy for Pandolf, time otherwise).
+        path_cost_mode = "energy_j" if is_energy_model else "time_s"
+        prev_for_path = None
+        end_cost_for_path = None
+        if create_path:
+            if path_cost_mode == "energy_j":
+                if prev_energy is None:
+                    prev_energy, end_energy_j = _astar_path(
+                        dem,
+                        nodata_mask,
+                        start_rc,
+                        end_rc,
+                        dx,
+                        dy,
+                        self.allow_diagonal,
+                        self.model_key,
+                        self.model_params,
+                        cost_mode="energy_j",
+                        cancel_check=cancel_check,
+                    )
+                prev_for_path = prev_energy
+                end_cost_for_path = end_energy_j
+            else:
+                if prev_time is None:
+                    prev_time, end_time_s = _astar_path(
+                        dem,
+                        nodata_mask,
+                        start_rc,
+                        end_rc,
+                        dx,
+                        dy,
+                        self.allow_diagonal,
+                        self.model_key,
+                        self.model_params,
+                        cost_mode="time_s",
+                        cancel_check=cancel_check,
+                    )
+                prev_for_path = prev_time
+                end_cost_for_path = end_time_s
+
+            if prev_for_path is None:
                 return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
 
         win_gt = _window_geotransform(gt, xoff, yoff)
+        run_id = uuid.uuid4().hex[:8]
 
         cost_raster_path = None
         cost_min = None
         cost_max = None
         isochrones_vector_path = None
-        if self.create_cost_raster and dist is not None:
-            dist2d_s = dist.reshape((rows, cols))
+        if create_time_raster and dist_time is not None:
+            dist2d_s = dist_time.reshape((rows, cols))
             valid = np.isfinite(dist2d_s) & (~nodata_mask)
             if np.any(valid):
                 dist2d_min = dist2d_s[valid] / 60.0
@@ -781,7 +952,6 @@ class CostSurfaceWorker(QgsTask):
             out = np.full(dist2d_s.shape, -9999.0, dtype=np.float32)
             out[valid] = (dist2d_s[valid] / 60.0).astype(np.float32, copy=False)
 
-            run_id = uuid.uuid4().hex[:8]
             cost_raster_path = os.path.join(
                 tempfile.gettempdir(), f"archt_cost_{self.model_key}_{run_id}.tif"
             )
@@ -805,11 +975,10 @@ class CostSurfaceWorker(QgsTask):
             out_ds.FlushCache()
             out_ds = None
 
-            # Isochrones (0/15/30/45/60 minutes) for easier interpretation.
+            # Isochrones (0/15/30/45/60/...) for easier interpretation.
             try:
                 if cost_max is not None and math.isfinite(cost_max):
-                    levels = [0.0, 15.0, 30.0, 45.0, 60.0]
-                    usable = [v for v in levels if float(v) <= float(cost_max) + 1e-6]
+                    usable = _default_isochrone_levels_minutes(cost_max)
                     if usable:
                         iso_path = os.path.join(
                             tempfile.gettempdir(),
@@ -824,9 +993,46 @@ class CostSurfaceWorker(QgsTask):
             except Exception:
                 isochrones_vector_path = None
 
+        energy_raster_path = None
+        energy_min = None
+        energy_max = None
+        if create_energy_raster and dist_energy is not None:
+            dist2d_j = dist_energy.reshape((rows, cols))
+            valid = np.isfinite(dist2d_j) & (~nodata_mask)
+            if np.any(valid):
+                dist2d_kcal = dist2d_j[valid] / 4184.0
+                energy_min = float(np.nanmin(dist2d_kcal))
+                energy_max = float(np.nanmax(dist2d_kcal))
+
+            out = np.full(dist2d_j.shape, -9999.0, dtype=np.float32)
+            out[valid] = (dist2d_j[valid] / 4184.0).astype(np.float32, copy=False)
+
+            energy_raster_path = os.path.join(
+                tempfile.gettempdir(), f"archt_energy_{self.model_key}_{run_id}.tif"
+            )
+            driver = gdal.GetDriverByName("GTiff")
+            out_ds = driver.Create(
+                energy_raster_path,
+                cols,
+                rows,
+                1,
+                gdal.GDT_Float32,
+                options=["TILED=YES", "COMPRESS=LZW"],
+            )
+            if out_ds is None:
+                return CostTaskResult(ok=False, message="누적 에너지 래스터를 생성할 수 없습니다.")
+            out_ds.SetGeoTransform(win_gt)
+            out_ds.SetProjection(proj)
+            out_band = out_ds.GetRasterBand(1)
+            out_band.SetNoDataValue(-9999.0)
+            out_band.WriteArray(out)
+            out_band.FlushCache()
+            out_ds.FlushCache()
+            out_ds = None
+
         path_coords = None
-        if self.create_path and prev is not None and has_end:
-            path_idx = _reconstruct_path(prev, start_rc, end_rc, cols, rows)
+        if create_path and prev_for_path is not None:
+            path_idx = _reconstruct_path(prev_for_path, start_rc, end_rc, cols, rows)
             if path_idx:
                 coords = []
                 for idx in path_idx:
@@ -837,24 +1043,70 @@ class CostSurfaceWorker(QgsTask):
         lcp_dist_m = _polyline_length(path_coords) if path_coords else None
 
         straight_time_s = None
+        straight_energy_kcal = None
         straight_dist_m = None
         if has_end:
-            straight_time_s, straight_dist_m = _estimate_straight_line_time_s(
-                self.model_key,
-                self.model_params,
-                (float(sx), float(sy)),
-                (float(ex), float(ey)),
-                dem,
-                nodata_mask,
-                win_gt,
-                step_m=min(dx, dy),
-            )
+            straight_dist_m = math.hypot(float(ex) - float(sx), float(ey) - float(sy))
+            if is_energy_model:
+                v = max(
+                    0.05,
+                    float(self.model_params.get("pandolf_speed_mps", 5.0 * 1000.0 / 3600.0)),
+                )
+                straight_time_s = float(straight_dist_m) / float(v)
+
+                straight_energy_j, _ = _estimate_straight_line_cost(
+                    self.model_key,
+                    self.model_params,
+                    (float(sx), float(sy)),
+                    (float(ex), float(ey)),
+                    dem,
+                    nodata_mask,
+                    win_gt,
+                    step_m=min(dx, dy),
+                    cost_mode="energy_j",
+                )
+                if straight_energy_j is not None and math.isfinite(straight_energy_j):
+                    straight_energy_kcal = float(straight_energy_j) / 4184.0
+            else:
+                straight_time_s, straight_dist_m = _estimate_straight_line_cost(
+                    self.model_key,
+                    self.model_params,
+                    (float(sx), float(sy)),
+                    (float(ex), float(ey)),
+                    dem,
+                    nodata_mask,
+                    win_gt,
+                    step_m=min(dx, dy),
+                    cost_mode="time_s",
+                )
+
+        lcp_time_s = None
+        if has_end:
+            if is_energy_model:
+                if lcp_dist_m is not None and math.isfinite(lcp_dist_m):
+                    v = max(
+                        0.05,
+                        float(self.model_params.get("pandolf_speed_mps", 5.0 * 1000.0 / 3600.0)),
+                    )
+                    lcp_time_s = float(lcp_dist_m) / float(v)
+            else:
+                if end_time_s is not None and math.isfinite(end_time_s):
+                    lcp_time_s = float(end_time_s)
+
+        total_energy_kcal = None
+        if end_energy_j is not None and math.isfinite(end_energy_j):
+            total_energy_kcal = float(end_energy_j) / 4184.0
 
         msg = "완료"
-        if self.create_path:
-            if end_cost is None or not math.isfinite(end_cost):
+        if create_path:
+            if end_cost_for_path is None or not math.isfinite(end_cost_for_path):
                 msg = "도착점까지 경로를 찾지 못했습니다."
-                end_cost = None
+                if path_cost_mode == "energy_j":
+                    end_energy_j = None
+                    total_energy_kcal = None
+                else:
+                    end_time_s = None
+                    lcp_time_s = None
 
         return CostTaskResult(
             ok=True,
@@ -862,15 +1114,21 @@ class CostSurfaceWorker(QgsTask):
             cost_raster_path=cost_raster_path,
             cost_min=cost_min,
             cost_max=cost_max,
+            energy_raster_path=energy_raster_path,
+            energy_min=energy_min,
+            energy_max=energy_max,
             path_coords=path_coords,
             start_xy=(float(sx), float(sy)),
             end_xy=(float(ex), float(ey)) if has_end else None,
             dem_authid=self.dem_authid,
             model_label=self.model_label,
-            total_cost_s=end_cost,
+            total_cost_s=end_time_s,
+            total_energy_kcal=total_energy_kcal,
             straight_time_s=straight_time_s,
+            straight_energy_kcal=straight_energy_kcal,
             straight_dist_m=straight_dist_m,
             lcp_dist_m=lcp_dist_m,
+            lcp_time_s=lcp_time_s,
             isochrones_vector_path=isochrones_vector_path,
         )
 
@@ -943,6 +1201,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self.cmbModel.addItem("허조그 메타볼릭 (Herzog metabolic, via Čučković)", MODEL_HERZOG_METABOLIC)
         self.cmbModel.addItem("코놀리&레이크 경사비용 (Conolly & Lake, 2006)", MODEL_CONOLLY_LAKE)
         self.cmbModel.addItem("허조그 차량/수레 (Herzog wheeled vehicle, via Čučković)", MODEL_HERZOG_WHEELED)
+        self.cmbModel.addItem("판돌프 운반 에너지 (Pandolf load carriage, 1977)", MODEL_PANDOLF)
 
     def _is_path_required(self):
         try:
@@ -979,6 +1238,19 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             self.groupHerzogMetabolicParams.setVisible(False)
             self.groupConollyLakeParams.setVisible(False)
             self.groupHerzogWheeledParams.setVisible(False)
+            self.groupPandolfParams.setVisible(False)
+
+            # Energy raster output is only meaningful for energy-based models (Pandolf).
+            try:
+                if model_key == MODEL_PANDOLF:
+                    self.chkCreateEnergyRaster.setEnabled(True)
+                    if not self.chkCreateEnergyRaster.isChecked():
+                        self.chkCreateEnergyRaster.setChecked(True)
+                else:
+                    self.chkCreateEnergyRaster.setChecked(False)
+                    self.chkCreateEnergyRaster.setEnabled(False)
+            except Exception:
+                pass
 
             if model_key == MODEL_TOBLER:
                 self.groupToblerParams.setVisible(True)
@@ -1036,6 +1308,21 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     "• 임계경사(°): 값↓ → 경사에 더 취약(조금만 경사져도 속도 급감). 값↑ → 경사 영향이 완만<br>"
                     "<br><b>참고</b>: 수식은 Zoran Čučković의 QGIS 'Movement Analysis' 플러그인(slope_cost) 구현을 참고했습니다.<br>"
                     "<br><b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)"
+                )
+            elif model_key == MODEL_PANDOLF:
+                self.groupPandolfParams.setVisible(True)
+                self.lblModelHelp.setText(
+                    "<b>판돌프 운반 에너지 (Pandolf load carriage, 1977)</b><br>"
+                    "운반(체중/짐)과 지면계수(η), 경사(%)를 고려해 에너지 소모를 계산합니다.<br>"
+                    "<br><b>핵심</b>: 이 모델은 <u>시간</u>이 아니라 <u>에너지(소모)</u>를 최소화하는 경로를 찾는 데 적합합니다.<br>"
+                    "<br><b>변수 해석</b><br>"
+                    "• 체중/짐: 값↑ → 에너지 비용↑ (특히 짐/체중 비율 영향)<br>"
+                    "• 속도: 시간은 거리/속도이지만, 에너지(수식)도 속도에 따라 변합니다<br>"
+                    "• 지면계수 η: 1.0=단단한 지면, 값↑ → 같은 경사에서도 에너지 비용↑<br>"
+                    "<br><b>출력</b><br>"
+                    "• 누적 에너지(kcal): 출발점→각 셀 최소 누적 에너지 (체크 시 생성)<br>"
+                    "• 누적 시간(분): (체크 시) 속도 기반 이동시간을 별도로 출력할 수 있습니다<br>"
+                    "<br><b>참고</b>: 에너지(kcal)=J/4184 로 변환하여 저장합니다."
                 )
         except Exception:
             pass
@@ -1175,8 +1462,9 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             return
 
         create_cost_raster = bool(self.chkCreateCostRaster.isChecked())
+        create_energy_raster = bool(getattr(self, "chkCreateEnergyRaster", None) and self.chkCreateEnergyRaster.isChecked())
         create_path = bool(self.chkCreatePath.isChecked())
-        if not create_cost_raster and not create_path:
+        if not create_cost_raster and not create_energy_raster and not create_path:
             push_message(self.iface, "오류", "최소 1개 출력(누적 비용/경로)을 선택하세요.", level=2)
             restore_ui_focus(self)
             return
@@ -1210,6 +1498,10 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             "conolly_ref_slope_deg": float(self.spinConollyRefSlopeDeg.value()),
             "wheeled_base_kmh": float(self.spinWheeledBaseKmh.value()),
             "wheeled_critical_slope_deg": float(self.spinWheeledCriticalSlopeDeg.value()),
+            "pandolf_body_kg": float(self.spinPandolfBodyKg.value()),
+            "pandolf_load_kg": float(self.spinPandolfLoadKg.value()),
+            "pandolf_speed_mps": float(self.spinPandolfSpeedKmh.value()) * 1000.0 / 3600.0,
+            "pandolf_terrain_factor": float(self.spinPandolfTerrainFactor.value()),
         }
 
         self._set_running_ui(True)
@@ -1231,6 +1523,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             model_params=model_params,
             model_label=model_label,
             create_cost_raster=create_cost_raster,
+            create_energy_raster=create_energy_raster,
             create_path=create_path,
             on_done=on_done,
         )
@@ -1259,32 +1552,62 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             return
 
         summary = res.message or "완료"
-        if res.total_cost_s is not None and math.isfinite(res.total_cost_s):
-            summary = f"{summary} | LCP {res.total_cost_s/60.0:.1f}분"
 
-        if (
-            res.straight_time_s is not None
-            and math.isfinite(res.straight_time_s)
-            and res.total_cost_s is not None
-            and math.isfinite(res.total_cost_s)
-        ):
-            lcp_min = float(res.total_cost_s) / 60.0
-            straight_min = float(res.straight_time_s) / 60.0
-            delta_min = straight_min - lcp_min
-            sign = "+" if delta_min >= 0 else "-"
-            if (
-                res.straight_dist_m is not None
-                and math.isfinite(res.straight_dist_m)
-                and res.lcp_dist_m is not None
-                and math.isfinite(res.lcp_dist_m)
-            ):
-                summary = (
-                    f"{summary}({res.lcp_dist_m/1000.0:.2f}km)"
-                    f" / 직선 {straight_min:.1f}분({res.straight_dist_m/1000.0:.2f}km)"
-                    f" (Δ {sign}{abs(delta_min):.1f}분)"
-                )
+        if res.total_energy_kcal is not None and math.isfinite(res.total_energy_kcal):
+            lcp_kcal = float(res.total_energy_kcal)
+            lcp_detail = []
+            if res.lcp_dist_m is not None and math.isfinite(res.lcp_dist_m):
+                lcp_detail.append(f"{res.lcp_dist_m/1000.0:.2f}km")
+            if res.lcp_time_s is not None and math.isfinite(res.lcp_time_s):
+                lcp_detail.append(f"{res.lcp_time_s/60.0:.1f}분")
+            lcp_txt = f"LCP {lcp_kcal:.0f}kcal"
+            if lcp_detail:
+                lcp_txt = f"{lcp_txt}({', '.join(lcp_detail)})"
+
+            if res.straight_energy_kcal is not None and math.isfinite(res.straight_energy_kcal):
+                straight_kcal = float(res.straight_energy_kcal)
+                straight_detail = []
+                if res.straight_dist_m is not None and math.isfinite(res.straight_dist_m):
+                    straight_detail.append(f"{res.straight_dist_m/1000.0:.2f}km")
+                if res.straight_time_s is not None and math.isfinite(res.straight_time_s):
+                    straight_detail.append(f"{res.straight_time_s/60.0:.1f}분")
+                straight_txt = f"직선 {straight_kcal:.0f}kcal"
+                if straight_detail:
+                    straight_txt = f"{straight_txt}({', '.join(straight_detail)})"
+
+                delta_kcal = straight_kcal - lcp_kcal
+                sign = "+" if delta_kcal >= 0 else "-"
+                summary = f"{summary} | {lcp_txt} / {straight_txt} (Δ {sign}{abs(delta_kcal):.0f}kcal)"
             else:
-                summary = f"{summary} / 직선 {straight_min:.1f}분 (Δ {sign}{abs(delta_min):.1f}분)"
+                summary = f"{summary} | {lcp_txt}"
+        else:
+            lcp_time_s = res.lcp_time_s if res.lcp_time_s is not None else res.total_cost_s
+            if lcp_time_s is not None and math.isfinite(lcp_time_s):
+                summary = f"{summary} | LCP {float(lcp_time_s)/60.0:.1f}분"
+
+            if (
+                res.straight_time_s is not None
+                and math.isfinite(res.straight_time_s)
+                and lcp_time_s is not None
+                and math.isfinite(lcp_time_s)
+            ):
+                lcp_min = float(lcp_time_s) / 60.0
+                straight_min = float(res.straight_time_s) / 60.0
+                delta_min = straight_min - lcp_min
+                sign = "+" if delta_min >= 0 else "-"
+                if (
+                    res.straight_dist_m is not None
+                    and math.isfinite(res.straight_dist_m)
+                    and res.lcp_dist_m is not None
+                    and math.isfinite(res.lcp_dist_m)
+                ):
+                    summary = (
+                        f"{summary}({res.lcp_dist_m/1000.0:.2f}km)"
+                        f" / 직선 {straight_min:.1f}분({res.straight_dist_m/1000.0:.2f}km)"
+                        f" (Δ {sign}{abs(delta_min):.1f}분)"
+                    )
+                else:
+                    summary = f"{summary} / 직선 {straight_min:.1f}분 (Δ {sign}{abs(delta_min):.1f}분)"
         push_message(self.iface, "비용표면/최소비용경로", summary, level=0, duration=7)
 
     def _add_result_layers(self, res: CostTaskResult):
@@ -1297,7 +1620,8 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             parent_group = root.insertGroup(0, parent_name)
 
         run_id = uuid.uuid4().hex[:6]
-        group_name = f"비용표면_{run_id}"
+        model_tag = _safe_layer_name_fragment(res.model_label or "")
+        group_name = f"비용표면_{model_tag}_{run_id}" if model_tag else f"비용표면_{run_id}"
         run_group = parent_group.insertGroup(0, group_name)
         run_group.setExpanded(False)
 
@@ -1310,10 +1634,22 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._apply_cost_raster_style(cost_layer, res.cost_min, res.cost_max)
                 bottom_to_top.append(cost_layer)
 
+        if res.energy_raster_path:
+            layer_name = f"누적 에너지(kcal) (Cumulative Energy, kcal) - {(res.model_label or '').strip()}"
+            energy_layer = QgsRasterLayer(res.energy_raster_path, layer_name)
+            if energy_layer.isValid():
+                self._apply_energy_raster_style(
+                    energy_layer, res.energy_min, res.energy_max
+                )
+                bottom_to_top.append(energy_layer)
+
         if res.isochrones_vector_path:
+            iso_name = "등시간선 (Isochrones)"
+            if model_tag:
+                iso_name = f"{iso_name} - {model_tag}"
             iso_layer = QgsVectorLayer(
                 f"{res.isochrones_vector_path}|layername=isochrones",
-                "등시간선 (Isochrones)",
+                iso_name,
                 "ogr",
             )
             if iso_layer.isValid():
@@ -1352,8 +1688,11 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             bottom_to_top.append(pt_layer)
 
         if res.end_xy and res.start_xy and res.dem_authid:
+            path_name = "경로 비교 (Straight vs LCP)"
+            if model_tag:
+                path_name = f"{path_name} - {model_tag}"
             path_layer = QgsVectorLayer(
-                f"LineString?crs={res.dem_authid}", "경로 비교 (Straight vs LCP)", "memory"
+                f"LineString?crs={res.dem_authid}", path_name, "memory"
             )
             pr = path_layer.dataProvider()
             pr.addAttributes(
@@ -1362,6 +1701,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     QgsField("model", QVariant.String),
                     QgsField("dist_m", QVariant.Double),
                     QgsField("time_min", QVariant.Double),
+                    QgsField("energy_kcal", QVariant.Double),
                 ]
             )
             path_layer.updateFields()
@@ -1378,6 +1718,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     res.model_label or "",
                     float(res.straight_dist_m or 0.0),
                     (float(res.straight_time_s) / 60.0) if res.straight_time_s is not None else None,
+                    float(res.straight_energy_kcal) if res.straight_energy_kcal is not None else None,
                 ]
             )
             feats.append(feat_straight)
@@ -1392,7 +1733,8 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                         "lcp",
                         res.model_label or "",
                         float(res.lcp_dist_m or 0.0),
-                        (float(res.total_cost_s) / 60.0) if res.total_cost_s is not None else None,
+                        (float(res.lcp_time_s) / 60.0) if res.lcp_time_s is not None else None,
+                        float(res.total_energy_kcal) if res.total_energy_kcal is not None else None,
                     ]
                 )
                 feats.append(feat_lcp)
@@ -1438,7 +1780,13 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
 
             pal = QgsPalLayerSettings()
             pal.isExpression = True
-            pal.fieldName = "round(\"minutes\", 0) || '분'"
+            # Minutes -> show hours for large values to improve readability.
+            pal.fieldName = (
+                "case "
+                "when \"minutes\" >= 120 then round(\"minutes\"/60.0, 1) || 'h' "
+                "else round(\"minutes\", 0) || '분' "
+                "end"
+            )
             pal.placement = QgsPalLayerSettings.Curved
 
             fmt = QgsTextFormat()
@@ -1533,6 +1881,78 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.triggerRepaint()
         except Exception as e:
             log_message(f"Cost raster style error: {e}", level=Qgis.Warning)
+
+    def _apply_energy_raster_style(self, layer: QgsRasterLayer, vmin, vmax):
+        try:
+            nodata_value = -9999.0
+            layer.dataProvider().setNoDataValue(1, nodata_value)
+
+            if vmin is None or vmax is None or not math.isfinite(vmin) or not math.isfinite(vmax):
+                vmin = 0.0
+                vmax = 1.0
+            vmin = float(vmin)
+            vmax = float(vmax)
+            if vmax <= 0:
+                vmax = 1.0
+            if vmin < 0:
+                vmin = 0.0
+
+            def fmt_kcal(v):
+                v = float(v)
+                if v < 1.0:
+                    return f"{v:.2f}kcal"
+                return f"{v:.0f}kcal"
+
+            ticks = [0.0, vmax * 0.25, vmax * 0.5, vmax * 0.75, vmax]
+            uniq = []
+            for t in ticks:
+                t = float(t)
+                if not uniq or t > uniq[-1] + 1e-9:
+                    uniq.append(t)
+            ticks = uniq
+
+            shader = QgsRasterShader()
+            ramp = QgsColorRampShader()
+            ramp.setColorRampType(QgsColorRampShader.Interpolated)
+
+            colors = [
+                QColor("#2c7bb6"),
+                QColor("#abd9e9"),
+                QColor("#ffffbf"),
+                QColor("#fdae61"),
+                QColor("#d7191c"),
+            ]
+            if len(ticks) <= 2:
+                ticks = [0.0, vmax]
+                colors = [QColor("#2c7bb6"), QColor("#d7191c")]
+            else:
+                if len(colors) > len(ticks):
+                    colors = colors[: len(ticks)]
+                elif len(colors) < len(ticks):
+                    colors = (colors + [colors[-1]] * len(ticks))[: len(ticks)]
+
+            items = [
+                QgsColorRampShader.ColorRampItem(nodata_value, QColor(0, 0, 0, 0), "NoData")
+            ]
+            for i, t in enumerate(ticks):
+                label = fmt_kcal(t)
+                if i == 0:
+                    label = f"{label} (출발점)"
+                items.append(QgsColorRampShader.ColorRampItem(float(t), colors[i], label))
+            ramp.setColorRampItemList(items)
+            shader.setRasterShaderFunction(ramp)
+
+            renderer = QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+            try:
+                renderer.setClassificationMin(float(vmin))
+                renderer.setClassificationMax(float(vmax))
+            except Exception:
+                pass
+            layer.setRenderer(renderer)
+            layer.setOpacity(0.7)
+            layer.triggerRepaint()
+        except Exception as e:
+            log_message(f"Energy raster style error: {e}", level=Qgis.Warning)
 
     def reject(self):
         self._cleanup()

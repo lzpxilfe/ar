@@ -120,10 +120,10 @@
       <item row="3" column="0" colspan="2">
        <widget class="QCheckBox" name="chkCreateCostRaster">
         <property name="text">
-         <string>누적 비용(분) 래스터 생성</string>
+         <string>누적 시간(분) 래스터 생성</string>
         </property>
         <property name="toolTip">
-         <string>시작점에서 각 셀까지의 최소 누적 이동시간(분)을 래스터로 생성합니다.</string>
+         <string>시작점에서 각 셀까지의 최소 누적 이동시간(분)을 래스터로 생성합니다. (시간 기반 모델)</string>
         </property>
         <property name="checked">
          <bool>true</bool>
@@ -131,6 +131,19 @@
        </widget>
       </item>
       <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkCreateEnergyRaster">
+        <property name="text">
+         <string>누적 에너지(kcal) 래스터 생성</string>
+        </property>
+        <property name="toolTip">
+         <string>시작점에서 각 셀까지의 최소 누적 에너지(kcal)를 래스터로 생성합니다. (에너지 기반 모델에서만 사용)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
        <widget class="QCheckBox" name="chkCreatePath">
         <property name="text">
          <string>최소비용경로 라인 생성</string>
@@ -143,7 +156,7 @@
         </property>
        </widget>
       </item>
-      <item row="5" column="0" colspan="2">
+      <item row="6" column="0" colspan="2">
        <widget class="QGroupBox" name="groupModelParams">
         <property name="title">
          <string>모델 변수</string>
@@ -487,24 +500,149 @@
             </layout>
            </widget>
           </item>
+          <item>
+           <widget class="QGroupBox" name="groupPandolfParams">
+            <property name="title">
+             <string>Pandolf load carriage (1977)</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout_Pandolf">
+             <item row="0" column="0">
+              <widget class="QLabel" name="lblPandolfBodyWeight">
+               <property name="text">
+                <string>체중(kg)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="spinPandolfBodyKg">
+               <property name="toolTip">
+                <string>보행자 체중(kg). 값이 클수록 기본 대사량 항이 커져 에너지 비용이 증가합니다.</string>
+               </property>
+               <property name="decimals">
+                <number>1</number>
+               </property>
+               <property name="minimum">
+                <double>30.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>150.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>1.000000000000000</double>
+               </property>
+               <property name="value">
+                <double>70.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="lblPandolfLoadWeight">
+               <property name="text">
+                <string>짐(kg)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="spinPandolfLoadKg">
+               <property name="toolTip">
+                <string>운반 짐 무게(kg). 값이 클수록 에너지 비용이 증가합니다(특히 체중 대비 짐 비율이 중요).</string>
+               </property>
+               <property name="decimals">
+                <number>1</number>
+               </property>
+               <property name="minimum">
+                <double>0.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>200.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>1.000000000000000</double>
+               </property>
+               <property name="value">
+                <double>0.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="lblPandolfSpeed">
+               <property name="text">
+                <string>속도(km/h)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QDoubleSpinBox" name="spinPandolfSpeedKmh">
+               <property name="toolTip">
+                <string>이동 속도(km/h). 값이 클수록 같은 거리에서 시간이 줄어들고, 에너지 비용도 (수식상) 변화합니다. 기본값: 5</string>
+               </property>
+               <property name="decimals">
+                <number>2</number>
+               </property>
+               <property name="minimum">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>10.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.250000000000000</double>
+               </property>
+               <property name="value">
+                <double>5.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="lblPandolfTerrain">
+               <property name="text">
+                <string>지면계수 η</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="spinPandolfTerrainFactor">
+               <property name="toolTip">
+                <string>지면/마찰 계수(η). 1.0=단단한 지면, 값이 클수록 같은 경사에서도 에너지 소모가 증가합니다(모래/진흙 등).</string>
+               </property>
+               <property name="decimals">
+                <number>2</number>
+               </property>
+               <property name="minimum">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>5.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.100000000000000</double>
+               </property>
+               <property name="value">
+                <double>1.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
-       <item row="6" column="0" colspan="2">
-       <widget class="QLabel" name="lblModelHelp">
-        <property name="text">
-         <string>모델/설정 설명이 여기에 표시됩니다.</string>
-        </property>
+       <item row="7" column="0" colspan="2">
+        <widget class="QLabel" name="lblModelHelp">
+         <property name="text">
+          <string>모델/설정 설명이 여기에 표시됩니다.</string>
+         </property>
         <property name="wordWrap">
          <bool>true</bool>
         </property>
         <property name="styleSheet">
          <string>background-color: #fafafa; color: #333; padding: 6px; border: 1px solid #ddd; border-radius: 3px;</string>
         </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
    </item>
    <item>
     <widget class="QGroupBox" name="groupPoints">
