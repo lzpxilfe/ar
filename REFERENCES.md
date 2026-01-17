@@ -34,6 +34,12 @@
 **Naismith의 규칙 (시간 기반 보행 모델):**
 > Naismith, W. W. (1892). "Excursions." *Scottish Mountaineering Club Journal*.
 
+**Conolly & Lake의 상대 경사 비용 (Relative slope cost):**
+> Conolly, J., & Lake, M. (2006). *Geographical Information Systems in Archaeology*. Cambridge University Press.
+
+**Herzog 이동 비용 함수(메타볼릭/차량) 구현 참고:**
+> Čučković, Z. (2024). *Movement Analysis* (QGIS plugin). https://github.com/zoran-cuckovic/QGIS-movement-analysis/
+
 **Minetti의 에너지 효율 연구:**
 > Minetti, A.E. (2002). "The three modes of terrestrial locomotion." In: *Running & Science*. Cambridge University Press.
 

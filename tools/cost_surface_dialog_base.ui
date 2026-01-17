@@ -248,11 +248,11 @@
            </layout>
           </widget>
          </item>
-         <item>
-          <widget class="QGroupBox" name="groupNaismithParams">
-           <property name="title">
-            <string>Naismith (1892)</string>
-           </property>
+          <item>
+           <widget class="QGroupBox" name="groupNaismithParams">
+            <property name="title">
+             <string>Naismith (1892)</string>
+            </property>
            <layout class="QGridLayout" name="gridLayout_Naismith">
             <item row="0" column="0">
              <widget class="QLabel" name="lblNaismithSpeed">
@@ -312,13 +312,185 @@
               </property>
              </widget>
             </item>
-           </layout>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item row="6" column="0" colspan="2">
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="groupHerzogMetabolicParams">
+            <property name="title">
+             <string>Herzog metabolic (via Čučković)</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout_HerzogMetabolic">
+             <item row="0" column="0">
+              <widget class="QLabel" name="lblHerzogBaseSpeed">
+               <property name="text">
+                <string>기본속도(km/h)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="spinHerzogBaseKmh">
+               <property name="toolTip">
+                <string>평지 기준 기본 속도(km/h). 값이 클수록 전체 이동 시간이 줄어듭니다(더 빠른 이동 가정).</string>
+               </property>
+               <property name="decimals">
+                <number>2</number>
+               </property>
+               <property name="minimum">
+                <double>0.100000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>20.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="value">
+                <double>5.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="groupConollyLakeParams">
+            <property name="title">
+             <string>Conolly &amp; Lake relative slope (2006)</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout_ConollyLake">
+             <item row="0" column="0">
+              <widget class="QLabel" name="lblConollyBaseSpeed">
+               <property name="text">
+                <string>기본속도(km/h)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="spinConollyBaseKmh">
+               <property name="toolTip">
+                <string>평지 기준 기본 속도(km/h). 값이 클수록 전체 이동 시간이 줄어듭니다.</string>
+               </property>
+               <property name="decimals">
+                <number>2</number>
+               </property>
+               <property name="minimum">
+                <double>0.100000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>20.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="value">
+                <double>5.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="lblConollyRefSlope">
+               <property name="text">
+                <string>기준경사(°)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="spinConollyRefSlopeDeg">
+               <property name="toolTip">
+                <string>경사 페널티가 본격적으로 커지기 시작하는 기준 경사(°). 값이 작을수록 약한 경사에도 페널티가 커집니다. (기본값: 1°)</string>
+               </property>
+               <property name="decimals">
+                <number>2</number>
+               </property>
+               <property name="minimum">
+                <double>0.100000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>30.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.100000000000000</double>
+               </property>
+               <property name="value">
+                <double>1.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="groupHerzogWheeledParams">
+            <property name="title">
+             <string>Herzog wheeled vehicle (via Čučković)</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout_HerzogWheeled">
+             <item row="0" column="0">
+              <widget class="QLabel" name="lblWheeledBaseSpeed">
+               <property name="text">
+                <string>기본속도(km/h)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="spinWheeledBaseKmh">
+               <property name="toolTip">
+                <string>평지에서의 차량/수레 기본 속도(km/h). 값이 클수록 전체 이동 시간이 줄어듭니다.</string>
+               </property>
+               <property name="decimals">
+                <number>2</number>
+               </property>
+               <property name="minimum">
+                <double>0.100000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>30.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="value">
+                <double>4.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="lblWheeledCriticalSlope">
+               <property name="text">
+                <string>임계경사(°)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="spinWheeledCriticalSlopeDeg">
+               <property name="toolTip">
+                <string>경사가 이 값(°)에 가까워질수록 속도가 급격히 감소합니다. 값이 작을수록 경사에 더 취약한 차량을 의미합니다. (기본값: 12°)</string>
+               </property>
+               <property name="decimals">
+                <number>1</number>
+               </property>
+               <property name="minimum">
+                <double>1.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>45.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="value">
+                <double>12.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item row="6" column="0" colspan="2">
        <widget class="QLabel" name="lblModelHelp">
         <property name="text">
          <string>모델/설정 설명이 여기에 표시됩니다.</string>

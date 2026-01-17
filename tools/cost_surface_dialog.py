@@ -61,6 +61,9 @@ FORM_CLASS, _ = uic.loadUiType(
 
 MODEL_TOBLER = "tobler_time"
 MODEL_NAISMITH = "naismith_time"
+MODEL_HERZOG_METABOLIC = "herzog_metabolic_time"
+MODEL_CONOLLY_LAKE = "conolly_lake_time"
+MODEL_HERZOG_WHEELED = "herzog_wheeled_time"
 
 
 @dataclass
@@ -347,6 +350,9 @@ def _neighbors(allow_diagonal, dx, dy):
 
 
 def _edge_cost(model_key, horiz_m, dz_m, model_params):
+    if horiz_m <= 0:
+        return 0.0
+
     if model_key == MODEL_TOBLER:
         slope = dz_m / horiz_m if horiz_m > 0 else 0.0
         return horiz_m / _tobler_speed_mps(
@@ -356,6 +362,56 @@ def _edge_cost(model_key, horiz_m, dz_m, model_params):
             model_params.get("tobler_slope_offset", 0.05),
             model_params.get("tobler_min_speed_mps", 0.05),
         )
+    if model_key == MODEL_NAISMITH:
+        return _naismith_time_s(
+            horiz_m,
+            dz_m,
+            model_params.get("naismith_horizontal_kmh", 5.0),
+            model_params.get("naismith_ascent_m_per_h", 600.0),
+        )
+
+    # Isotropic slope-based models (use absolute slope magnitude)
+    slope_abs = abs(float(dz_m)) / float(horiz_m) if horiz_m > 0 else 0.0  # tan(theta)
+    min_speed_mps = float(model_params.get("min_speed_mps", 0.05))
+
+    if model_key == MODEL_HERZOG_METABOLIC:
+        # Based on the slope_cost implementation in Zoran Čučković's "Movement Analysis" QGIS plugin.
+        # We normalize the factor so that slope=0 keeps the base speed.
+        den = (
+            1337.8 * slope_abs**6
+            + 278.19 * slope_abs**5
+            - 517.39 * slope_abs**4
+            - 78.199 * slope_abs**3
+            + 93.419 * slope_abs**2
+            + 19.825 * slope_abs
+            + 1.64
+        )
+        rel = 1.0 / max(1e-9, float(den))
+        rel0 = 1.0 / 1.64
+        rel_norm = rel / rel0
+        base_mps = max(min_speed_mps, float(model_params.get("herzog_base_kmh", 5.0)) * 1000.0 / 3600.0)
+        speed_mps = max(min_speed_mps, base_mps * rel_norm)
+        return float(horiz_m) / speed_mps
+
+    if model_key == MODEL_CONOLLY_LAKE:
+        # Conolly & Lake: relative slope penalty anchored at a reference slope.
+        # We clamp the factor to >=1 so gentle slopes do not become "faster than flat".
+        ref_deg = max(0.1, float(model_params.get("conolly_ref_slope_deg", 1.0)))
+        ref_tan = math.tan(math.radians(ref_deg))
+        factor = max(1.0, slope_abs / max(1e-9, ref_tan))
+        base_mps = max(min_speed_mps, float(model_params.get("conolly_base_kmh", 5.0)) * 1000.0 / 3600.0)
+        return (float(horiz_m) / base_mps) * factor
+
+    if model_key == MODEL_HERZOG_WHEELED:
+        critical_deg = max(1.0, float(model_params.get("wheeled_critical_slope_deg", 12.0)))
+        critical_percent = math.tan(math.radians(critical_deg)) * 100.0
+        slope_percent = slope_abs * 100.0
+        speed_factor = 1.0 / (1.0 + (slope_percent / max(1e-9, critical_percent)) ** 2)
+        base_mps = max(min_speed_mps, float(model_params.get("wheeled_base_kmh", 4.0)) * 1000.0 / 3600.0)
+        speed_mps = max(min_speed_mps, base_mps * speed_factor)
+        return float(horiz_m) / speed_mps
+
+    # Fallback
     return _naismith_time_s(
         horiz_m,
         dz_m,
@@ -387,14 +443,21 @@ def _astar_path(
     gscore[start_idx] = 0.0
 
     if model_key == MODEL_TOBLER:
-        vmax = max(0.05, float(model_params.get("tobler_base_kmh", 6.0)) * 1000.0 / 3600.0)  # m/s
-        def hfun(r, c):
-            return math.hypot((ec - c) * dx, (er - r) * dy) / vmax
+        vmax = float(model_params.get("tobler_base_kmh", 6.0)) * 1000.0 / 3600.0
+    elif model_key == MODEL_NAISMITH:
+        vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
+    elif model_key == MODEL_HERZOG_METABOLIC:
+        vmax = float(model_params.get("herzog_base_kmh", 5.0)) * 1000.0 / 3600.0
+    elif model_key == MODEL_CONOLLY_LAKE:
+        vmax = float(model_params.get("conolly_base_kmh", 5.0)) * 1000.0 / 3600.0
+    elif model_key == MODEL_HERZOG_WHEELED:
+        vmax = float(model_params.get("wheeled_base_kmh", 4.0)) * 1000.0 / 3600.0
     else:
-        horizontal_kmh = max(0.0001, float(model_params.get("naismith_horizontal_kmh", 5.0)))
-        sec_per_m = 3600.0 / (horizontal_kmh * 1000.0)  # flat baseline
-        def hfun(r, c):
-            return math.hypot((ec - c) * dx, (er - r) * dy) * sec_per_m
+        vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
+    vmax = max(0.05, vmax)
+
+    def hfun(r, c):
+        return math.hypot((ec - c) * dx, (er - r) * dy) / vmax
 
     heap = [(hfun(sr, sc), 0.0, start_idx)]
     moves = _neighbors(allow_diagonal, dx, dy)
@@ -877,6 +940,9 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self.cmbModel.clear()
         self.cmbModel.addItem("토블러 보행함수 (Tobler Hiking Function)", MODEL_TOBLER)
         self.cmbModel.addItem("나이스미스 규칙 (Naismith's Rule)", MODEL_NAISMITH)
+        self.cmbModel.addItem("허조그 메타볼릭 (Herzog metabolic, via Čučković)", MODEL_HERZOG_METABOLIC)
+        self.cmbModel.addItem("코놀리&레이크 경사비용 (Conolly & Lake, 2006)", MODEL_CONOLLY_LAKE)
+        self.cmbModel.addItem("허조그 차량/수레 (Herzog wheeled vehicle, via Čučković)", MODEL_HERZOG_WHEELED)
 
     def _is_path_required(self):
         try:
@@ -907,25 +973,69 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
     def _on_model_changed(self):
         try:
             model_key = self.cmbModel.currentData()
+            # Reset all param panels first
+            self.groupToblerParams.setVisible(False)
+            self.groupNaismithParams.setVisible(False)
+            self.groupHerzogMetabolicParams.setVisible(False)
+            self.groupConollyLakeParams.setVisible(False)
+            self.groupHerzogWheeledParams.setVisible(False)
+
             if model_key == MODEL_TOBLER:
                 self.groupToblerParams.setVisible(True)
-                self.groupNaismithParams.setVisible(False)
                 self.lblModelHelp.setText(
                     "<b>토블러 보행함수 (Tobler, 1993)</b><br>"
                     "속도(km/h)=a·exp(-b·|slope+c|), slope=Δz/Δd (예: 0.1=10%)<br>"
+                    "<br><b>변수 해석</b><br>"
+                    "• 기본속도(a): 평지 기준 속도. 값↑ → 전체 시간이↓<br>"
+                    "• 경사 민감도(b): 값↑ → 경사에 따른 속도 감소가 더 급격<br>"
+                    "• 최적 경사(c): 속도가 가장 빠른 경사(대략 -c가 최적). c=0.05는 약 -5% 내리막에서 최적<br>"
                     "<br><b>분석 제한</b>: 0=DEM 전체(느릴 수 있음), 값&gt;0=주변만 계산(빠름)<br>"
                     "<b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)<br>"
                     "<b>최소비용경로</b>: 출발점→도착점 경로(도착점 필요)"
                 )
-            else:
-                self.groupToblerParams.setVisible(False)
+            elif model_key == MODEL_NAISMITH:
                 self.groupNaismithParams.setVisible(True)
                 self.lblModelHelp.setText(
                     "<b>나이스미스 규칙 (Naismith, 1892)</b><br>"
                     "시간=수평거리/속도 + 상승고도/상승페널티(하강은 페널티 없음)<br>"
+                    "<br><b>변수 해석</b><br>"
+                    "• 수평 속도: 값↑ → 전체 시간이↓<br>"
+                    "• 상승 페널티(m/h): 값↓ → 오르막에 더 불리(상승에 더 많은 시간 부여)<br>"
                     "<br><b>분석 제한</b>: 0=DEM 전체(느릴 수 있음), 값&gt;0=주변만 계산(빠름)<br>"
                     "<b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)<br>"
                     "<b>최소비용경로</b>: 출발점→도착점 경로(도착점 필요)"
+                )
+            elif model_key == MODEL_HERZOG_METABOLIC:
+                self.groupHerzogMetabolicParams.setVisible(True)
+                self.lblModelHelp.setText(
+                    "<b>허조그 메타볼릭(상대속도) (Herzog metabolic, via Čučković)</b><br>"
+                    "경사(절대값)에 따른 이동 저항을 다항식으로 표현한 모델입니다. (상·하행 동일하게 취급)<br>"
+                    "<br><b>변수 해석</b><br>"
+                    "• 기본속도: 평지 기준 속도. 값↑ → 전체 시간이↓<br>"
+                    "<br><b>참고</b>: 수식은 Zoran Čučković의 QGIS 'Movement Analysis' 플러그인(slope_cost) 구현을 따릅니다.<br>"
+                    "<br><b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)"
+                )
+            elif model_key == MODEL_CONOLLY_LAKE:
+                self.groupConollyLakeParams.setVisible(True)
+                self.lblModelHelp.setText(
+                    "<b>코놀리&레이크 경사비용 (Conolly & Lake, 2006)</b><br>"
+                    "경사(절대값)에 비례한 상대 비용을 적용합니다. (상·하행 동일하게 취급)<br>"
+                    "<br><b>변수 해석</b><br>"
+                    "• 기본속도: 평지 기준 속도. 값↑ → 전체 시간이↓<br>"
+                    "• 기준경사(°): 값↓ → 약한 경사에도 페널티가 빨리 커짐(민감). 값↑ → 완만한 지형에서는 차이가 줄어듦<br>"
+                    "<br><b>주의</b>: 완만한 지형이 '더 빠르게' 나오지 않도록, 기준경사 이하에서는 페널티를 1로 고정합니다.<br>"
+                    "<br><b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)"
+                )
+            elif model_key == MODEL_HERZOG_WHEELED:
+                self.groupHerzogWheeledParams.setVisible(True)
+                self.lblModelHelp.setText(
+                    "<b>허조그 차량/수레 모델 (Herzog wheeled vehicle, via Čučković)</b><br>"
+                    "경사가 커질수록 속도가 비선형으로 급격히 감소하는 차량/수레 모델입니다. (상·하행 동일)<br>"
+                    "<br><b>변수 해석</b><br>"
+                    "• 기본속도: 평지 기준 속도. 값↑ → 전체 시간이↓<br>"
+                    "• 임계경사(°): 값↓ → 경사에 더 취약(조금만 경사져도 속도 급감). 값↑ → 경사 영향이 완만<br>"
+                    "<br><b>참고</b>: 수식은 Zoran Čučković의 QGIS 'Movement Analysis' 플러그인(slope_cost) 구현을 참고했습니다.<br>"
+                    "<br><b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)"
                 )
         except Exception:
             pass
@@ -1094,6 +1204,12 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             "tobler_min_speed_mps": 0.05,
             "naismith_horizontal_kmh": float(self.spinNaismithSpeedKmh.value()),
             "naismith_ascent_m_per_h": float(self.spinNaismithAscentMph.value()),
+            "min_speed_mps": 0.05,
+            "herzog_base_kmh": float(self.spinHerzogBaseKmh.value()),
+            "conolly_base_kmh": float(self.spinConollyBaseKmh.value()),
+            "conolly_ref_slope_deg": float(self.spinConollyRefSlopeDeg.value()),
+            "wheeled_base_kmh": float(self.spinWheeledBaseKmh.value()),
+            "wheeled_critical_slope_deg": float(self.spinWheeledCriticalSlopeDeg.value()),
         }
 
         self._set_running_ui(True)
