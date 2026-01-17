@@ -31,6 +31,9 @@
 **Tobler의 하이킹 함수 (보행 속도):**
 > Tobler, W. (1993). "Three Presentations on Geographical Analysis and Modeling: Non-Isotropic Geographic Modeling, Speculations on the Geometry of Geography, Global Spatial Analysis." *NCGIA Technical Report 93-1*.
 
+**Naismith의 규칙 (시간 기반 보행 모델):**
+> Naismith, W. W. (1892). "Excursions." *Scottish Mountaineering Club Journal*.
+
 **Minetti의 에너지 효율 연구:**
 > Minetti, A.E. (2002). "The three modes of terrestrial locomotion." In: *Running & Science*. Cambridge University Press.
 

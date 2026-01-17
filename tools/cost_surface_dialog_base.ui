@@ -1,0 +1,468 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>CostSurfaceDialog</class>
+ <widget class="QDialog" name="CostSurfaceDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>560</width>
+    <height>620</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>비용표면/최소비용경로 (Cost Surface / LCP) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupInfo">
+     <property name="title">
+      <string>설명</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Info">
+      <item>
+       <widget class="QLabel" name="lblDescription">
+        <property name="text">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;
+&lt;p&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;비용표면/최소비용경로(LCP)&lt;/span&gt;는 DEM 경사에 따른 이동 비용을 모델링하고, 출발점 기준 누적 비용(분)과 최소비용경로를 계산합니다.&lt;/p&gt;
+&lt;p&gt;&lt;span style=&quot;font-style:italic;&quot;&gt;Ref: Tobler (1993) hiking function, Naismith (1892) rule&lt;/span&gt;&lt;/p&gt;
+&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #f0f0f0; padding: 6px; border-radius: 3px;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDem">
+     <property name="title">
+      <string>1. 지형 데이터(DEM) 선택</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Dem">
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer">
+        <property name="toolTip">
+         <string>분석에 사용할 DEM 래스터 레이어를 선택하세요.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupModel">
+     <property name="title">
+      <string>2. 비용 모델 및 옵션</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Model">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblModel">
+        <property name="text">
+         <string>모델</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="cmbModel">
+        <property name="toolTip">
+         <string>비용 모델을 선택합니다. Tobler=경사 기반 보행 속도, Naismith=수평 거리+상승 페널티.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblBuffer">
+        <property name="text">
+         <string>분석 제한(m, 0=전체 DEM)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="spinBuffer">
+        <property name="toolTip">
+         <string>0이면 DEM 전체에 대해 누적 비용을 계산합니다. 값이 있으면 시작/도착점 주변만 계산하여 속도가 빨라집니다.</string>
+        </property>
+        <property name="decimals">
+         <number>0</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>100.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkDiagonal">
+        <property name="text">
+         <string>대각 이동 허용(8방향)</string>
+        </property>
+        <property name="toolTip">
+         <string>4방향(상하좌우) 대신 8방향 이동을 허용합니다. 더 자연스러운 경로가 나오지만 계산량이 늘 수 있습니다.</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkCreateCostRaster">
+        <property name="text">
+         <string>누적 비용(분) 래스터 생성</string>
+        </property>
+        <property name="toolTip">
+         <string>시작점에서 각 셀까지의 최소 누적 이동시간(분)을 래스터로 생성합니다.</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkCreatePath">
+        <property name="text">
+         <string>최소비용경로 라인 생성</string>
+        </property>
+        <property name="toolTip">
+         <string>시작점→도착점 최소비용경로(LineString)를 생성합니다. 도착점이 필요합니다.</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QGroupBox" name="groupModelParams">
+        <property name="title">
+         <string>모델 변수</string>
+        </property>
+        <property name="toolTip">
+         <string>선택한 모델의 기본 상수값을 필요에 따라 조정합니다.</string>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_ModelParams">
+         <item>
+          <widget class="QGroupBox" name="groupToblerParams">
+           <property name="title">
+            <string>Tobler (1993)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_Tobler">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblToblerBaseSpeed">
+              <property name="text">
+               <string>기본속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinToblerBaseKmh">
+              <property name="toolTip">
+               <string>평지 기준 기본 속도(km/h). 기본값: 6</string>
+              </property>
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>6.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblToblerSlopeFactor">
+              <property name="text">
+               <string>경사 민감도</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinToblerSlopeFactor">
+              <property name="toolTip">
+               <string>경사에 따른 속도 감소 정도(기본값: 3.5). 값이 클수록 경사 영향이 커집니다.</string>
+              </property>
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="value">
+               <double>3.500000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="lblToblerOffset">
+              <property name="text">
+               <string>최적 경사(+) </string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QDoubleSpinBox" name="spinToblerOffset">
+              <property name="toolTip">
+               <string>속도가 가장 빠른 경사(절대값이 아니라 +offset으로 처리). 기본값 0.05는 약 -5% 내리막에서 최적이라는 의미입니다.</string>
+              </property>
+              <property name="decimals">
+               <number>3</number>
+              </property>
+              <property name="minimum">
+               <double>-1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>0.050000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupNaismithParams">
+           <property name="title">
+            <string>Naismith (1892)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_Naismith">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblNaismithSpeed">
+              <property name="text">
+               <string>수평 속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinNaismithSpeedKmh">
+              <property name="toolTip">
+               <string>수평 이동 속도(km/h). 기본값: 5</string>
+              </property>
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>5.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblNaismithAscent">
+              <property name="text">
+               <string>상승 페널티(m/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinNaismithAscentMph">
+              <property name="toolTip">
+               <string>고도 상승 페널티(m/h). 기본값 600은 600m 상승당 1시간을 의미합니다.</string>
+              </property>
+              <property name="decimals">
+               <number>0</number>
+              </property>
+              <property name="minimum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>5000.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>600.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item row="6" column="0" colspan="2">
+       <widget class="QLabel" name="lblModelHelp">
+        <property name="text">
+         <string>모델/설정 설명이 여기에 표시됩니다.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #fafafa; color: #333; padding: 6px; border: 1px solid #ddd; border-radius: 3px;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupPoints">
+     <property name="title">
+      <string>3. 시작/도착점 설정</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Points">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_PointsButtons">
+        <item>
+         <widget class="QPushButton" name="btnPickPoints">
+          <property name="text">
+           <string>지도에서 시작/도착점 찍기</string>
+          </property>
+          <property name="toolTip">
+           <string>지도에서 시작점(필수)과 도착점(선택)을 지정합니다. 스냅을 켜면 더 정확합니다.</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnClearPoints">
+          <property name="text">
+           <string>점 초기화</string>
+          </property>
+          <property name="toolTip">
+           <string>선택한 시작/도착점과 지도 프리뷰 표시를 초기화합니다.</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="lblPointHelp">
+        <property name="text">
+         <string>왼쪽 클릭 1~2번(시작[필수] → 도착[경로 생성 시]), 우클릭/ESC: 종료</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>color: #444;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="lblStart">
+        <property name="text">
+         <string>시작점: (미설정)</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="lblEnd">
+        <property name="text">
+         <string>도착점: (미설정)</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="lblDistance">
+        <property name="text">
+         <string>직선거리: -</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>분석 실행</string>
+       </property>
+       <property name="toolTip">
+        <string>현재 설정으로 누적 비용 래스터/최소비용경로를 계산합니다.</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsMapLayerComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

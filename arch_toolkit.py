@@ -24,6 +24,7 @@ from .tools.terrain_analysis_dialog import TerrainAnalysisDialog
 from .tools.terrain_profile_dialog import TerrainProfileDialog
 from .tools.map_styling_dialog import MapStylingDialog
 from .tools.viewshed_dialog import ViewshedDialog
+from .tools.cost_surface_dialog import CostSurfaceDialog
 import os.path
 
 class ArchToolkit:
@@ -62,6 +63,11 @@ class ArchToolkit:
             self.profile_action = QAction(QIcon(profile_icon), u"지형 단면 (Terrain Profile)", self.iface.mainWindow())
             self.profile_action.triggered.connect(self.run_profile_tool)
 
+            # 비용표면/최소비용경로 (Cost Surface / LCP)
+            cost_icon = os.path.join(plugin_dir, 'cost_icon.png')
+            self.cost_action = QAction(QIcon(cost_icon), u"비용표면/최소비용경로 (Cost Surface / LCP)", self.iface.mainWindow())
+            self.cost_action.triggered.connect(self.run_cost_tool)
+
             # Map Styling
             style_icon = os.path.join(plugin_dir, 'style_icon.png')
             self.style_action = QAction(QIcon(style_icon), u"도면 시각화 (Map Styling)", self.iface.mainWindow())
@@ -77,6 +83,7 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.contour_action)
             self.iface.addPluginToMenu(self.menu_name, self.terrain_action)
             self.iface.addPluginToMenu(self.menu_name, self.profile_action)
+            self.iface.addPluginToMenu(self.menu_name, self.cost_action)
             self.iface.addPluginToMenu(self.menu_name, self.style_action)
             self.iface.addPluginToMenu(self.menu_name, self.viewshed_action)
 
@@ -96,6 +103,7 @@ class ArchToolkit:
             self.tool_menu.addAction(self.terrain_action)
             self.tool_menu.addAction(self.profile_action)
             self.tool_menu.addAction(self.viewshed_action)
+            self.tool_menu.addAction(self.cost_action)
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.style_action)
             
@@ -112,7 +120,7 @@ class ArchToolkit:
             # Keep references for cleanup
             self.actions = [
                 self.dem_action, self.contour_action, self.terrain_action,
-                self.profile_action, self.style_action, self.viewshed_action,
+                self.profile_action, self.cost_action, self.style_action, self.viewshed_action,
                 self.main_action
             ]
         except Exception as e:
@@ -164,6 +172,13 @@ class ArchToolkit:
         except Exception as e:
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
+    def run_cost_tool(self):
+        try:
+            dlg = CostSurfaceDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
+
     def run_viewshed_tool(self):
         try:
             # [v1.6.20] Maintain persistent dialog instance so layersRemoved signal persists
@@ -175,4 +190,3 @@ class ArchToolkit:
             self.viewshed_dlg.exec_()
         except Exception as e:
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
-

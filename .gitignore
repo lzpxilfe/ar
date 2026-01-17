@@ -21,6 +21,7 @@ ENV/
 *.jpg
 *.png
 !icon.png
+!cost_icon.png
 !dem_icon.png
 !contour_icon.png
 !terrain_icon.png
