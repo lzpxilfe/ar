@@ -577,7 +577,8 @@ def _edge_cost(model_key, horiz_m, dz_m, model_params, *, cost_mode="time_s"):
         max_deg = max(1.0, min(89.0, max_deg))
         slope_deg = math.degrees(math.atan(slope_abs))
         if slope_deg > max_deg + 1e-9:
-            return 1e12
+            # Treat as unreachable instead of producing extreme finite costs (keeps raster ranges readable).
+            return math.inf
 
         critical_deg = max(1.0, float(model_params.get("wheeled_critical_slope_deg", 12.0)))
         critical_percent = math.tan(math.radians(critical_deg)) * 100.0
