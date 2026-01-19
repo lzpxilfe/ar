@@ -93,6 +93,7 @@ class CostTaskResult:
     lcp_dist_m: Optional[float] = None
     lcp_time_s: Optional[float] = None
     isochrones_vector_path: Optional[str] = None
+    isoenergy_vector_path: Optional[str] = None
 
 
 def _inv_geotransform(gt):
@@ -269,6 +270,44 @@ def _default_isochrone_levels_minutes(max_minutes):
     return uniq
 
 
+def _default_isoenergy_levels_kcal(max_kcal):
+    """Generate iso-energy levels (kcal) with coarser spacing as energy increases."""
+    try:
+        max_kcal = float(max_kcal)
+    except Exception:
+        return []
+    if not math.isfinite(max_kcal) or max_kcal <= 0:
+        return []
+
+    levels = []
+
+    # Up to 600 kcal: 50-kcal steps
+    step = 50.0
+    v = step
+    while v <= min(600.0, max_kcal + 1e-6):
+        levels.append(float(v))
+        v += step
+
+    # 600~2000 kcal: 200-kcal steps
+    v = 800.0
+    while v <= min(2000.0, max_kcal + 1e-6):
+        levels.append(float(v))
+        v += 200.0
+
+    # 2000+ kcal: 500-kcal steps (cap count)
+    v = 2500.0
+    max_levels = 80
+    while v <= max_kcal + 1e-6 and len(levels) < max_levels:
+        levels.append(float(v))
+        v += 500.0
+
+    uniq = []
+    for t in sorted(set(levels)):
+        if t > 0:
+            uniq.append(t)
+    return uniq
+
+
 def _safe_layer_name_fragment(text):
     """Sanitize user-visible fragments used in layer/group names."""
     s = (text or "").strip()
@@ -284,11 +323,42 @@ def _safe_layer_name_fragment(text):
 
 def _create_isochrones_gpkg(cost_raster_path, output_gpkg_path, levels_minutes, nodata_value=-9999.0):
     """Create an isochrone contour GeoPackage from the cost raster (values in minutes)."""
-    if not cost_raster_path or not os.path.exists(cost_raster_path):
+    return _create_fixed_contours_gpkg(
+        cost_raster_path,
+        output_gpkg_path,
+        layer_name="isochrones",
+        value_field_name="minutes",
+        fixed_levels=levels_minutes,
+        nodata_value=nodata_value,
+    )
+
+
+def _create_isoenergy_gpkg(energy_raster_path, output_gpkg_path, levels_kcal, nodata_value=-9999.0):
+    """Create an iso-energy contour GeoPackage from the energy raster (values in kcal)."""
+    return _create_fixed_contours_gpkg(
+        energy_raster_path,
+        output_gpkg_path,
+        layer_name="isoenergy",
+        value_field_name="kcal",
+        fixed_levels=levels_kcal,
+        nodata_value=nodata_value,
+    )
+
+
+def _create_fixed_contours_gpkg(
+    raster_path,
+    output_gpkg_path,
+    *,
+    layer_name,
+    value_field_name,
+    fixed_levels,
+    nodata_value=-9999.0,
+):
+    if not raster_path or not os.path.exists(raster_path):
         return None
 
     try:
-        ds = gdal.Open(cost_raster_path, gdal.GA_ReadOnly)
+        ds = gdal.Open(raster_path, gdal.GA_ReadOnly)
         if ds is None:
             return None
         band = ds.GetRasterBand(1)
@@ -315,18 +385,21 @@ def _create_isochrones_gpkg(cost_raster_path, output_gpkg_path, levels_minutes, 
             except Exception:
                 srs = None
 
-        layer = vds.CreateLayer("isochrones", srs, ogr.wkbLineString)
+        layer = vds.CreateLayer(str(layer_name), srs, ogr.wkbLineString)
         if layer is None:
             vds = None
             return None
 
         layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
-        layer.CreateField(ogr.FieldDefn("minutes", ogr.OFTReal))
+        layer.CreateField(ogr.FieldDefn(str(value_field_name), ogr.OFTReal))
 
-        # Create only fixed contour levels (minutes).
-        levels = [float(v) for v in levels_minutes]
+        levels = [float(v) for v in (fixed_levels or [])]
+        if not levels:
+            vds = None
+            ds = None
+            return None
+
         try:
-            # Newer GDAL python bindings accept fixedLevels list directly.
             gdal.ContourGenerate(
                 band,
                 0.0,
@@ -339,7 +412,6 @@ def _create_isochrones_gpkg(cost_raster_path, output_gpkg_path, levels_minutes, 
                 1,
             )
         except TypeError:
-            # Fallback signature: fixedLevelCount + fixedLevels
             gdal.ContourGenerate(
                 band,
                 0.0,
@@ -942,6 +1014,7 @@ class CostSurfaceWorker(QgsTask):
         cost_min = None
         cost_max = None
         isochrones_vector_path = None
+        isoenergy_vector_path = None
         if create_time_raster and dist_time is not None:
             dist2d_s = dist_time.reshape((rows, cols))
             valid = np.isfinite(dist2d_s) & (~nodata_mask)
@@ -1030,6 +1103,24 @@ class CostSurfaceWorker(QgsTask):
             out_band.FlushCache()
             out_ds.FlushCache()
             out_ds = None
+
+            # Iso-energy contours (kcal) for interpretation (same polygonal artifacts as grid-based movement).
+            try:
+                if energy_max is not None and math.isfinite(energy_max):
+                    usable = _default_isoenergy_levels_kcal(energy_max)
+                    if usable:
+                        iso_path = os.path.join(
+                            tempfile.gettempdir(),
+                            f"archt_isoenergy_{self.model_key}_{run_id}.gpkg",
+                        )
+                        isoenergy_vector_path = _create_isoenergy_gpkg(
+                            energy_raster_path,
+                            iso_path,
+                            usable,
+                            nodata_value=-9999.0,
+                        )
+            except Exception:
+                isoenergy_vector_path = None
 
         path_coords = None
         if create_path and prev_for_path is not None:
@@ -1131,6 +1222,7 @@ class CostSurfaceWorker(QgsTask):
             lcp_dist_m=lcp_dist_m,
             lcp_time_s=lcp_time_s,
             isochrones_vector_path=isochrones_vector_path,
+            isoenergy_vector_path=isoenergy_vector_path,
         )
 
 
@@ -1662,6 +1754,20 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._track_layer_output(iso_layer, res.isochrones_vector_path)
                 bottom_to_top.append(iso_layer)
 
+        if res.isoenergy_vector_path:
+            iso_name = "등에너지선 (Iso-energy)"
+            if model_tag:
+                iso_name = f"{iso_name} - {model_tag}"
+            iso_layer = QgsVectorLayer(
+                f"{res.isoenergy_vector_path}|layername=isoenergy",
+                iso_name,
+                "ogr",
+            )
+            if iso_layer.isValid():
+                self._apply_isoenergy_style(iso_layer)
+                self._track_layer_output(iso_layer, res.isoenergy_vector_path)
+                bottom_to_top.append(iso_layer)
+
         if res.start_xy and res.dem_authid:
             pt_layer = QgsVectorLayer(f"Point?crs={res.dem_authid}", "시작/도착점 (Start/End)", "memory")
             pr = pt_layer.dataProvider()
@@ -1828,6 +1934,35 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.triggerRepaint()
         except Exception as e:
             log_message(f"Isochrone style error: {e}", level=Qgis.Warning)
+
+    def _apply_isoenergy_style(self, layer: QgsVectorLayer):
+        try:
+            symbol = QgsLineSymbol.createSimple(
+                {"color": "0,70,200,200", "width": "0.9", "line_style": "dash"}
+            )
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+            pal = QgsPalLayerSettings()
+            pal.isExpression = True
+            pal.fieldName = "round(\"kcal\", 0) || ' kcal'"
+            pal.placement = QgsPalLayerSettings.Curved
+
+            fmt = QgsTextFormat()
+            fmt.setSize(10.0)
+            fmt.setColor(QColor(10, 10, 10))
+
+            buf = QgsTextBufferSettings()
+            buf.setEnabled(True)
+            buf.setColor(QColor(255, 255, 255, 220))
+            buf.setSize(1.2)
+            fmt.setBuffer(buf)
+            pal.setFormat(fmt)
+
+            layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+            layer.setLabelsEnabled(True)
+            layer.triggerRepaint()
+        except Exception as e:
+            log_message(f"Iso-energy style error: {e}", level=Qgis.Warning)
 
     def _apply_cost_raster_style(self, layer: QgsRasterLayer, vmin, vmax):
         try:
