@@ -1240,6 +1240,7 @@ class MultiLineChartWidget(QtWidgets.QWidget):
         self.series = []  # [{name,color,dash,points:[(d,val),...]}]
         self.unit = ""
         self.title = ""
+        self.on_hover_distance = None  # callback(distance_m|None)
         self.zoom_level = 1.0
         self.pan_offset = 0.0  # distance units
         self.is_dragging = False
@@ -1330,11 +1331,21 @@ class MultiLineChartWidget(QtWidgets.QWidget):
         # Tooltip: nearest point values for each series
         if not (self.margin_left <= event.x() <= self.margin_left + w):
             self.setToolTip("")
+            if self.on_hover_distance:
+                try:
+                    self.on_hover_distance(None)
+                except Exception:
+                    pass
             return
         rel = float(event.x() - self.margin_left) / float(w)
         d = self.pan_offset + rel * visible_range
         if d < 0 or d > max_d:
             self.setToolTip("")
+            if self.on_hover_distance:
+                try:
+                    self.on_hover_distance(None)
+                except Exception:
+                    pass
             return
         lines = [f"{d:.0f} m"]
         for s in self.series:
@@ -1349,6 +1360,11 @@ class MultiLineChartWidget(QtWidgets.QWidget):
             else:
                 lines.append(f"{name}: {val:.2f}".rstrip())
         self.setToolTip("\n".join(lines))
+        if self.on_hover_distance:
+            try:
+                self.on_hover_distance(float(d))
+            except Exception:
+                pass
 
     def paintEvent(self, _event):
         p = QPainter(self)
@@ -2124,6 +2140,23 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
 
             bottom_to_top.append(path_layer)
 
+            # Milestones along LCP for map-friendly reading (every 500m).
+            try:
+                if res.path_coords and len(res.path_coords) >= 2 and res.dem_source:
+                    milestone_layer = self._create_lcp_milestones_layer(
+                        dem_source=res.dem_source,
+                        crs_authid=res.dem_authid,
+                        model_key=res.model_key,
+                        model_params=res.model_params or {},
+                        path_coords=res.path_coords,
+                        interval_m=500.0,
+                        layer_name=f"LCP 마일스톤 (500m) - {model_tag}" if model_tag else "LCP 마일스톤 (500m)",
+                    )
+                    if milestone_layer is not None and milestone_layer.isValid():
+                        bottom_to_top.append(milestone_layer)
+            except Exception as e:
+                log_message(f"Milestone layer error: {e}", level=Qgis.Warning)
+
         for lyr in bottom_to_top:
             project.addMapLayer(lyr, False)
             run_group.insertLayer(0, lyr)
@@ -2390,6 +2423,156 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             log_message(f"Energy raster style error: {e}", level=Qgis.Warning)
 
+    def _create_lcp_milestones_layer(
+        self,
+        *,
+        dem_source: str,
+        crs_authid: str,
+        model_key: str,
+        model_params: dict,
+        path_coords: list,
+        interval_m: float,
+        layer_name: str,
+    ):
+        if not dem_source or not os.path.exists(str(dem_source)):
+            return None
+        if not path_coords or len(path_coords) < 2:
+            return None
+        interval_m = float(interval_m)
+        if interval_m <= 0:
+            return None
+
+        ds = gdal.Open(str(dem_source), gdal.GA_ReadOnly)
+        if ds is None:
+            return None
+        band = ds.GetRasterBand(1)
+        gt = ds.GetGeoTransform()
+        nodata = band.GetNoDataValue()
+        dx = abs(float(gt[1]))
+        dy = abs(float(gt[5]))
+        step_m = max(0.1, min(dx, dy))
+
+        def densify_line(coords, step):
+            out = [coords[0]]
+            for (x0, y0), (x1, y1) in zip(coords, coords[1:]):
+                seg_len = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
+                if seg_len <= 0:
+                    continue
+                n = max(1, int(math.ceil(seg_len / float(step))))
+                for i in range(1, n + 1):
+                    t = float(i) / float(n)
+                    out.append(((x0 * (1.0 - t)) + (x1 * t), (y0 * (1.0 - t)) + (y1 * t)))
+            return out
+
+        coords_dense = densify_line(path_coords, step_m)
+        minx = min(float(x) for x, _y in coords_dense)
+        maxx = max(float(x) for x, _y in coords_dense)
+        miny = min(float(y) for _x, y in coords_dense)
+        maxy = max(float(y) for _x, y in coords_dense)
+        inv = _inv_geotransform(gt)
+        px0, py0 = gdal.ApplyGeoTransform(inv, minx, maxy)
+        px1, py1 = gdal.ApplyGeoTransform(inv, maxx, miny)
+        x0 = int(math.floor(min(px0, px1))) - 2
+        x1 = int(math.ceil(max(px0, px1))) + 2
+        y0 = int(math.floor(min(py0, py1))) - 2
+        y1 = int(math.ceil(max(py0, py1))) + 2
+        x0 = _clamp_int(x0, 0, ds.RasterXSize - 1)
+        y0 = _clamp_int(y0, 0, ds.RasterYSize - 1)
+        x1 = _clamp_int(x1, 0, ds.RasterXSize - 1)
+        y1 = _clamp_int(y1, 0, ds.RasterYSize - 1)
+        win_xsize = max(1, x1 - x0 + 1)
+        win_ysize = max(1, y1 - y0 + 1)
+        dem = band.ReadAsArray(x0, y0, win_xsize, win_ysize).astype(np.float32, copy=False)
+        nodata_mask = np.zeros(dem.shape, dtype=bool)
+        if nodata is not None:
+            nodata_mask |= dem == nodata
+        nodata_mask |= np.isnan(dem)
+        win_gt = _window_geotransform(gt, x0, y0)
+        inv_win_gt = _inv_geotransform(win_gt)
+        ds = None
+
+        profile = []
+        dist = 0.0
+        cum_time_s = 0.0
+        cum_energy_j = 0.0
+        z_prev = None
+        x_prev = None
+        y_prev = None
+        for (x, y) in coords_dense:
+            z = _bilinear_elevation(dem, nodata_mask, inv_win_gt, float(x), float(y))
+            if z is None:
+                continue
+            if x_prev is not None:
+                horiz = math.hypot(float(x) - float(x_prev), float(y) - float(y_prev))
+                dz = float(z) - float(z_prev)
+                dist += horiz
+                cum_time_s += _edge_cost(model_key, horiz, dz, model_params, cost_mode="time_s")
+                if model_key == MODEL_PANDOLF:
+                    cum_energy_j += _edge_cost(model_key, horiz, dz, model_params, cost_mode="energy_j")
+            profile.append((float(dist), float(x), float(y), float(cum_time_s) / 60.0, (float(cum_energy_j) / 4184.0) if model_key == MODEL_PANDOLF else None))
+            x_prev, y_prev, z_prev = float(x), float(y), float(z)
+
+        if not profile:
+            return None
+
+        total_d = profile[-1][0]
+        if not math.isfinite(total_d) or total_d <= interval_m:
+            return None
+
+        layer = QgsVectorLayer(f"Point?crs={crs_authid}", layer_name, "memory")
+        pr = layer.dataProvider()
+        pr.addAttributes(
+            [
+                QgsField("dist_m", QVariant.Double),
+                QgsField("time_min", QVariant.Double),
+                QgsField("energy_kcal", QVariant.Double),
+                QgsField("label", QVariant.String),
+            ]
+        )
+        layer.updateFields()
+
+        feats = []
+        n = int(math.floor(total_d / interval_m))
+        for i in range(1, n + 1):
+            target_d = float(i) * float(interval_m)
+            nearest = min(profile, key=lambda p: abs(float(p[0]) - target_d))
+            d_m, x, y, t_min, e_kcal = nearest
+            parts = [f"{d_m/1000.0:.1f}km", f"{t_min:.1f}분"]
+            if e_kcal is not None:
+                parts.append(f"{e_kcal:.0f}kcal")
+            label = " / ".join(parts)
+
+            f = QgsFeature(layer.fields())
+            f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(float(x), float(y))))
+            f.setAttributes([float(d_m), float(t_min), float(e_kcal) if e_kcal is not None else None, label])
+            feats.append(f)
+
+        pr.addFeatures(feats)
+        layer.updateExtents()
+
+        symbol = QgsMarkerSymbol.createSimple(
+            {"name": "circle", "color": "0,0,0,0", "outline_color": "0,0,0,200", "size": "2.0", "outline_width": "0.4"}
+        )
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+        pal = QgsPalLayerSettings()
+        pal.fieldName = "label"
+        pal.placement = QgsPalLayerSettings.AroundPoint
+        fmt = QgsTextFormat()
+        fmt.setSize(9.5)
+        fmt.setColor(QColor(10, 10, 10))
+        buf = QgsTextBufferSettings()
+        buf.setEnabled(True)
+        buf.setColor(QColor(255, 255, 255, 220))
+        buf.setSize(1.2)
+        fmt.setBuffer(buf)
+        pal.setFormat(fmt)
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+        layer.setLabelsEnabled(True)
+        layer.triggerRepaint()
+
+        return layer
+
     def _on_path_layer_selection_changed(self, layer_id: str):
         try:
             layer = QgsProject.instance().mapLayer(layer_id)
@@ -2579,6 +2762,50 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             )
             layout.addWidget(energy_chart)
 
+        # Map synchronization: hover over profile → show position marker on map (along LCP when available).
+        rb = QgsRubberBand(self.canvas, QgsWkbTypes.PointGeometry)
+        rb.setColor(QColor(0, 120, 255, 220))
+        rb.setWidth(4)
+        rb.setIcon(QgsRubberBand.ICON_CIRCLE)
+        rb.setIconSize(10)
+        rb.hide()
+
+        def point_at_distance(coords, dist_m):
+            if not coords or len(coords) < 2:
+                return None
+            remaining = float(dist_m)
+            for (x0, y0), (x1, y1) in zip(coords, coords[1:]):
+                seg = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
+                if seg <= 0:
+                    continue
+                if remaining <= seg:
+                    t = remaining / seg
+                    return (float(x0) * (1.0 - t) + float(x1) * t, float(y0) * (1.0 - t) + float(y1) * t)
+                remaining -= seg
+            return coords[-1]
+
+        base_coords = lcp_coords_dense if lcp_coords_dense else straight_coords
+
+        def on_hover(d):
+            try:
+                if d is None:
+                    rb.hide()
+                    rb.reset(QgsWkbTypes.PointGeometry)
+                    return
+                pt = point_at_distance(base_coords, float(d))
+                if not pt:
+                    return
+                rb.reset(QgsWkbTypes.PointGeometry)
+                rb.addPoint(QgsPointXY(pt[0], pt[1]))
+                rb.show()
+            except Exception:
+                pass
+
+        elev_chart.on_hover_distance = on_hover
+        time_chart.on_hover_distance = on_hover
+        if model_key == MODEL_PANDOLF:
+            energy_chart.on_hover_distance = on_hover
+
         btn_row = QtWidgets.QHBoxLayout()
         btn_close = QtWidgets.QPushButton("닫기")
         btn_close.clicked.connect(dlg.close)
@@ -2589,6 +2816,13 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self._profile_dialogs[layer_id] = dlg
         try:
             dlg.destroyed.connect(lambda *_a, lid=layer_id: self._profile_dialogs.pop(lid, None))
+        except Exception:
+            pass
+        try:
+            dlg.destroyed.connect(lambda *_a: on_hover(None))
+            dlg.destroyed.connect(
+                lambda *_a: (self.canvas.scene().removeItem(rb) if self.canvas and self.canvas.scene() else None)
+            )
         except Exception:
             pass
         dlg.resize(820, 720 if model_key == MODEL_PANDOLF else 560)
