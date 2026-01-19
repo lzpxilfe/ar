@@ -572,6 +572,13 @@ def _edge_cost(model_key, horiz_m, dz_m, model_params, *, cost_mode="time_s"):
         return (float(horiz_m) / base_mps) * factor
 
     if model_key == MODEL_HERZOG_WHEELED:
+        # Optional "hard" slope limit for wheeled traffic (beyond this, effectively impassable).
+        max_deg = float(model_params.get("wheeled_max_slope_deg", 45.0))
+        max_deg = max(1.0, min(89.0, max_deg))
+        slope_deg = math.degrees(math.atan(slope_abs))
+        if slope_deg > max_deg + 1e-9:
+            return 1e12
+
         critical_deg = max(1.0, float(model_params.get("wheeled_critical_slope_deg", 12.0)))
         critical_percent = math.tan(math.radians(critical_deg)) * 100.0
         slope_percent = slope_abs * 100.0
@@ -1621,7 +1628,10 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     "<br><b>변수 해석</b><br>"
                     "• 기본속도: 평지 기준 속도. 값↑ → 전체 시간이↓<br>"
                     "• 임계경사(°): 값↓ → 경사에 더 취약(조금만 경사져도 속도 급감). 값↑ → 경사 영향이 완만<br>"
+                    "• 통행한계(°): 이 각도를 넘는 경사는 사실상 '불통'으로 간주해 강하게 회피합니다(차량/수레에 현실적).<br>"
                     "<br><b>참고</b>: 수식은 Zoran Čučković의 QGIS 'Movement Analysis' 플러그인(slope_cost) 구현을 참고했습니다.<br>"
+                    "<br><b>주의</b>: 이 도구는 '도로/길' 정보를 모르므로, 평지 우회로가 너무 길면 산을 가로지르는 경로가 선택될 수 있습니다. "
+                    "차량/수레라면 임계경사를 낮추거나 통행한계를 설정해 완만한 경로를 더 선호하게 하세요.<br>"
                     "<br><b>누적 비용</b>: 출발점→각 셀 최소 이동시간(분)"
                 )
             elif model_key == MODEL_PANDOLF:
@@ -1813,6 +1823,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             "conolly_ref_slope_deg": float(self.spinConollyRefSlopeDeg.value()),
             "wheeled_base_kmh": float(self.spinWheeledBaseKmh.value()),
             "wheeled_critical_slope_deg": float(self.spinWheeledCriticalSlopeDeg.value()),
+            "wheeled_max_slope_deg": float(getattr(self, "spinWheeledMaxSlopeDeg", None).value()) if hasattr(self, "spinWheeledMaxSlopeDeg") else 45.0,
             "pandolf_body_kg": float(self.spinPandolfBodyKg.value()),
             "pandolf_load_kg": float(self.spinPandolfLoadKg.value()),
             "pandolf_speed_mps": float(self.spinPandolfSpeedKmh.value()) * 1000.0 / 3600.0,

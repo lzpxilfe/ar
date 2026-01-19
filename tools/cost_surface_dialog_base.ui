@@ -497,6 +497,35 @@
                </property>
               </widget>
              </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="lblWheeledMaxSlope">
+               <property name="text">
+                <string>통행한계(°)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QDoubleSpinBox" name="spinWheeledMaxSlopeDeg">
+               <property name="toolTip">
+                <string>이 각도(°)를 넘는 경사는 차량/수레 통행이 사실상 불가능하다고 가정하여 경로에서 강하게 회피합니다(사실상 금지). 값이 낮을수록 '평탄지/완만한 고개'를 강하게 선호합니다. (기본값: 20°)</string>
+               </property>
+               <property name="decimals">
+                <number>1</number>
+               </property>
+               <property name="minimum">
+                <double>5.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>45.000000000000000</double>
+               </property>
+               <property name="singleStep">
+                <double>0.500000000000000</double>
+               </property>
+               <property name="value">
+                <double>20.000000000000000</double>
+               </property>
+              </widget>
+             </item>
             </layout>
            </widget>
           </item>
