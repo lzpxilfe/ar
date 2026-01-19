@@ -23,7 +23,7 @@ import re
 
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import Qt, QVariant
-from qgis.PyQt.QtGui import QColor, QIcon
+from qgis.PyQt.QtGui import QColor, QIcon, QPainter, QPen
 from qgis.core import (
     Qgis,
     QgsApplication,
@@ -84,6 +84,9 @@ class CostTaskResult:
     start_xy: Optional[Tuple[float, float]] = None  # in DEM CRS
     end_xy: Optional[Tuple[float, float]] = None  # in DEM CRS
     dem_authid: Optional[str] = None
+    dem_source: Optional[str] = None
+    model_key: Optional[str] = None
+    model_params: Optional[dict] = None
     model_label: Optional[str] = None
     total_cost_s: Optional[float] = None
     total_energy_kcal: Optional[float] = None
@@ -1213,6 +1216,9 @@ class CostSurfaceWorker(QgsTask):
             start_xy=(float(sx), float(sy)),
             end_xy=(float(ex), float(ey)) if has_end else None,
             dem_authid=self.dem_authid,
+            dem_source=self.dem_source,
+            model_key=self.model_key,
+            model_params=dict(self.model_params or {}),
             model_label=self.model_label,
             total_cost_s=end_time_s,
             total_energy_kcal=total_energy_kcal,
@@ -1224,6 +1230,201 @@ class CostSurfaceWorker(QgsTask):
             isochrones_vector_path=isochrones_vector_path,
             isoenergy_vector_path=isoenergy_vector_path,
         )
+
+
+class MultiLineChartWidget(QtWidgets.QWidget):
+    """Lightweight multi-line profile widget (QPainter)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.series = []  # [{name,color,dash,points:[(d,val),...]}]
+        self.unit = ""
+        self.title = ""
+        self.zoom_level = 1.0
+        self.pan_offset = 0.0  # distance units
+        self.is_dragging = False
+        self.drag_start_x = 0
+        self.drag_start_offset = 0.0
+
+        self.margin_left = 60
+        self.margin_right = 20
+        self.margin_top = 28
+        self.margin_bottom = 34
+        self.setMinimumHeight(160)
+        self.setMouseTracking(True)
+
+    def set_series(self, *, title: str, unit: str, series: list):
+        self.title = title or ""
+        self.unit = unit or ""
+        self.series = series or []
+        self.zoom_level = 1.0
+        self.pan_offset = 0.0
+        self.update()
+
+    def _get_extent(self):
+        all_pts = []
+        for s in self.series:
+            pts = s.get("points") or []
+            all_pts.extend(pts)
+        if not all_pts:
+            return None
+        max_d = max(float(d) for d, _v in all_pts)
+        vals = [float(v) for _d, v in all_pts]
+        vmin = min(vals)
+        vmax = max(vals)
+        if not math.isfinite(max_d) or max_d <= 0:
+            return None
+        if not math.isfinite(vmin) or not math.isfinite(vmax):
+            return None
+        if vmax == vmin:
+            vmax = vmin + 1.0
+        pad = (vmax - vmin) * 0.08
+        return max_d, vmin - pad, vmax + pad
+
+    def wheelEvent(self, event):
+        if not self.series:
+            return
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.zoom_level = min(12.0, self.zoom_level * 1.2)
+        else:
+            self.zoom_level = max(1.0, self.zoom_level / 1.2)
+        if self.zoom_level == 1.0:
+            self.pan_offset = 0.0
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.zoom_level > 1.0:
+            self.is_dragging = True
+            self.drag_start_x = event.x()
+            self.drag_start_offset = self.pan_offset
+            self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.is_dragging = False
+            self.setCursor(Qt.ArrowCursor)
+
+    def mouseMoveEvent(self, event):
+        if not self.series:
+            return
+        ext = self._get_extent()
+        if not ext:
+            return
+        max_d, _vmin, _vmax = ext
+
+        w = self.width() - self.margin_left - self.margin_right
+        if w <= 0:
+            return
+
+        visible_range = max_d / max(1.0, float(self.zoom_level))
+        max_offset = max(0.0, max_d - visible_range)
+
+        if self.is_dragging and self.zoom_level > 1.0:
+            delta_x = self.drag_start_x - event.x()
+            delta_d = (float(delta_x) / float(w)) * visible_range
+            self.pan_offset = max(0.0, min(max_offset, self.drag_start_offset + delta_d))
+            self.update()
+            return
+
+        # Tooltip: nearest point values for each series
+        if not (self.margin_left <= event.x() <= self.margin_left + w):
+            self.setToolTip("")
+            return
+        rel = float(event.x() - self.margin_left) / float(w)
+        d = self.pan_offset + rel * visible_range
+        if d < 0 or d > max_d:
+            self.setToolTip("")
+            return
+        lines = [f"{d:.0f} m"]
+        for s in self.series:
+            pts = s.get("points") or []
+            if not pts:
+                continue
+            nearest = min(pts, key=lambda p: abs(float(p[0]) - d))
+            val = float(nearest[1])
+            name = s.get("name") or ""
+            if self.unit:
+                lines.append(f"{name}: {val:.2f} {self.unit}".rstrip())
+            else:
+                lines.append(f"{name}: {val:.2f}".rstrip())
+        self.setToolTip("\n".join(lines))
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        rect_w = self.width()
+        rect_h = self.height()
+        p.fillRect(0, 0, rect_w, rect_h, QColor(250, 250, 250))
+
+        ext = self._get_extent()
+        if not ext:
+            p.setPen(QPen(QColor(120, 120, 120), 1))
+            p.drawText(self.margin_left, self.margin_top + 20, "데이터 없음")
+            return
+        max_d, vmin, vmax = ext
+
+        plot_w = rect_w - self.margin_left - self.margin_right
+        plot_h = rect_h - self.margin_top - self.margin_bottom
+        if plot_w <= 10 or plot_h <= 10:
+            return
+
+        visible_range = max_d / max(1.0, float(self.zoom_level))
+        visible_range = max(1e-6, visible_range)
+        max_offset = max(0.0, max_d - visible_range)
+        self.pan_offset = max(0.0, min(max_offset, float(self.pan_offset)))
+        view_start = float(self.pan_offset)
+        view_end = view_start + visible_range
+
+        # Axes
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1))
+        x0 = self.margin_left
+        y0 = self.margin_top + plot_h
+        p.drawLine(x0, self.margin_top, x0, y0)
+        p.drawLine(x0, y0, x0 + plot_w, y0)
+        if self.title:
+            p.drawText(x0, 18, self.title)
+
+        # Helper transforms
+        def tx(d):
+            return x0 + (float(d) - view_start) * plot_w / visible_range
+
+        def ty(v):
+            return self.margin_top + (vmax - float(v)) * plot_h / (vmax - vmin)
+
+        # Draw each series
+        for s in self.series:
+            pts = s.get("points") or []
+            if len(pts) < 2:
+                continue
+            color = s.get("color") or QColor(0, 120, 255, 220)
+            pen = QPen(color, 2)
+            if s.get("dash"):
+                pen.setStyle(Qt.DashLine)
+            p.setPen(pen)
+
+            path_started = False
+            prev = None
+            for d, v in pts:
+                d = float(d)
+                if d < view_start - 1e-6 or d > view_end + 1e-6:
+                    prev = None
+                    continue
+                px = tx(d)
+                py = ty(v)
+                if prev is None:
+                    prev = (px, py)
+                    path_started = True
+                    continue
+                if path_started:
+                    p.drawLine(int(prev[0]), int(prev[1]), int(px), int(py))
+                prev = (px, py)
+
+        # Simple x labels
+        p.setPen(QPen(QColor(0, 0, 0, 160), 1))
+        p.drawText(x0, y0 + 22, f"{view_start:.0f}m")
+        p.drawText(x0 + plot_w - 40, y0 + 22, f"{view_end:.0f}m")
 
 
 class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
@@ -1267,6 +1468,9 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self._task = None
         self._task_running = False
         self._layer_temp_outputs = {}  # layer_id -> [temporary file paths]
+        self._profile_payloads = {}  # path_layer_id -> payload dict
+        self._profile_dialogs = {}  # path_layer_id -> dialog
+        self._profile_selection_handlers = {}  # path_layer_id -> handler
         QgsProject.instance().layersWillBeRemoved.connect(self._on_project_layers_removed)
 
         # Ensure no lingering preview graphics on startup
@@ -1867,6 +2071,57 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 ],
             )
             path_layer.setRenderer(renderer)
+
+            # Label only the LCP feature (map-friendly)
+            try:
+                pal = QgsPalLayerSettings()
+                pal.isExpression = True
+                pal.fieldName = (
+                    "case "
+                    "when \"kind\"='lcp' then "
+                    "  'LCP ' || round(\"dist_m\"/1000.0, 2) || 'km'"
+                    "  || coalesce(' / ' || round(\"time_min\", 1) || '분', '')"
+                    "  || coalesce(' / ' || round(\"energy_kcal\", 0) || 'kcal', '')"
+                    "end"
+                )
+                pal.placement = QgsPalLayerSettings.Curved
+                fmt = QgsTextFormat()
+                fmt.setSize(10.0)
+                fmt.setColor(QColor(10, 10, 10))
+                buf = QgsTextBufferSettings()
+                buf.setEnabled(True)
+                buf.setColor(QColor(255, 255, 255, 220))
+                buf.setSize(1.2)
+                fmt.setBuffer(buf)
+                pal.setFormat(fmt)
+                path_layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+                path_layer.setLabelsEnabled(True)
+            except Exception:
+                pass
+
+            # Store payload so selecting the line can reopen a profile.
+            try:
+                path_layer.setCustomProperty("archtoolkit/dem_source", res.dem_source or "")
+                path_layer.setCustomProperty("archtoolkit/model_key", res.model_key or "")
+            except Exception:
+                pass
+            self._profile_payloads[path_layer.id()] = {
+                "dem_source": res.dem_source,
+                "dem_authid": res.dem_authid,
+                "model_key": res.model_key,
+                "model_params": res.model_params or {},
+                "model_label": res.model_label or "",
+                "start_xy": res.start_xy,
+                "end_xy": res.end_xy,
+                "path_coords": res.path_coords,
+            }
+            try:
+                handler = lambda *_args, lid=path_layer.id(): self._on_path_layer_selection_changed(lid)
+                self._profile_selection_handlers[path_layer.id()] = handler
+                path_layer.selectionChanged.connect(handler)
+            except Exception:
+                pass
+
             bottom_to_top.append(path_layer)
 
         for lyr in bottom_to_top:
@@ -1889,6 +2144,29 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self._layer_temp_outputs.setdefault(layer.id(), []).append(path)
 
     def _cleanup_layer_outputs(self, layer_ids):
+        # Close profile dialogs / disconnect handlers for removed layers
+        try:
+            for lid in layer_ids:
+                try:
+                    handler = self._profile_selection_handlers.pop(lid, None)
+                    layer = QgsProject.instance().mapLayer(lid)
+                    if layer and handler:
+                        layer.selectionChanged.disconnect(handler)
+                except Exception:
+                    pass
+                try:
+                    dlg = self._profile_dialogs.pop(lid, None)
+                    if dlg:
+                        dlg.close()
+                except Exception:
+                    pass
+                try:
+                    self._profile_payloads.pop(lid, None)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         paths = []
         for lid in layer_ids:
             outputs = self._layer_temp_outputs.pop(lid, [])
@@ -2111,6 +2389,210 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.triggerRepaint()
         except Exception as e:
             log_message(f"Energy raster style error: {e}", level=Qgis.Warning)
+
+    def _on_path_layer_selection_changed(self, layer_id: str):
+        try:
+            layer = QgsProject.instance().mapLayer(layer_id)
+            if not layer or layer.selectedFeatureCount() <= 0:
+                return
+            self.open_cost_profile(layer_id)
+        except Exception as e:
+            log_message(f"Cost profile selection handler error: {e}", level=Qgis.Warning)
+
+    def open_cost_profile(self, layer_id: str):
+        payload = self._profile_payloads.get(layer_id)
+        if not payload:
+            return
+
+        if layer_id in self._profile_dialogs:
+            dlg = self._profile_dialogs.get(layer_id)
+            if dlg:
+                try:
+                    dlg.show()
+                    dlg.raise_()
+                    dlg.activateWindow()
+                except Exception:
+                    pass
+                return
+
+        dem_source = payload.get("dem_source")
+        start_xy = payload.get("start_xy")
+        end_xy = payload.get("end_xy")
+        lcp_coords = payload.get("path_coords") or []
+        model_key = payload.get("model_key")
+        model_params = payload.get("model_params") or {}
+        model_label = payload.get("model_label") or ""
+
+        if not dem_source or not os.path.exists(str(dem_source)):
+            push_message(self.iface, "오류", "프로파일을 위해 DEM 소스를 찾을 수 없습니다.", level=2, duration=6)
+            return
+        if not start_xy or not end_xy:
+            return
+
+        try:
+            ds = gdal.Open(str(dem_source), gdal.GA_ReadOnly)
+            if ds is None:
+                raise Exception("GDAL open failed")
+            band = ds.GetRasterBand(1)
+            gt = ds.GetGeoTransform()
+            nodata = band.GetNoDataValue()
+            dx = abs(float(gt[1]))
+            dy = abs(float(gt[5]))
+            step_m = max(0.1, min(dx, dy))
+
+            def densify_line(coords, step):
+                if not coords or len(coords) < 2:
+                    return coords
+                out = [coords[0]]
+                for (x0, y0), (x1, y1) in zip(coords, coords[1:]):
+                    seg_len = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
+                    if seg_len <= 0:
+                        continue
+                    n = max(1, int(math.ceil(seg_len / float(step))))
+                    for i in range(1, n + 1):
+                        t = float(i) / float(n)
+                        out.append(((x0 * (1.0 - t)) + (x1 * t), (y0 * (1.0 - t)) + (y1 * t)))
+                return out
+
+            straight_coords = densify_line([start_xy, end_xy], step_m)
+            lcp_coords_dense = densify_line(lcp_coords, step_m) if lcp_coords else []
+
+            # Read minimal DEM window for both paths
+            all_pts = straight_coords + lcp_coords_dense
+            minx = min(float(x) for x, _y in all_pts)
+            maxx = max(float(x) for x, _y in all_pts)
+            miny = min(float(y) for _x, y in all_pts)
+            maxy = max(float(y) for _x, y in all_pts)
+            inv = _inv_geotransform(gt)
+            px0, py0 = gdal.ApplyGeoTransform(inv, minx, maxy)
+            px1, py1 = gdal.ApplyGeoTransform(inv, maxx, miny)
+            x0 = int(math.floor(min(px0, px1))) - 2
+            x1 = int(math.ceil(max(px0, px1))) + 2
+            y0 = int(math.floor(min(py0, py1))) - 2
+            y1 = int(math.ceil(max(py0, py1))) + 2
+            x0 = _clamp_int(x0, 0, ds.RasterXSize - 1)
+            y0 = _clamp_int(y0, 0, ds.RasterYSize - 1)
+            x1 = _clamp_int(x1, 0, ds.RasterXSize - 1)
+            y1 = _clamp_int(y1, 0, ds.RasterYSize - 1)
+            win_xsize = max(1, x1 - x0 + 1)
+            win_ysize = max(1, y1 - y0 + 1)
+            dem = band.ReadAsArray(x0, y0, win_xsize, win_ysize).astype(np.float32, copy=False)
+            nodata_mask = np.zeros(dem.shape, dtype=bool)
+            if nodata is not None:
+                nodata_mask |= dem == nodata
+            nodata_mask |= np.isnan(dem)
+            win_gt = _window_geotransform(gt, x0, y0)
+            inv_win_gt = _inv_geotransform(win_gt)
+
+            def sample_profile(coords):
+                pts = []
+                dist = 0.0
+                cum_time_s = 0.0
+                cum_energy_j = 0.0
+                z_prev = None
+                x_prev = None
+                y_prev = None
+                for (x, y) in coords:
+                    z = _bilinear_elevation(dem, nodata_mask, inv_win_gt, float(x), float(y))
+                    if z is None:
+                        continue
+                    if x_prev is not None:
+                        horiz = math.hypot(float(x) - float(x_prev), float(y) - float(y_prev))
+                        dz = float(z) - float(z_prev)
+                        dist += horiz
+                        if model_key:
+                            cum_time_s += _edge_cost(model_key, horiz, dz, model_params, cost_mode="time_s")
+                            if model_key == MODEL_PANDOLF:
+                                cum_energy_j += _edge_cost(model_key, horiz, dz, model_params, cost_mode="energy_j")
+                    pts.append(
+                        (
+                            float(dist),
+                            float(z),
+                            float(cum_time_s) / 60.0,
+                            (float(cum_energy_j) / 4184.0) if model_key == MODEL_PANDOLF else None,
+                        )
+                    )
+                    x_prev, y_prev, z_prev = float(x), float(y), float(z)
+                return pts
+
+            straight_pts = sample_profile(straight_coords)
+            lcp_pts = sample_profile(lcp_coords_dense) if lcp_coords_dense else []
+            ds = None
+
+        except Exception as e:
+            push_message(self.iface, "오류", f"프로파일 계산 실패: {e}", level=2, duration=7)
+            return
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"최소비용경로 프로파일 (LCP Profile) - {model_label}".strip())
+        dlg.setModal(False)
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        summary_parts = []
+        if lcp_pts:
+            total_d = lcp_pts[-1][0] / 1000.0
+            total_t = lcp_pts[-1][2]
+            summary_parts.append(f"LCP {total_d:.2f}km / {total_t:.1f}분")
+            if lcp_pts[-1][3] is not None:
+                summary_parts.append(f"{lcp_pts[-1][3]:.0f}kcal")
+        if straight_pts:
+            sd = straight_pts[-1][0] / 1000.0
+            st = straight_pts[-1][2]
+            summary_parts.append(f"직선 {sd:.2f}km / {st:.1f}분")
+            if straight_pts[-1][3] is not None:
+                summary_parts.append(f"{straight_pts[-1][3]:.0f}kcal")
+        lbl = QtWidgets.QLabel(" | ".join(summary_parts))
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+
+        elev_chart = MultiLineChartWidget()
+        elev_chart.set_series(
+            title="고도 (Elevation)",
+            unit="m",
+            series=[
+                {"name": "LCP", "color": QColor(0, 160, 0, 220), "dash": False, "points": [(d, z) for d, z, _t, _e in lcp_pts]},
+                {"name": "직선", "color": QColor(90, 90, 90, 220), "dash": True, "points": [(d, z) for d, z, _t, _e in straight_pts]},
+            ],
+        )
+        layout.addWidget(elev_chart)
+
+        time_chart = MultiLineChartWidget()
+        time_chart.set_series(
+            title="누적 시간 (Cumulative Time)",
+            unit="분",
+            series=[
+                {"name": "LCP", "color": QColor(0, 120, 255, 220), "dash": False, "points": [(d, t) for d, _z, t, _e in lcp_pts]},
+                {"name": "직선", "color": QColor(90, 90, 90, 220), "dash": True, "points": [(d, t) for d, _z, t, _e in straight_pts]},
+            ],
+        )
+        layout.addWidget(time_chart)
+
+        if model_key == MODEL_PANDOLF:
+            energy_chart = MultiLineChartWidget()
+            energy_chart.set_series(
+                title="누적 에너지 (Cumulative Energy)",
+                unit="kcal",
+                series=[
+                    {"name": "LCP", "color": QColor(120, 0, 200, 220), "dash": False, "points": [(d, e) for d, _z, _t, e in lcp_pts if e is not None]},
+                    {"name": "직선", "color": QColor(90, 90, 90, 220), "dash": True, "points": [(d, e) for d, _z, _t, e in straight_pts if e is not None]},
+                ],
+            )
+            layout.addWidget(energy_chart)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_close = QtWidgets.QPushButton("닫기")
+        btn_close.clicked.connect(dlg.close)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+        self._profile_dialogs[layer_id] = dlg
+        try:
+            dlg.destroyed.connect(lambda *_a, lid=layer_id: self._profile_dialogs.pop(lid, None))
+        except Exception:
+            pass
+        dlg.resize(820, 720 if model_key == MODEL_PANDOLF else 560)
+        dlg.show()
 
     def reject(self):
         self._cleanup()
