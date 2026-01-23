@@ -23,7 +23,7 @@ from osgeo import gdal
 
 from qgis.PyQt import QtWidgets, uic
 from qgis.PyQt.QtCore import Qt, QVariant
-from qgis.PyQt.QtGui import QColor, QCursor, QIcon
+from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.core import (
     Qgis,
     QgsApplication,
@@ -1031,22 +1031,7 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             idx = self.cmbNetworkMode.count() - 1
             self.cmbNetworkMode.setItemData(idx, tip, Qt.ToolTipRole)
 
-        # Show tooltip when hovering the dropdown items
-        try:
-            view = self.cmbNetworkMode.view()
-            view.setMouseTracking(True)
-
-            def on_entered(model_index):
-                try:
-                    tip = model_index.data(Qt.ToolTipRole) or ""
-                    if tip:
-                        QtWidgets.QToolTip.showText(QCursor.pos(), str(tip), view)
-                except Exception:
-                    pass
-
-            view.entered.connect(on_entered)
-        except Exception:
-            pass
+        # Item tooltips are stored in Qt.ToolTipRole; let Qt handle showing them.
 
         self.cmbCostMode.clear()
         self.cmbCostMode.addItem("시간(분) (Time, min)", COST_TIME)
@@ -1228,76 +1213,139 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception:
                 pass
 
-        tobler_tt = (
-            "Tobler Hiking Function (1993)\n"
-            "- 경사(tan θ)에 따라 보행 속도를 계산합니다.\n"
-            "- 기본속도↑ → 전체 시간이 감소합니다.\n"
-            "- 경사계수↑ → 경사에 더 민감(가파를수록 더 느려짐)해집니다."
-        )
         tt(self.cmbModel, "모델을 선택하면 아래 변수들이 해당 모델에 맞게 적용됩니다.")
-        tt(self.lblToblerBaseSpeed, tobler_tt)
-        tt(self.spinToblerBaseKmh, tobler_tt)
-        tt(self.lblToblerSlopeFactor, tobler_tt)
-        tt(self.spinToblerSlopeFactor, tobler_tt)
-        tt(self.lblToblerOffset, tobler_tt)
-        tt(self.spinToblerOffset, tobler_tt)
 
-        naismith_tt = (
-            "Naismith's Rule\n"
-            "- 수평 이동 속도 + 상승 고도(600m당 1시간 등)를 단순화해 시간으로 환산합니다.\n"
-            "- 수평속도↑ → 시간이 감소합니다.\n"
-            "- 상승 페널티↑ → 오르막이 더 비싸집니다."
+        # Tobler
+        tt(
+            self.lblToblerBaseSpeed,
+            "기본속도(km/h)\n- 평지 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
         )
-        tt(self.lblNaismithSpeed, naismith_tt)
-        tt(self.spinNaismithSpeedKmh, naismith_tt)
-        tt(self.lblNaismithAscent, naismith_tt)
-        tt(self.spinNaismithAscentMph, naismith_tt)
+        tt(
+            self.spinToblerBaseKmh,
+            "기본속도(km/h)\n- 평지 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
+        )
+        tt(
+            self.lblToblerSlopeFactor,
+            "경사 민감도\n- 경사가 변할 때 속도가 얼마나 빨리 감소하는지 결정합니다.\n- 값↑ → 가파를수록 더 느려집니다.",
+        )
+        tt(
+            self.spinToblerSlopeFactor,
+            "경사 민감도\n- 경사가 변할 때 속도가 얼마나 빨리 감소하는지 결정합니다.\n- 값↑ → 가파를수록 더 느려집니다.",
+        )
+        tt(
+            self.lblToblerOffset,
+            "오프셋(+)\n- Tobler 식의 상수(기본값 0.05)로, 최적 경사 위치를 미세 조정합니다.\n- 값 변화는 결과에 미세하게 반영됩니다.",
+        )
+        tt(
+            self.spinToblerOffset,
+            "오프셋(+)\n- Tobler 식의 상수(기본값 0.05)로, 최적 경사 위치를 미세 조정합니다.\n- 값 변화는 결과에 미세하게 반영됩니다.",
+        )
 
-        herzog_tt = (
-            "Herzog 모델(Čučković 경유)\n"
-            "- 경사에 따른 이동 비용을 경험적으로 모델링합니다.\n"
-            "- 기본속도↑ → 시간이 감소합니다."
+        # Naismith
+        tt(
+            self.lblNaismithSpeed,
+            "수평 속도(km/h)\n- 평지 기준 보행 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
         )
-        tt(self.lblHerzogBaseSpeed, herzog_tt)
-        tt(self.spinHerzogBaseKmh, herzog_tt)
+        tt(
+            self.spinNaismithSpeedKmh,
+            "수평 속도(km/h)\n- 평지 기준 보행 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
+        )
+        tt(
+            self.lblNaismithAscent,
+            "상승(m/h)\n- 상승 속도(오르막 보정)입니다.\n- 값↑ → 오르막 페널티가 감소(더 빨리 오름)합니다.",
+        )
+        tt(
+            self.spinNaismithAscentMph,
+            "상승(m/h)\n- 상승 속도(오르막 보정)입니다.\n- 값↑ → 오르막 페널티가 감소(더 빨리 오름)합니다.",
+        )
 
-        conolly_tt = (
-            "Conolly & Lake (2006)\n"
-            "- 경사(도/%)에 따른 이동 비용을 보행 속도로 환산해 적용합니다.\n"
-            "- 기준 경사값은 '경사 민감도' 기준점으로, 값에 따라 비용 곡선이 달라집니다."
+        # Herzog metabolic (via Cuckovic)
+        tt(
+            self.lblHerzogBaseSpeed,
+            "기본 속도(km/h)\n- 평지 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
         )
-        tt(self.lblConollyBaseSpeed, conolly_tt)
-        tt(self.spinConollyBaseKmh, conolly_tt)
-        tt(self.lblConollyRefSlope, conolly_tt)
-        tt(self.spinConollyRefSlopeDeg, conolly_tt)
+        tt(
+            self.spinHerzogBaseKmh,
+            "기본 속도(km/h)\n- 평지 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
+        )
 
-        wheeled_tt = (
-            "Herzog wheeled(차량/수레, Čučković 경유)\n"
-            "- 가파른 경사에서 비용이 급격히 증가하도록(통과 어려움) 설계된 모델입니다.\n"
-            "- 임계 경사↑: 더 가파른 곳까지 '가능'하게(비용 증가 시작이 늦게) 됩니다.\n"
-            "- 최대 경사↓: 더 쉽게 통과 불가(또는 매우 큰 비용)로 처리됩니다."
+        # Conolly & Lake
+        tt(
+            self.lblConollyBaseSpeed,
+            "기본 속도(km/h)\n- 평지(경사 0) 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
         )
-        tt(self.lblWheeledBaseSpeed, wheeled_tt)
-        tt(self.spinWheeledBaseKmh, wheeled_tt)
-        tt(self.lblWheeledCriticalSlope, wheeled_tt)
-        tt(self.spinWheeledCriticalSlopeDeg, wheeled_tt)
-        tt(self.lblWheeledMaxSlope, wheeled_tt)
-        tt(self.spinWheeledMaxSlopeDeg, wheeled_tt)
+        tt(
+            self.spinConollyBaseKmh,
+            "기본 속도(km/h)\n- 평지(경사 0) 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
+        )
+        tt(
+            self.lblConollyRefSlope,
+            "기준 경사(°)\n- 비용 곡선의 기준점(민감도 기준)을 정합니다.\n- 값 변화에 따라 경사 페널티가 달라집니다.",
+        )
+        tt(
+            self.spinConollyRefSlopeDeg,
+            "기준 경사(°)\n- 비용 곡선의 기준점(민감도 기준)을 정합니다.\n- 값 변화에 따라 경사 페널티가 달라집니다.",
+        )
 
-        pandolf_tt = (
-            "Pandolf et al. (1977) Load Carriage\n"
-            "- 체중/짐무게/지형계수(마찰) + 경사로 에너지(줄/J)를 추정합니다.\n"
-            "- 체중/짐무게/지형계수↑ → 에너지 소모가 증가합니다.\n"
-            "- 속도(km/h)는 'kcal 표기용 시간 환산'에도 사용됩니다."
+        # Herzog wheeled (via Cuckovic)
+        tt(
+            self.lblWheeledBaseSpeed,
+            "기본 속도(km/h)\n- 평지 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
         )
-        tt(self.lblPandolfBody, pandolf_tt)
-        tt(self.spinPandolfBodyKg, pandolf_tt)
-        tt(self.lblPandolfLoad, pandolf_tt)
-        tt(self.spinPandolfLoadKg, pandolf_tt)
-        tt(self.lblPandolfSpeed, pandolf_tt)
-        tt(self.spinPandolfSpeedKmh, pandolf_tt)
-        tt(self.lblPandolfTerrain, pandolf_tt)
-        tt(self.spinPandolfTerrainFactor, pandolf_tt)
+        tt(
+            self.spinWheeledBaseKmh,
+            "기본 속도(km/h)\n- 평지 기준 속도입니다.\n- 값↑ → 전체 이동 시간이 감소합니다.",
+        )
+        tt(
+            self.lblWheeledCriticalSlope,
+            "기준 경사(°)\n- 이 값 이후로 비용이 급격히 증가하기 시작합니다.\n- 값↑ → 더 가파른 경사까지 '급증 전'으로 취급됩니다.",
+        )
+        tt(
+            self.spinWheeledCriticalSlopeDeg,
+            "기준 경사(°)\n- 이 값 이후로 비용이 급격히 증가하기 시작합니다.\n- 값↑ → 더 가파른 경사까지 '급증 전'으로 취급됩니다.",
+        )
+        tt(
+            self.lblWheeledMaxSlope,
+            "통행한계(°)\n- 이 경사를 초과하는 셀은 통과 불가(NoData)로 처리합니다.\n- 값↓ → 통과 불가 영역이 늘어납니다.",
+        )
+        tt(
+            self.spinWheeledMaxSlopeDeg,
+            "통행한계(°)\n- 이 경사를 초과하는 셀은 통과 불가(NoData)로 처리합니다.\n- 값↓ → 통과 불가 영역이 늘어납니다.",
+        )
+
+        # Pandolf
+        tt(
+            self.lblPandolfBody,
+            "체중(kg)\n- 보행자 체중입니다.\n- 값↑ → 에너지 소모(kcal)가 증가합니다.",
+        )
+        tt(
+            self.spinPandolfBodyKg,
+            "체중(kg)\n- 보행자 체중입니다.\n- 값↑ → 에너지 소모(kcal)가 증가합니다.",
+        )
+        tt(
+            self.lblPandolfLoad,
+            "짐(kg)\n- 운반 짐 무게입니다.\n- 값↑ → 에너지 소모(kcal)가 증가합니다.",
+        )
+        tt(
+            self.spinPandolfLoadKg,
+            "짐(kg)\n- 운반 짐 무게입니다.\n- 값↑ → 에너지 소모(kcal)가 증가합니다.",
+        )
+        tt(
+            self.lblPandolfSpeed,
+            "속도(km/h)\n- 에너지 식 + 시간 환산(분/거리) 계산에 사용합니다.\n- 값↑ → 시간은 감소하지만 에너지는 항상 감소하지 않을 수 있습니다.",
+        )
+        tt(
+            self.spinPandolfSpeedKmh,
+            "속도(km/h)\n- 에너지 식 + 시간 환산(분/거리) 계산에 사용합니다.\n- 값↑ → 시간은 감소하지만 에너지는 항상 감소하지 않을 수 있습니다.",
+        )
+        tt(
+            self.lblPandolfTerrain,
+            "지면계수 η\n- 지면/마찰 계수(η). 1.0=단단한 지면, 값↑ → 같은 경사에서도 더 비싸짐.\n- 예: 1.0(도로/평탄) ~ 2.0+(거친 지면/진흙 등)",
+        )
+        tt(
+            self.spinPandolfTerrainFactor,
+            "지면계수 η\n- 지면/마찰 계수(η). 1.0=단단한 지면, 값↑ → 같은 경사에서도 더 비싸짐.\n- 예: 1.0(도로/평탄) ~ 2.0+(거친 지면/진흙 등)",
+        )
 
     def _pick_hub_values(self):
         layer = self.cmbSiteLayer.currentLayer()
@@ -1373,22 +1421,7 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             idx = self.cmbModel.count() - 1
             self.cmbModel.setItemData(idx, self._model_help_text(key), Qt.ToolTipRole)
 
-        # Show tooltip when hovering the dropdown items
-        try:
-            view = self.cmbModel.view()
-            view.setMouseTracking(True)
-
-            def on_entered(model_index):
-                try:
-                    tip = model_index.data(Qt.ToolTipRole) or ""
-                    if tip:
-                        QtWidgets.QToolTip.showText(QCursor.pos(), str(tip), view)
-                except Exception:
-                    pass
-
-            view.entered.connect(on_entered)
-        except Exception:
-            pass
+        # Item tooltips are stored in Qt.ToolTipRole; let Qt handle showing them.
 
     def _on_model_changed(self):
         try:
