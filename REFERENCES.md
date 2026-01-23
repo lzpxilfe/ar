@@ -46,6 +46,13 @@
 **Llobera & Sluckin의 인지적 경사 연구:**
 > Llobera, M. & Sluckin, T.J. (2007). "Zigzagging: Theoretical insights on climbing strategies." *Journal of Theoretical Biology*, 249(2), pp. 206-217.
 
+## 최소비용 네트워크 (Least-cost Network)
+
+**MST(최소 신장 트리) 알고리즘:**
+> Kruskal, J.B. (1956). "On the shortest spanning subtree of a graph and the traveling salesman problem." *Proceedings of the American Mathematical Society*, 7(1), pp. 48–50.
+
+> Prim, R.C. (1957). "Shortest connection network and some generalizations." *Bell System Technical Journal*, 36(6), pp. 1389–1401.
+
 ## 지형 거칠기 지수 TRI (Terrain Ruggedness Index)
 
 **Riley et al. 분류 (5등급):**

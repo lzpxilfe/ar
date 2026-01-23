@@ -1958,6 +1958,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             layer_name = f"누적 비용(분) (Cumulative Cost, min) - {(res.model_label or '').strip()}"
             cost_layer = QgsRasterLayer(res.cost_raster_path, layer_name)
             if cost_layer.isValid():
+                self._tag_cost_surface_layer(cost_layer, run_id, "cost_raster")
                 self._apply_cost_raster_style(cost_layer, res.cost_min, res.cost_max)
                 self._track_layer_output(cost_layer, res.cost_raster_path)
                 bottom_to_top.append(cost_layer)
@@ -1966,6 +1967,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             layer_name = f"누적 에너지(kcal) (Cumulative Energy, kcal) - {(res.model_label or '').strip()}"
             energy_layer = QgsRasterLayer(res.energy_raster_path, layer_name)
             if energy_layer.isValid():
+                self._tag_cost_surface_layer(energy_layer, run_id, "energy_raster")
                 self._apply_energy_raster_style(
                     energy_layer, res.energy_min, res.energy_max
                 )
@@ -1982,6 +1984,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 "ogr",
             )
             if iso_layer.isValid():
+                self._tag_cost_surface_layer(iso_layer, run_id, "isochrones")
                 self._apply_isochrone_style(iso_layer)
                 self._track_layer_output(iso_layer, res.isochrones_vector_path)
                 bottom_to_top.append(iso_layer)
@@ -1996,6 +1999,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 "ogr",
             )
             if iso_layer.isValid():
+                self._tag_cost_surface_layer(iso_layer, run_id, "isoenergy")
                 self._apply_isoenergy_style(iso_layer)
                 self._track_layer_output(iso_layer, res.isoenergy_vector_path)
                 bottom_to_top.append(iso_layer)
@@ -2005,6 +2009,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             pr = pt_layer.dataProvider()
             pr.addAttributes([QgsField("role", QVariant.String)])
             pt_layer.updateFields()
+            self._tag_cost_surface_layer(pt_layer, run_id, "start_end_points")
 
             f_start = QgsFeature(pt_layer.fields())
             f_start.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*res.start_xy)))
@@ -2049,6 +2054,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 ]
             )
             path_layer.updateFields()
+            self._tag_cost_surface_layer(path_layer, run_id, "path_compare")
 
             feats = []
 
@@ -2165,6 +2171,7 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                         layer_name=f"LCP 마일스톤 (500m) - {model_tag}" if model_tag else "LCP 마일스톤 (500m)",
                     )
                     if milestone_layer is not None and milestone_layer.isValid():
+                        self._tag_cost_surface_layer(milestone_layer, run_id, "milestones")
                         bottom_to_top.append(milestone_layer)
             except Exception as e:
                 log_message(f"Milestone layer error: {e}", level=Qgis.Warning)
@@ -2183,18 +2190,36 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+    def _tag_cost_surface_layer(self, layer: QgsMapLayer, run_id: str, kind: str):
+        """Attach metadata to result layers for later cleanup (e.g., transient rubberbands)."""
+        if layer is None:
+            return
+        try:
+            layer.setCustomProperty("archtoolkit/cost_surface/run_id", str(run_id))
+            layer.setCustomProperty("archtoolkit/cost_surface/kind", str(kind))
+        except Exception:
+            pass
+
     def _track_layer_output(self, layer: QgsMapLayer, path: Optional[str]):
         if not layer or not path:
             return
         self._layer_temp_outputs.setdefault(layer.id(), []).append(path)
 
     def _cleanup_layer_outputs(self, layer_ids):
+        remove_preview = False
+
         # Close profile dialogs / disconnect handlers for removed layers
         try:
             for lid in layer_ids:
+                layer = None
+                try:
+                    layer = QgsProject.instance().mapLayer(lid)
+                    if layer and layer.customProperty("archtoolkit/cost_surface/run_id", None) is not None:
+                        remove_preview = True
+                except Exception:
+                    pass
                 try:
                     handler = self._profile_selection_handlers.pop(lid, None)
-                    layer = QgsProject.instance().mapLayer(lid)
                     if layer and handler:
                         layer.selectionChanged.disconnect(handler)
                 except Exception:
@@ -2203,6 +2228,10 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     dlg = self._profile_dialogs.pop(lid, None)
                     if dlg:
                         dlg.close()
+                        try:
+                            dlg.deleteLater()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 try:
@@ -2211,6 +2240,9 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                     pass
         except Exception:
             pass
+
+        if remove_preview:
+            self._reset_preview()
 
         paths = []
         for lid in layer_ids:
@@ -2721,6 +2753,10 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"최소비용경로 프로파일 (LCP Profile) - {model_label}".strip())
         dlg.setModal(False)
+        try:
+            dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+        except Exception:
+            pass
         layout = QtWidgets.QVBoxLayout(dlg)
 
         summary_parts = []

@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 지형/경관 분석 툴킷 (Viewshed/LOS/Cost Surface/DEM/프로파일/지형지수)
-version=1.6.63
+version=1.6.65
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -38,7 +38,9 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.6.56 - 비용표면/최소비용경로: Herzog/Conolly&Lake 모델 추가(변수 설명/참고문헌)
+changelog=1.6.65 - 최소비용 네트워크: MST/k-NN/Hub (Least-cost Network) 추가
+  1.6.64 - 비용표면/최소비용경로: 레이어 삭제 시 임시 선/점(오버레이) 정리
+  1.6.56 - 비용표면/최소비용경로: Herzog/Conolly&Lake 모델 추가(변수 설명/참고문헌)
   1.6.55 - 비용표면/최소비용경로: 직선 vs LCP 비교/등시간선(15분 간격) 추가
   1.6.54 - 비용표면/최소비용경로: 전체 DEM/범례/모델변수/설명 개선
   1.6.53 - 비용표면/최소비용경로 아이콘/명칭(한글+영문) 통일

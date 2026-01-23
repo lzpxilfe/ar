@@ -28,5 +28,7 @@ ENV/
 !profile_icon.png
 !style_icon.png
 !viewshed_icon.png
+!network_icon.png
+!network_icon.jpg
 temp_*/
 C:\Users\nuri9\.gemini\antigravity\scratch\fix_viewshed.py

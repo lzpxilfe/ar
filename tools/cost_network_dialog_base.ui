@@ -1,0 +1,807 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>CostNetworkDialog</class>
+ <widget class="QDialog" name="CostNetworkDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>600</width>
+    <height>680</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>최소비용 네트워크 (Least-cost Network) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupInfo">
+     <property name="title">
+      <string>설명</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Info">
+      <item>
+       <widget class="QLabel" name="lblDescription">
+        <property name="text">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;
+&lt;p&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;최소비용 네트워크(Least-cost Network)&lt;/span&gt;는 DEM 기반 이동비용 모델(시간/에너지)을 사용하여 유적들 사이의 최소비용 경로(LCP)를 계산하고, 그 결과로 &lt;b&gt;전체 연결망(MST)&lt;/b&gt;·&lt;b&gt;k-최근접(k-NN)&lt;/b&gt;·&lt;b&gt;허브 기반(Hub)&lt;/b&gt; 네트워크를 생성합니다.&lt;/p&gt;
+&lt;p&gt;&lt;span style=&quot;font-style:italic;&quot;&gt;Ref: Kruskal (1956), Prim (1957) + Cost models in REFERENCES.md&lt;/span&gt;&lt;/p&gt;
+&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #f0f0f0; padding: 4px; border-radius: 3px;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDem">
+     <property name="title">
+      <string>1. 지형 데이터(DEM) 선택</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Dem">
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupInput">
+     <property name="title">
+      <string>2. 유적 레이어(Points/Polygons)</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Input">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblSiteLayer">
+        <property name="text">
+         <string>레이어</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1" colspan="2">
+       <widget class="QgsMapLayerComboBox" name="cmbSiteLayer"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblNameField">
+        <property name="text">
+         <string>이름 필드</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbNameField"/>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lblPolyMode">
+        <property name="text">
+         <string>폴리곤 대표점</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbPolyPointMode"/>
+      </item>
+      <item row="3" column="0" colspan="3">
+       <widget class="QCheckBox" name="chkSelectedOnly">
+        <property name="text">
+         <string>선택된 피처만 사용(Use selected features only)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="3">
+       <widget class="QLabel" name="lblInputHelp">
+        <property name="text">
+         <string>&lt;html&gt;• 포인트: 그대로 사용합니다.&lt;br/&gt;• 폴리곤: 대표점(권장: Point on surface)을 노드로 사용합니다.&lt;br/&gt;• “이름 필드”를 비워두면 피처 ID를 사용합니다.&lt;/html&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupNetwork">
+     <property name="title">
+      <string>3. 네트워크 옵션</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Network">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblNetworkMode">
+        <property name="text">
+         <string>방식</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbNetworkMode"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblCostMode">
+        <property name="text">
+         <string>비용 기준</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbCostMode"/>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lblCandidateK">
+        <property name="text">
+         <string>후보 간선(k)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="spinCandidateK">
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>2000</number>
+        </property>
+        <property name="value">
+         <number>10</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="2">
+       <widget class="QLabel" name="lblCandidateKHint">
+        <property name="text">
+         <string>유클리드 기준 후보 수(클수록 정확/느림)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="lblPairBuffer">
+        <property name="text">
+         <string>경로 버퍼(m)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QDoubleSpinBox" name="spinPairBuffer">
+        <property name="decimals">
+         <number>0</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>10000000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>100.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1000.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="2">
+       <widget class="QLabel" name="lblPairBufferHint">
+        <property name="text">
+         <string>0=DEM 전체(매우 느림), 너무 작으면 경로가 잘릴 수 있음</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="lblKnnK">
+        <property name="text">
+         <string>k-NN의 k</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QSpinBox" name="spinKnnK">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>2000</number>
+        </property>
+        <property name="value">
+         <number>3</number>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="2">
+       <widget class="QLabel" name="lblKnnKHint">
+        <property name="text">
+         <string>각 노드에서 비용 기준 상위 k개 연결</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="lblHubField">
+        <property name="text">
+         <string>허브 필드</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbHubField"/>
+      </item>
+      <item row="6" column="0">
+       <widget class="QLabel" name="lblHubValues">
+        <property name="text">
+         <string>허브 값</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="1">
+       <widget class="QLineEdit" name="txtHubValues">
+        <property name="placeholderText">
+         <string>예: 왕성, 산성, 봉수</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="2">
+       <widget class="QToolButton" name="btnPickHubValues">
+        <property name="text">
+         <string>선택…</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0" colspan="3">
+       <widget class="QCheckBox" name="chkHubConnectMst">
+        <property name="text">
+         <string>허브들끼리도 MST로 연결</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="0" colspan="3">
+       <widget class="QComboBox" name="cmbSymmetrize"/>
+      </item>
+      <item row="9" column="0" colspan="3">
+       <widget class="QCheckBox" name="chkDiagonal">
+        <property name="text">
+         <string>대각 이동 허용(8방향)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="10" column="0" colspan="3">
+       <widget class="QLabel" name="lblNetworkHelp">
+        <property name="text">
+         <string>&lt;html&gt;• 후보 간선(k)을 너무 작게 잡으면 MST가 끊길 수 있습니다.&lt;br/&gt;• 허브 모드는 “허브 필드/값”으로 허브를 지정하고, 비허브는 가장 가까운(비용 기준) 허브에 연결합니다.&lt;/html&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupModel">
+     <property name="title">
+      <string>4. 이동 비용 모델</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Model">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblModel">
+        <property name="text">
+         <string>모델</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="cmbModel"/>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QGroupBox" name="groupModelParams">
+        <property name="title">
+         <string>모델 변수</string>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_ModelParams">
+         <item>
+          <widget class="QGroupBox" name="groupToblerParams">
+           <property name="title">
+            <string>Tobler (1993)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_Tobler">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblToblerBaseSpeed">
+              <property name="text">
+               <string>기본속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinToblerBaseKmh">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>6.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblToblerSlopeFactor">
+              <property name="text">
+               <string>경사 민감도</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinToblerSlopeFactor">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="value">
+               <double>3.500000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="lblToblerOffset">
+              <property name="text">
+               <string>오프셋(+)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QDoubleSpinBox" name="spinToblerOffset">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>-1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>0.050000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupNaismithParams">
+           <property name="title">
+            <string>Naismith (1892)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_Naismith">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblNaismithSpeed">
+              <property name="text">
+               <string>수평 속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinNaismithSpeedKmh">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>5.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblNaismithAscent">
+              <property name="text">
+               <string>상승(m/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinNaismithAscentMph">
+              <property name="decimals">
+               <number>0</number>
+              </property>
+              <property name="minimum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>5000.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>600.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupHerzogMetabolicParams">
+           <property name="title">
+            <string>Herzog metabolic (via Čučković)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_HerzogMetabolic">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblHerzogBaseSpeed">
+              <property name="text">
+               <string>기본 속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinHerzogBaseKmh">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>5.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupConollyLakeParams">
+           <property name="title">
+            <string>Conolly &amp; Lake (2006)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_ConollyLake">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblConollyBaseSpeed">
+              <property name="text">
+               <string>기본 속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinConollyBaseKmh">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>5.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblConollyRefSlope">
+              <property name="text">
+               <string>기준 경사(°)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinConollyRefSlopeDeg">
+              <property name="decimals">
+               <number>0</number>
+              </property>
+              <property name="minimum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>80.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>15.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupHerzogWheeledParams">
+           <property name="title">
+            <string>Herzog wheeled vehicle (via Čučković)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_HerzogWheeled">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblWheeledBaseSpeed">
+              <property name="text">
+               <string>기본 속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinWheeledBaseKmh">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>4.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblWheeledCriticalSlope">
+              <property name="text">
+               <string>기준 경사(°)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinWheeledCriticalSlopeDeg">
+              <property name="decimals">
+               <number>0</number>
+              </property>
+              <property name="minimum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>80.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>12.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="lblWheeledMaxSlope">
+              <property name="text">
+               <string>통행한계(°)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QDoubleSpinBox" name="spinWheeledMaxSlopeDeg">
+              <property name="decimals">
+               <number>0</number>
+              </property>
+              <property name="minimum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>89.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>20.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupPandolfParams">
+           <property name="title">
+            <string>Pandolf load carriage (1977)</string>
+           </property>
+           <layout class="QGridLayout" name="gridLayout_Pandolf">
+            <item row="0" column="0">
+             <widget class="QLabel" name="lblPandolfBody">
+              <property name="text">
+               <string>체중(kg)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="0" column="1">
+             <widget class="QDoubleSpinBox" name="spinPandolfBodyKg">
+              <property name="decimals">
+               <number>1</number>
+              </property>
+              <property name="minimum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>300.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>70.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="lblPandolfLoad">
+              <property name="text">
+               <string>짐 무게(kg)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QDoubleSpinBox" name="spinPandolfLoadKg">
+              <property name="decimals">
+               <number>1</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>300.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>20.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="0">
+             <widget class="QLabel" name="lblPandolfSpeed">
+              <property name="text">
+               <string>속도(km/h)</string>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QDoubleSpinBox" name="spinPandolfSpeedKmh">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>20.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="value">
+               <double>5.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item row="3" column="0">
+             <widget class="QLabel" name="lblPandolfTerrain">
+              <property name="text">
+               <string>지형계수 η</string>
+              </property>
+             </widget>
+            </item>
+            <item row="3" column="1">
+             <widget class="QDoubleSpinBox" name="spinPandolfTerrainFactor">
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>10.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="value">
+               <double>1.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>분석 실행</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsMapLayerComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
