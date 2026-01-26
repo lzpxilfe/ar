@@ -287,6 +287,19 @@
         </property>
        </widget>
       </item>
+      <item row="4" column="0" colspan="4">
+       <widget class="QCheckBox" name="chkVisAllPairs">
+        <property name="toolTip">
+         <string>체크하면 후보 k 제한을 무시하고, (최대 거리 내) 모든 쌍을 LOS로 검사합니다. 노드가 많으면 느릴 수 있습니다.</string>
+        </property>
+        <property name="text">
+         <string>반경 내 모든 쌍 검사(후보 k 무시)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>

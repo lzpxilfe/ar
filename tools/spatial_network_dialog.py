@@ -194,6 +194,10 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                 "LOS 샘플링 간격(m). 작을수록 정확하지만 느립니다.\n"
                 "0 또는 너무 작으면 DEM 픽셀 크기를 기준으로 자동 보정됩니다."
             )
+            self.chkVisAllPairs.setToolTip(
+                "체크하면 후보 k 제한을 무시하고 (최대 거리 내) 모든 쌍을 LOS로 검사합니다.\n"
+                "노드가 많으면 시간이 오래 걸릴 수 있습니다."
+            )
         except Exception:
             pass
 
@@ -509,6 +513,12 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         if n < 2:
             return
 
+        all_pairs = False
+        try:
+            all_pairs = bool(self.chkVisAllPairs.isChecked())
+        except Exception:
+            all_pairs = False
+
         if candidate_k <= 0:
             candidate_k = 1
         candidate_k = min(int(candidate_k), max(1, n - 1))
@@ -516,61 +526,123 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         max_dist = float(max_dist or 0.0)
         if max_dist < 0:
             max_dist = 0.0
+        max_dist_sq = (max_dist ** 2) if max_dist > 0 else 0.0
 
-        progress = QtWidgets.QProgressDialog(
-            "가시성 네트워크(LOS) 계산 중...", "취소", 0, n, self
-        )
+        if all_pairs:
+            # Count pairs for progress.
+            total_pairs = 0
+            for i in range(n):
+                xi, yi = nodes[i].x, nodes[i].y
+                for j in range(i + 1, n):
+                    if max_dist_sq > 0:
+                        xj, yj = nodes[j].x, nodes[j].y
+                        dsq = (xi - xj) ** 2 + (yi - yj) ** 2
+                        if dsq > max_dist_sq:
+                            continue
+                    total_pairs += 1
+
+            progress = QtWidgets.QProgressDialog(
+                f"가시성 네트워크(LOS) 계산 중... (쌍 {total_pairs}개 검사)",
+                "취소",
+                0,
+                max(1, total_pairs),
+                self,
+            )
+        else:
+            progress = QtWidgets.QProgressDialog(
+                "가시성 네트워크(LOS) 계산 중...", "취소", 0, n, self
+            )
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
         QtWidgets.QApplication.processEvents()
 
-        tested: Set[Tuple[int, int]] = set()
         edges: Set[Tuple[int, int]] = set()
+        tested_pairs = 0
+        failed_pairs = 0
 
-        for i in range(n):
-            if progress.wasCanceled():
-                push_message(self.iface, "가시성 네트워크", "취소되었습니다.", level=1, duration=4)
-                restore_ui_focus(self)
-                return
+        if all_pairs:
+            for i in range(n):
+                if progress.wasCanceled():
+                    push_message(self.iface, "가시성 네트워크", "취소되었습니다.", level=1, duration=4)
+                    restore_ui_focus(self)
+                    return
 
-            # Candidate neighbors by Euclidean distance (in DEM CRS units, meters expected)
-            xi, yi = nodes[i].x, nodes[i].y
-            dists = []
-            for j in range(n):
-                if i == j:
-                    continue
-                xj, yj = nodes[j].x, nodes[j].y
-                dsq = (xi - xj) ** 2 + (yi - yj) ** 2
-                if max_dist > 0 and dsq > (max_dist ** 2):
-                    continue
-                dists.append((dsq, j))
+                xi, yi = nodes[i].x, nodes[i].y
+                for j in range(i + 1, n):
+                    if max_dist_sq > 0:
+                        xj, yj = nodes[j].x, nodes[j].y
+                        dsq = (xi - xj) ** 2 + (yi - yj) ** 2
+                        if dsq > max_dist_sq:
+                            continue
 
-            for _dsq, j in heapq.nsmallest(candidate_k, dists, key=lambda t: t[0]):
-                a, b = (i, j) if i < j else (j, i)
-                if a == b:
-                    continue
-                if (a, b) in tested:
-                    continue
-                tested.add((a, b))
+                    tested_pairs += 1
+                    vis = self._los_visible(
+                        dem_layer=dem_layer,
+                        ax=nodes[i].x,
+                        ay=nodes[i].y,
+                        bx=nodes[j].x,
+                        by=nodes[j].y,
+                        obs_height=obs_height,
+                        tgt_height=tgt_height,
+                        sample_step_m=sample_step_m,
+                    )
+                    if vis is None:
+                        failed_pairs += 1
+                    elif vis:
+                        edges.add((i, j))
 
-                vis = self._los_visible(
-                    dem_layer=dem_layer,
-                    ax=nodes[a].x,
-                    ay=nodes[a].y,
-                    bx=nodes[b].x,
-                    by=nodes[b].y,
-                    obs_height=obs_height,
-                    tgt_height=tgt_height,
-                    sample_step_m=sample_step_m,
-                )
-                if vis is None:
-                    # Treat failed sampling as non-edge (outside raster or NoData).
-                    continue
-                if vis:
-                    edges.add((a, b))
+                    if tested_pairs % 20 == 0:
+                        progress.setValue(min(progress.maximum(), tested_pairs))
+                        QtWidgets.QApplication.processEvents()
 
-            progress.setValue(i + 1)
-            QtWidgets.QApplication.processEvents()
+            progress.setValue(progress.maximum())
+        else:
+            tested: Set[Tuple[int, int]] = set()
+            for i in range(n):
+                if progress.wasCanceled():
+                    push_message(self.iface, "가시성 네트워크", "취소되었습니다.", level=1, duration=4)
+                    restore_ui_focus(self)
+                    return
+
+                # Candidate neighbors by Euclidean distance (in DEM CRS units, meters expected)
+                xi, yi = nodes[i].x, nodes[i].y
+                dists = []
+                for j in range(n):
+                    if i == j:
+                        continue
+                    xj, yj = nodes[j].x, nodes[j].y
+                    dsq = (xi - xj) ** 2 + (yi - yj) ** 2
+                    if max_dist_sq > 0 and dsq > max_dist_sq:
+                        continue
+                    dists.append((dsq, j))
+
+                for _dsq, j in heapq.nsmallest(candidate_k, dists, key=lambda t: t[0]):
+                    a, b = (i, j) if i < j else (j, i)
+                    if a == b:
+                        continue
+                    if (a, b) in tested:
+                        continue
+                    tested.add((a, b))
+                    tested_pairs += 1
+
+                    vis = self._los_visible(
+                        dem_layer=dem_layer,
+                        ax=nodes[a].x,
+                        ay=nodes[a].y,
+                        bx=nodes[b].x,
+                        by=nodes[b].y,
+                        obs_height=obs_height,
+                        tgt_height=tgt_height,
+                        sample_step_m=sample_step_m,
+                    )
+                    if vis is None:
+                        failed_pairs += 1
+                        continue
+                    if vis:
+                        edges.add((a, b))
+
+                progress.setValue(i + 1)
+                QtWidgets.QApplication.processEvents()
 
         self._add_edge_layer(
             nodes=nodes,
@@ -580,7 +652,11 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             add_dist=True,
             crs_authid=dem_layer.crs().authid(),
         )
-        push_message(self.iface, "가시성 네트워크", f"완료: 간선 {len(edges)}개", level=0, duration=6)
+        msg = f"완료: 검사쌍 {tested_pairs}개, 보임 간선 {len(edges)}개"
+        if failed_pairs:
+            msg += f", 샘플 실패 {failed_pairs}개(NoData/범위 밖)"
+        log_message(f"VisibilityNetwork: {msg} (all_pairs={all_pairs}, max_dist={max_dist})", level=Qgis.Info)
+        push_message(self.iface, "가시성 네트워크", msg, level=0, duration=7)
         self.accept()
 
     def _add_edge_layer(
