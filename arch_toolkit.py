@@ -27,6 +27,7 @@ from .tools.slope_aspect_drafting_dialog import SlopeAspectDraftingDialog
 from .tools.viewshed_dialog import ViewshedDialog
 from .tools.cost_surface_dialog import CostSurfaceDialog
 from .tools.cost_network_dialog import CostNetworkDialog
+from .tools.utils import log_exception
 import os.path
 
 class ArchToolkit:
@@ -38,6 +39,7 @@ class ArchToolkit:
         self.toolbar = None
         self.main_action = None
         self.viewshed_dlg = None # [v1.6.20] Persistent reference for marker cleanup
+        self.cost_dlg = None  # Persistent reference for temp/preview cleanup
 
     def initGui(self):
         try:
@@ -158,6 +160,7 @@ class ArchToolkit:
                 self.main_action
             ]
         except Exception as e:
+            log_exception("ArchToolkit initGui error", e)
             QMessageBox.critical(self.iface.mainWindow(), "ArchToolkit 로드 오류", f"플러그인을 초기화하는 중 오류가 발생했습니다: {str(e)}")
 
     def unload(self):
@@ -181,6 +184,22 @@ class ArchToolkit:
             except Exception:
                 pass
             self.viewshed_dlg = None
+
+        if self.cost_dlg is not None:
+            try:
+                if hasattr(self.cost_dlg, "cleanup_for_unload"):
+                    self.cost_dlg.cleanup_for_unload()
+            except Exception:
+                pass
+            try:
+                self.cost_dlg.close()
+            except Exception:
+                pass
+            try:
+                self.cost_dlg.deleteLater()
+            except Exception:
+                pass
+            self.cost_dlg = None
              
         # Remove toolbar cleanly from mainWindow
         if self.toolbar:
@@ -193,6 +212,7 @@ class ArchToolkit:
             dlg = DemGeneratorDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("DEM tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_contour_tool(self):
@@ -200,6 +220,7 @@ class ArchToolkit:
             dlg = ContourExtractorDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("Contour tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_terrain_tool(self):
@@ -207,6 +228,7 @@ class ArchToolkit:
             dlg = TerrainAnalysisDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("Terrain tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_profile_tool(self):
@@ -214,6 +236,7 @@ class ArchToolkit:
             dlg = TerrainProfileDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("Terrain profile tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_styling_tool(self):
@@ -221,6 +244,7 @@ class ArchToolkit:
             dlg = MapStylingDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("Map styling tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_drafting_tool(self):
@@ -228,13 +252,16 @@ class ArchToolkit:
             dlg = SlopeAspectDraftingDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("Slope/aspect drafting tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_cost_tool(self):
         try:
-            dlg = CostSurfaceDialog(self.iface)
-            dlg.exec_()
+            if self.cost_dlg is None:
+                self.cost_dlg = CostSurfaceDialog(self.iface)
+            self.cost_dlg.exec_()
         except Exception as e:
+            log_exception("Cost surface tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_network_tool(self):
@@ -242,6 +269,7 @@ class ArchToolkit:
             dlg = CostNetworkDialog(self.iface)
             dlg.exec_()
         except Exception as e:
+            log_exception("Least-cost network tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구 실행 중 오류가 발생했습니다: {str(e)}")
 
     def run_viewshed_tool(self):
@@ -254,4 +282,5 @@ class ArchToolkit:
             # In v1.7.0 we might switch to .show() for non-modal interaction.
             self.viewshed_dlg.exec_()
         except Exception as e:
+            log_exception("Viewshed tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")

@@ -1517,6 +1517,10 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self._update_point_help()
         self._on_create_path_toggled(bool(self.chkCreatePath.isChecked()))
 
+    def cleanup_for_unload(self):
+        """Best-effort cleanup for plugin unload/reload (disconnect global signals, cancel tasks)."""
+        self._cleanup_for_unload()
+
     def _init_models(self):
         self.cmbModel.clear()
         self.cmbModel.addItem("토블러 보행함수 (Tobler Hiking Function)", MODEL_TOBLER)
@@ -2877,14 +2881,15 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         dlg.show()
 
     def reject(self):
-        self._cleanup()
+        self._cleanup_for_close()
         super().reject()
 
     def closeEvent(self, event):
-        self._cleanup()
+        self._cleanup_for_close()
         event.accept()
 
-    def _cleanup(self):
+    def _cleanup_for_close(self):
+        """Cleanup when the dialog closes (keep project signals for later layer/temp cleanup)."""
         try:
             if self._task_running and self._task is not None:
                 try:
@@ -2895,23 +2900,79 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             self._task = None
             self._reset_preview()
 
-            # Remove temporary rubber bands from canvas scene (prevents lingering graphics)
             try:
-                if self.canvas and self.canvas.scene():
-                    for rb in (self._rb_start, self._rb_end, self._rb_line):
-                        try:
-                            self.canvas.scene().removeItem(rb)
-                        except Exception:
-                            pass
+                if self.map_tool and hasattr(self.map_tool, "snap_indicator"):
+                    try:
+                        self.map_tool.snap_indicator.setMatch(QgsPointLocator.Match())
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
             if self.original_tool:
                 self.canvas.setMapTool(self.original_tool)
-            try:
-                QgsProject.instance().layersWillBeRemoved.disconnect(self._on_project_layers_removed)
-            except Exception:
-                pass
+        except Exception:
+            pass
+
+    def _cleanup_for_unload(self):
+        """Full cleanup for plugin unload/reload (disconnect signals, release handlers, clear temp tracking)."""
+        try:
+            if self._task_running and self._task is not None:
+                try:
+                    self._task.cancel()
+                except Exception:
+                    pass
+            self._task_running = False
+            self._task = None
+        except Exception:
+            pass
+
+        try:
+            self._reset_preview()
+        except Exception:
+            pass
+
+        # Disconnect selection handlers for profile reopen to avoid stale callbacks after reload.
+        try:
+            for lid, handler in list(self._profile_selection_handlers.items()):
+                try:
+                    layer = QgsProject.instance().mapLayer(lid)
+                    if layer and handler:
+                        layer.selectionChanged.disconnect(handler)
+                except Exception:
+                    pass
+            self._profile_selection_handlers.clear()
+        except Exception:
+            pass
+
+        # Close any open profile dialogs (best-effort).
+        try:
+            for _lid, dlg in list(self._profile_dialogs.items()):
+                try:
+                    dlg.close()
+                    try:
+                        dlg.deleteLater()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            self._profile_dialogs.clear()
+            self._profile_payloads.clear()
+        except Exception:
+            pass
+
+        try:
+            if self.original_tool:
+                self.canvas.setMapTool(self.original_tool)
+        except Exception:
+            pass
+
+        try:
+            QgsProject.instance().layersWillBeRemoved.disconnect(self._on_project_layers_removed)
+        except Exception:
+            pass
+
+        try:
             self._layer_temp_outputs.clear()
         except Exception:
             pass

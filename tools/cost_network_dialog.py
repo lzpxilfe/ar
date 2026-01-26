@@ -1065,6 +1065,27 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+    def reject(self):
+        self._cleanup_for_close()
+        super().reject()
+
+    def closeEvent(self, event):
+        self._cleanup_for_close()
+        event.accept()
+
+    def _cleanup_for_close(self):
+        # Best-effort: cancel background task so it can't outlive the dialog.
+        try:
+            if self._task_running and self._task is not None:
+                try:
+                    self._task.cancel()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._task_running = False
+        self._task = None
+
     def _wrap_in_scroll_area(self):
         # Keep bottom buttons always visible, and make the long form scrollable.
         layout = getattr(self, "verticalLayout", None)
