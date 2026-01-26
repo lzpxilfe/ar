@@ -18,16 +18,6 @@
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMenu, QToolButton, QMessageBox
 
-from .tools.dem_generator_dialog import DemGeneratorDialog
-from .tools.contour_extractor_dialog import ContourExtractorDialog
-from .tools.terrain_analysis_dialog import TerrainAnalysisDialog
-from .tools.terrain_profile_dialog import TerrainProfileDialog
-from .tools.map_styling_dialog import MapStylingDialog
-from .tools.slope_aspect_drafting_dialog import SlopeAspectDraftingDialog
-from .tools.viewshed_dialog import ViewshedDialog
-from .tools.cost_surface_dialog import CostSurfaceDialog
-from .tools.cost_network_dialog import CostNetworkDialog
-from .tools.spatial_network_dialog import SpatialNetworkDialog
 from .tools.utils import log_exception, start_ui_log_pump, stop_ui_log_pump
 import os.path
 
@@ -231,6 +221,7 @@ class ArchToolkit:
 
     def run_dem_tool(self):
         try:
+            from .tools.dem_generator_dialog import DemGeneratorDialog
             dlg = DemGeneratorDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -239,6 +230,7 @@ class ArchToolkit:
 
     def run_contour_tool(self):
         try:
+            from .tools.contour_extractor_dialog import ContourExtractorDialog
             dlg = ContourExtractorDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -247,6 +239,7 @@ class ArchToolkit:
 
     def run_terrain_tool(self):
         try:
+            from .tools.terrain_analysis_dialog import TerrainAnalysisDialog
             dlg = TerrainAnalysisDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -255,6 +248,7 @@ class ArchToolkit:
 
     def run_profile_tool(self):
         try:
+            from .tools.terrain_profile_dialog import TerrainProfileDialog
             dlg = TerrainProfileDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -263,6 +257,7 @@ class ArchToolkit:
 
     def run_styling_tool(self):
         try:
+            from .tools.map_styling_dialog import MapStylingDialog
             dlg = MapStylingDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -271,6 +266,7 @@ class ArchToolkit:
 
     def run_drafting_tool(self):
         try:
+            from .tools.slope_aspect_drafting_dialog import SlopeAspectDraftingDialog
             dlg = SlopeAspectDraftingDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -280,6 +276,7 @@ class ArchToolkit:
     def run_cost_tool(self):
         try:
             if self.cost_dlg is None:
+                from .tools.cost_surface_dialog import CostSurfaceDialog
                 self.cost_dlg = CostSurfaceDialog(self.iface)
             self.cost_dlg.exec_()
         except Exception as e:
@@ -288,6 +285,7 @@ class ArchToolkit:
 
     def run_network_tool(self):
         try:
+            from .tools.cost_network_dialog import CostNetworkDialog
             dlg = CostNetworkDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -296,6 +294,7 @@ class ArchToolkit:
 
     def run_spatial_network_tool(self):
         try:
+            from .tools.spatial_network_dialog import SpatialNetworkDialog
             dlg = SpatialNetworkDialog(self.iface)
             dlg.exec_()
         except Exception as e:
@@ -310,6 +309,7 @@ class ArchToolkit:
         try:
             # [v1.6.20] Maintain persistent dialog instance so layersRemoved signal persists
             if self.viewshed_dlg is None:
+                from .tools.viewshed_dialog import ViewshedDialog
                 self.viewshed_dlg = ViewshedDialog(self.iface)
             
             # Show the dialog. exec_() is modal and blocks until closed.
