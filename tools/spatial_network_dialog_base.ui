@@ -24,12 +24,12 @@
        <widget class="QLabel" name="lblDescription">
         <property name="text">
          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;
-&lt;p&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;공간/가시성 네트워크&lt;/span&gt;는 유적(노드) 사이의 관계를 선(간선)으로 생성합니다.&lt;/p&gt;
+&lt;p&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;공간/가시성 네트워크&lt;/span&gt;는 유적(노드) 사이의 관계를 선(간선)으로 만들어 봅니다.&lt;/p&gt;
 &lt;ul&gt;
-&lt;li&gt;&lt;b&gt;PPA(Proximal Point Analysis)&lt;/b&gt;: 지형 비용이 아니라 단순 거리(공간적 인접성) 기반으로 각 유적의 최근접 N개를 연결합니다.&lt;/li&gt;
-&lt;li&gt;&lt;b&gt;Visibility Network&lt;/b&gt;: DEM 기반 Line of Sight(가시선)으로 유적 A에서 B가 보이는 경우에만 연결합니다.&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;PPA&lt;/b&gt;: 지형(DEM) 비용 없이, 직선거리로 최근접 k개 연결&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;Visibility(LOS)&lt;/b&gt;: DEM 기반 가시선으로 &quot;보이는 쌍&quot;만 연결&lt;/li&gt;
 &lt;/ul&gt;
-&lt;p&gt;&lt;span style=&quot;font-style:italic;&quot;&gt;Tip: 노드가 많을수록 계산량이 커지므로, 선택 피처만 사용/후보 k 제한을 권장합니다.&lt;/span&gt;&lt;/p&gt;
+&lt;p&gt;&lt;span style=&quot;font-style:italic;&quot;&gt;Tip: 각 옵션에 마우스를 올리면 자세한 설명/참고문헌이 표시됩니다.&lt;/span&gt;&lt;/p&gt;
 &lt;/body&gt;&lt;/html&gt;</string>
         </property>
         <property name="wordWrap">
@@ -132,11 +132,11 @@
         <property name="maximum">
          <number>2000</number>
         </property>
-        <property name="value">
-         <number>5</number>
-        </property>
-       </widget>
-      </item>
+       <property name="value">
+         <number>3</number>
+       </property>
+      </widget>
+     </item>
       <item row="1" column="0" colspan="2">
        <widget class="QCheckBox" name="chkPpaMutualOnly">
         <property name="text">

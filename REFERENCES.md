@@ -53,6 +53,22 @@
 
 > Prim, R.C. (1957). "Shortest connection network and some generalizations." *Bell System Technical Journal*, 36(6), pp. 1389–1401.
 
+## 근접성 네트워크 (PPA: Proximal Point Analysis)
+
+> Terrell, J.E. (1977). "Human Biogeography in the Solomon Islands." *Fieldiana Anthropology*, 68(1), pp. 1–47.
+
+> Brughmans, T., & Peeples, M.A. (2017). "Trends in archaeological network research: a bibliometric analysis." *Journal of Historical Network Research*, 1, pp. 1–24. DOI: 10.25517/jhnr.v1i1.10
+
+> Amati, V., Shafie, T., & Brandes, U. (2018). "Reconstructing Archaeological Networks with Structural Holes." *Journal of Archaeological Method and Theory*, 25, pp. 226–253. DOI: 10.1007/s10816-017-9335-1
+
+## 가시성 네트워크 (Visibility / Intervisibility Network, VGA)
+
+> Van Dyke, R.M., Bocinsky, R.K., Windes, T.C., & Robinson, T.J. (2016). "Great houses, shrines, and high places: intervisibility in the Chacoan world." *American Antiquity*, 81(2), pp. 205–230.
+
+> Gillings, M., & Wheatley, D. (2001). "Seeing is not believing: unresolved issues in archaeological visibility analysis." In: *On the Good Use of Geographical Information Systems in Archaeological Landscape Studies* (COST Action G2).
+
+> Turner, A., Doxa, M., O'Sullivan, D., & Penn, A. (2001). "From isovists to visibility graphs: a methodology for the analysis of architectural space." *Environment and Planning B: Planning and Design*, 28(1), pp. 103–121. DOI: 10.1068/b2684
+
 ## 지형 거칠기 지수 TRI (Terrain Ruggedness Index)
 
 **Riley et al. 분류 (5등급):**

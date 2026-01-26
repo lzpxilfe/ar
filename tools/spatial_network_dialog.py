@@ -96,6 +96,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         self.cmbNetworkType.addItem("근접성 네트워크 (PPA)", NETWORK_PPA)
         self.cmbNetworkType.addItem("가시성 네트워크 (Visibility / LOS)", NETWORK_VISIBILITY)
 
+        self._setup_tooltips()
+
         # Signals
         self.cmbNetworkType.currentIndexChanged.connect(self._on_mode_changed)
         self.cmbSiteLayer.layerChanged.connect(self._on_site_layer_changed)
@@ -104,6 +106,79 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self._on_site_layer_changed(self.cmbSiteLayer.currentLayer())
         self._on_mode_changed()
+
+    def _setup_tooltips(self):
+        # Keep the main UI compact; provide detailed explanations via tooltips.
+        tooltip_ppa = (
+            "PPA(Proximal Point Analysis)\n"
+            "- 지형(DEM) 비용을 쓰지 않고, 유클리드 거리(직선거리)로 최근접 k개를 연결합니다.\n"
+            "- k가 작을수록(예: 3~5) 현실적인 '이웃망' 형태가 되며, k가 크면 간선이 급격히 늘어납니다.\n"
+            "- 본 도구는 SciPy(KDTree) 같은 외부 의존성 없이 동작합니다.\n\n"
+            "Ref:\n"
+            "- Terrell (1977) Human Biogeography in the Solomon Islands.\n"
+            "- Brughmans & Peeples (2017) Trends in archaeological network research.\n"
+            "- Amati, Shafie & Brandes (2018) Reconstructing Archaeological Networks with Structural Holes."
+        )
+
+        tooltip_vis = (
+            "가시성 네트워크(Visibility / LOS)\n"
+            "- DEM 기반 Line of Sight(가시선)으로 두 유적 사이에 지형이 시선을 가리는지 샘플링하여 판정합니다.\n"
+            "- 계산량이 커질 수 있으므로 '후보 k'와 '최대거리'로 후보 쌍을 줄이는 것을 권장합니다.\n"
+            "- 관측/대상 높이는 지표면(DEM) 위 추가 높이(m)입니다.\n\n"
+            "Ref:\n"
+            "- Van Dyke et al. (2016) Intervisibility in the Chacoan world (viewsheds + viewnets).\n"
+            "- Gillings & Wheatley (2001) unresolved issues in archaeological visibility analysis.\n"
+            "- Turner et al. (2001) From isovists to visibility graphs (VGA)."
+        )
+
+        # Per-item tooltips (combobox dropdown)
+        try:
+            self.cmbNetworkType.setItemData(0, tooltip_ppa, Qt.ToolTipRole)
+            self.cmbNetworkType.setItemData(1, tooltip_vis, Qt.ToolTipRole)
+        except Exception:
+            pass
+
+        # General hint
+        try:
+            self.cmbNetworkType.setToolTip("방식에 마우스를 올리면 설명/참고문헌이 표시됩니다.")
+        except Exception:
+            pass
+
+        try:
+            self.spinPpaK.setToolTip("각 유적(노드)에서 연결할 최근접 이웃 수 k입니다. (권장 3~5)")
+            self.chkPpaMutualOnly.setToolTip(
+                "상호 최근접(Mutual)일 때만 간선을 남깁니다.\n"
+                "예) A의 최근접에 B가 포함되고, B의 최근접에도 A가 포함될 때만 연결."
+            )
+        except Exception:
+            pass
+
+        try:
+            self.cmbPolyPointMode.setToolTip(
+                "폴리곤을 노드(점)로 변환할 때 대표점을 선택합니다.\n"
+                "- Point on surface: 폴리곤 내부 보장(권장)\n"
+                "- Centroid: 중심점(폴리곤이 오목하면 밖으로 나갈 수 있음)"
+            )
+        except Exception:
+            pass
+
+        try:
+            self.spinObsHeight.setToolTip("관측자 높이(m): DEM 지표면 위 추가 높이.")
+            self.spinTgtHeight.setToolTip("대상 높이(m): DEM 지표면 위 추가 높이.")
+            self.spinCandidateK.setToolTip(
+                "각 노드에서 LOS 후보로 검사할 최근접 이웃 수입니다.\n"
+                "값이 커질수록 정확도는 올라가지만 계산 시간이 증가합니다."
+            )
+            self.spinMaxDist.setToolTip(
+                "최대 검사 거리(m). 0이면 제한 없음.\n"
+                "거리 제한을 두면 계산량이 크게 줄어듭니다."
+            )
+            self.spinSampleStep.setToolTip(
+                "LOS 샘플링 간격(m). 작을수록 정확하지만 느립니다.\n"
+                "0 또는 너무 작으면 DEM 픽셀 크기를 기준으로 자동 보정됩니다."
+            )
+        except Exception:
+            pass
 
     def _on_mode_changed(self):
         mode = self.cmbNetworkType.currentData()
