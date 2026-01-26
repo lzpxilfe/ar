@@ -70,11 +70,20 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         try:
             plugin_dir = os.path.dirname(os.path.dirname(__file__))
-            icon_path = os.path.join(plugin_dir, "network_icon.jpg")
-            if not os.path.exists(icon_path):
-                icon_path = os.path.join(plugin_dir, "cost_icon.png")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            icon_candidates = [
+                "spatial_network.png",
+                "spatial_network.jpg",
+                "spatial_network.jpeg",
+                "network_icon.png",
+                "network_icon.jpg",
+                "network_icon.jpeg",
+                "cost_icon.png",
+            ]
+            for icon_name in icon_candidates:
+                icon_path = os.path.join(plugin_dir, icon_name)
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+                    break
         except Exception:
             pass
 

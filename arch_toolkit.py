@@ -84,8 +84,21 @@ class ArchToolkit:
             self.network_action.triggered.connect(self.run_network_tool)
 
             # Spatial / Visibility Network (PPA / LOS)
+            spatial_network_icon = None
+            for icon_name in (
+                "spatial_network.png",
+                "spatial_network.jpg",
+                "spatial_network.jpeg",
+                "network_visibility.png",
+                "network_visibility.jpg",
+                "network_visibility.jpeg",
+            ):
+                icon_path = os.path.join(plugin_dir, icon_name)
+                if os.path.exists(icon_path):
+                    spatial_network_icon = icon_path
+                    break
             self.spatial_network_action = QAction(
-                QIcon(network_icon or cost_icon),
+                QIcon(spatial_network_icon or network_icon or cost_icon),
                 u"근접/가시성 네트워크 (PPA / Visibility)",
                 self.iface.mainWindow(),
             )
