@@ -26,6 +26,7 @@ from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.core import (
     Qgis,
     QgsCategorizedSymbolRenderer,
+    QgsCoordinateTransform,
     QgsFeature,
     QgsField,
     QgsGeometry,
@@ -61,6 +62,8 @@ class _Node:
     name: str
     x: float
     y: float
+    samples: Tuple[Tuple[float, float], ...]
+    is_polygon: bool
 
 
 class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
@@ -112,6 +115,14 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         # Signals
         self.cmbNetworkType.currentIndexChanged.connect(self._on_mode_changed)
         self.cmbSiteLayer.layerChanged.connect(self._on_site_layer_changed)
+        try:
+            self.chkVisAllPairs.toggled.connect(self._update_visibility_controls)
+        except Exception:
+            pass
+        try:
+            self.chkPolyBoundaryVis.toggled.connect(self._update_visibility_controls)
+        except Exception:
+            pass
         self.btnRun.clicked.connect(self.run_analysis)
         self.btnClose.clicked.connect(self.reject)
 
@@ -201,6 +212,12 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                 "체크하면 후보 k 제한을 무시하고 (최대 거리 내) 모든 쌍을 LOS로 검사합니다.\n"
                 "노드가 많으면 시간이 오래 걸릴 수 있습니다."
             )
+            self.chkPolyBoundaryVis.setToolTip(
+                "입력 레이어가 폴리곤일 때, 대표점 1개가 아니라 폴리곤 경계를 샘플링해\n"
+                "가시성 비율(vis_ratio, 0~1)을 계산합니다. (느릴 수 있음)"
+            )
+            self.spinPolyBoundaryStep.setToolTip("폴리곤 경계에서 샘플 점을 뽑는 간격(m)입니다.")
+            self.spinPolyMaxBoundaryPts.setToolTip("폴리곤 1개당 경계 샘플 점의 최대 개수(속도 제한)입니다.")
         except Exception:
             pass
 
@@ -217,6 +234,62 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             self.groupVisibility.setVisible(is_vis)
         except Exception:
             pass
+
+        self._update_visibility_controls()
+
+    def _update_visibility_controls(self):
+        """Show/hide/enable advanced visibility options based on mode + input geometry."""
+        mode = None
+        try:
+            mode = self.cmbNetworkType.currentData()
+        except Exception:
+            mode = None
+
+        is_vis = mode == NETWORK_VISIBILITY
+        site_layer = None
+        try:
+            site_layer = self.cmbSiteLayer.currentLayer()
+        except Exception:
+            site_layer = None
+
+        is_polygon_layer = False
+        try:
+            if site_layer and site_layer.isValid():
+                is_polygon_layer = site_layer.geometryType() == QgsWkbTypes.PolygonGeometry
+        except Exception:
+            is_polygon_layer = False
+
+        # Candidate-k is irrelevant when all-pairs is enabled.
+        all_pairs = False
+        try:
+            all_pairs = bool(self.chkVisAllPairs.isChecked())
+        except Exception:
+            all_pairs = False
+
+        try:
+            self.spinCandidateK.setEnabled(is_vis and (not all_pairs))
+            self.lblCandidateK.setEnabled(is_vis and (not all_pairs))
+        except Exception:
+            pass
+
+        show_poly = bool(is_vis and is_polygon_layer)
+        poly_enabled = False
+        try:
+            poly_enabled = bool(self.chkPolyBoundaryVis.isChecked())
+        except Exception:
+            poly_enabled = False
+
+        for w in ("chkPolyBoundaryVis",):
+            try:
+                getattr(self, w).setVisible(show_poly)
+            except Exception:
+                pass
+
+        for w in ("lblPolyBoundaryStep", "spinPolyBoundaryStep", "lblPolyMaxPts", "spinPolyMaxBoundaryPts"):
+            try:
+                getattr(self, w).setVisible(show_poly and poly_enabled)
+            except Exception:
+                pass
 
     def _on_site_layer_changed(self, layer):
         # Populate name fields (string-ish fields only)
@@ -238,6 +311,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             except Exception:
                 pass
 
+        self._update_visibility_controls()
+
     def _collect_nodes(
         self,
         *,
@@ -246,6 +321,9 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         poly_mode: str,
         use_selected_only: bool,
         target_crs,
+        collect_polygon_boundary: bool = False,
+        boundary_step_m: float = 50.0,
+        boundary_max_points: int = 30,
     ) -> List[_Node]:
         feats = []
         try:
@@ -258,6 +336,14 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         nodes: List[_Node] = []
         skipped = 0
+
+        ct = None
+        try:
+            if layer.crs() != target_crs:
+                ct = QgsCoordinateTransform(layer.crs(), target_crs, QgsProject.instance())
+        except Exception:
+            ct = None
+
         for ft in feats:
             try:
                 geom = ft.geometry()
@@ -265,27 +351,37 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                     skipped += 1
                     continue
 
-                pt = None
-                if geom.type() == QgsWkbTypes.PointGeometry:
-                    if geom.isMultipart():
-                        mp = geom.asMultiPoint()
+                is_polygon = geom.type() == QgsWkbTypes.PolygonGeometry
+
+                # Work in target CRS (meters expected for distance-based tools)
+                geom_t = geom
+                if ct is not None:
+                    try:
+                        geom_t = QgsGeometry(geom)
+                        geom_t.transform(ct)
+                    except Exception:
+                        geom_t = geom
+
+                pt_t = None
+                if geom_t.type() == QgsWkbTypes.PointGeometry:
+                    if geom_t.isMultipart():
+                        mp = geom_t.asMultiPoint()
                         if mp:
-                            pt = QgsPointXY(mp[0])
+                            pt_t = QgsPointXY(mp[0])
                     else:
-                        pt = QgsPointXY(geom.asPoint())
-                elif geom.type() == QgsWkbTypes.PolygonGeometry:
-                    gpt = geom.pointOnSurface() if poly_mode == "surface" else geom.centroid()
+                        pt_t = QgsPointXY(geom_t.asPoint())
+                elif geom_t.type() == QgsWkbTypes.PolygonGeometry:
+                    gpt = geom_t.pointOnSurface() if poly_mode == "surface" else geom_t.centroid()
                     if gpt is not None and (not gpt.isEmpty()):
-                        pt = QgsPointXY(gpt.asPoint())
+                        pt_t = QgsPointXY(gpt.asPoint())
                 else:
                     skipped += 1
                     continue
 
-                if pt is None:
+                if pt_t is None:
                     skipped += 1
                     continue
 
-                pt_t = transform_point(pt, layer.crs(), target_crs)
                 fid = str(ft.id())
 
                 name = fid
@@ -297,13 +393,108 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                     except Exception:
                         pass
 
-                nodes.append(_Node(fid=fid, name=name, x=float(pt_t.x()), y=float(pt_t.y())))
+                samples: Tuple[Tuple[float, float], ...] = ((float(pt_t.x()), float(pt_t.y())),)
+                if is_polygon and collect_polygon_boundary:
+                    try:
+                        step = float(boundary_step_m or 0.0)
+                    except Exception:
+                        step = 50.0
+                    try:
+                        mx = int(boundary_max_points or 0)
+                    except Exception:
+                        mx = 30
+                    pts = self._sample_polygon_boundary_points(geom_t, step_m=step, max_points=mx)
+                    if pts:
+                        samples = pts
+
+                nodes.append(
+                    _Node(
+                        fid=fid,
+                        name=name,
+                        x=float(pt_t.x()),
+                        y=float(pt_t.y()),
+                        samples=samples,
+                        is_polygon=bool(is_polygon),
+                    )
+                )
             except Exception:
                 skipped += 1
 
         if skipped:
             log_message(f"SpatialNetwork: skipped {skipped} feature(s) (empty/unsupported geometry)", level=Qgis.Warning)
         return nodes
+
+    def _sample_polygon_boundary_points(
+        self,
+        geom_t: QgsGeometry,
+        *,
+        step_m: float,
+        max_points: int,
+    ) -> Tuple[Tuple[float, float], ...]:
+        """Sample points along polygon boundary in *target CRS units* (meters expected)."""
+        try:
+            boundary = geom_t.boundary()
+        except Exception:
+            boundary = None
+
+        if boundary is None or boundary.isEmpty():
+            return ()
+
+        try:
+            length = float(boundary.length() or 0.0)
+        except Exception:
+            length = 0.0
+
+        if length <= 0:
+            return ()
+
+        try:
+            step = float(step_m or 0.0)
+        except Exception:
+            step = 0.0
+        if step <= 0:
+            step = 50.0
+
+        try:
+            mx = int(max_points or 0)
+        except Exception:
+            mx = 0
+        if mx > 0:
+            # Enforce a cap by increasing the step when needed.
+            step = max(step, length / float(mx))
+
+        try:
+            num = int(length / step) + 1
+        except Exception:
+            num = 1
+        num = max(1, num)
+
+        pts: List[Tuple[float, float]] = []
+        for i in range(num + 1):
+            d = min(length, float(i) * step)
+            try:
+                p = boundary.interpolate(d)
+            except Exception:
+                p = None
+            if p is None or p.isEmpty():
+                continue
+            try:
+                pt = p.asPoint()
+                pts.append((float(pt.x()), float(pt.y())))
+            except Exception:
+                continue
+
+        # Deduplicate (rounded to reduce near-duplicates from interpolation).
+        uniq: List[Tuple[float, float]] = []
+        seen: Set[Tuple[int, int]] = set()
+        for x, y in pts:
+            k = (int(round(x * 1000.0)), int(round(y * 1000.0)))
+            if k in seen:
+                continue
+            seen.add(k)
+            uniq.append((x, y))
+
+        return tuple(uniq)
 
     def _ensure_metric(self, crs, title: str) -> bool:
         if is_metric_crs(crs):
@@ -367,12 +558,31 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
+        poly_boundary = False
+        boundary_step = 50.0
+        boundary_max_pts = 30
+        try:
+            poly_boundary = bool(self.chkPolyBoundaryVis.isChecked())
+        except Exception:
+            poly_boundary = False
+        try:
+            boundary_step = float(self.spinPolyBoundaryStep.value())
+        except Exception:
+            boundary_step = 50.0
+        try:
+            boundary_max_pts = int(self.spinPolyMaxBoundaryPts.value())
+        except Exception:
+            boundary_max_pts = 30
+
         nodes = self._collect_nodes(
             layer=site_layer,
             name_field=name_field,
             poly_mode=poly_mode,
             use_selected_only=use_selected,
             target_crs=dem_layer.crs(),
+            collect_polygon_boundary=poly_boundary,
+            boundary_step_m=boundary_step,
+            boundary_max_points=boundary_max_pts,
         )
         if len(nodes) < 2:
             push_message(self.iface, "가시성 네트워크", "유효한 노드가 2개 이상 필요합니다.", level=2)
@@ -393,6 +603,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             candidate_k=cand_k,
             max_dist=max_dist,
             sample_step_m=step_m,
+            use_poly_boundary_ratio=poly_boundary,
         )
 
     def _run_ppa(self, nodes: List[_Node], k: int, mutual_only: bool):
@@ -444,6 +655,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         self,
         *,
         dem_layer,
+        provider=None,
         ax: float,
         ay: float,
         bx: float,
@@ -471,7 +683,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         num_samples = int(total_dist / step) if step > 0 else 200
         num_samples = max(80, min(num_samples, 2000))
 
-        provider = dem_layer.dataProvider()
+        if provider is None:
+            provider = dem_layer.dataProvider()
 
         # Endpoints
         obs_elev0, ok0 = provider.sample(QgsPointXY(ax, ay), 1)
@@ -511,6 +724,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         candidate_k: int,
         max_dist: float,
         sample_step_m: float,
+        use_poly_boundary_ratio: bool = False,
     ):
         n = len(nodes)
         if n < 2:
@@ -544,6 +758,30 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                             continue
                     total_pairs += 1
 
+            # Large all-pairs runs can be slow; ask for confirmation.
+            try:
+                est_los = None
+                if use_poly_boundary_ratio:
+                    avg_samples = sum(len(nd.samples) for nd in nodes) / float(max(1, n))
+                    est_los = int(total_pairs * avg_samples * 2)  # A->B + B->A
+
+                if total_pairs >= 5000 or (est_los is not None and est_los >= 200000):
+                    extra = ""
+                    if est_los is not None:
+                        extra = f"\n(추정 LOS 호출: 약 {est_los:,}회)"
+                    res = QtWidgets.QMessageBox.warning(
+                        self,
+                        "경고",
+                        f"반경 내 검사 쌍이 많습니다: {total_pairs:,}쌍{extra}\n계속 진행할까요?",
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.No,
+                    )
+                    if res != QtWidgets.QMessageBox.Yes:
+                        restore_ui_focus(self)
+                        return
+            except Exception:
+                pass
+
             progress = QtWidgets.QProgressDialog(
                 f"가시성 네트워크(LOS) 계산 중... (쌍 {total_pairs}개 검사)",
                 "취소",
@@ -561,8 +799,41 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         edges: Set[Tuple[int, int]] = set()
         status_by_edge: Dict[Tuple[int, int], str] = {}
+        ratio_by_edge: Dict[Tuple[int, int], float] = {}
         tested_pairs = 0
         failed_pairs = 0
+        provider = dem_layer.dataProvider()
+
+        def _ratio_for_samples(
+            obs_samples: Tuple[Tuple[float, float], ...],
+            tx: float,
+            ty: float,
+            *,
+            obs_h: float,
+            tgt_h: float,
+        ) -> Optional[float]:
+            visible = 0
+            valid = 0
+            for ox, oy in obs_samples:
+                vis = self._los_visible(
+                    dem_layer=dem_layer,
+                    provider=provider,
+                    ax=float(ox),
+                    ay=float(oy),
+                    bx=float(tx),
+                    by=float(ty),
+                    obs_height=obs_h,
+                    tgt_height=tgt_h,
+                    sample_step_m=sample_step_m,
+                )
+                if vis is None:
+                    continue
+                valid += 1
+                if vis:
+                    visible += 1
+            if valid <= 0:
+                return None
+            return float(visible) / float(valid)
 
         if all_pairs:
             for i in range(n):
@@ -580,26 +851,56 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                             continue
 
                     tested_pairs += 1
-                    vis = self._los_visible(
-                        dem_layer=dem_layer,
-                        ax=nodes[i].x,
-                        ay=nodes[i].y,
-                        bx=nodes[j].x,
-                        by=nodes[j].y,
-                        obs_height=obs_height,
-                        tgt_height=tgt_height,
-                        sample_step_m=sample_step_m,
-                    )
-                    if vis is None:
-                        failed_pairs += 1
-                        status_by_edge[(i, j)] = "샘플 실패"
-                        edges.add((i, j))
-                    elif vis:
-                        status_by_edge[(i, j)] = "보임"
-                        edges.add((i, j))
+
+                    status = ""
+                    ratio_val: float = 0.0
+
+                    if use_poly_boundary_ratio:
+                        r_ab = _ratio_for_samples(
+                            nodes[i].samples,
+                            nodes[j].x,
+                            nodes[j].y,
+                            obs_h=obs_height,
+                            tgt_h=tgt_height,
+                        )
+                        r_ba = _ratio_for_samples(
+                            nodes[j].samples,
+                            nodes[i].x,
+                            nodes[i].y,
+                            obs_h=obs_height,
+                            tgt_h=tgt_height,
+                        )
+                        vals = [v for v in (r_ab, r_ba) if v is not None]
+                        if not vals:
+                            failed_pairs += 1
+                            status = "샘플 실패"
+                            ratio_val = 0.0
+                        else:
+                            ratio_val = float(sum(vals) / float(len(vals)))
+                            status = "보임" if ratio_val > 0.0 else "안보임"
                     else:
-                        status_by_edge[(i, j)] = "안보임"
-                        edges.add((i, j))
+                        vis = self._los_visible(
+                            dem_layer=dem_layer,
+                            provider=provider,
+                            ax=nodes[i].x,
+                            ay=nodes[i].y,
+                            bx=nodes[j].x,
+                            by=nodes[j].y,
+                            obs_height=obs_height,
+                            tgt_height=tgt_height,
+                            sample_step_m=sample_step_m,
+                        )
+                        if vis is None:
+                            failed_pairs += 1
+                            status = "샘플 실패"
+                            ratio_val = 0.0
+                        else:
+                            status = "보임" if vis else "안보임"
+                            ratio_val = 1.0 if vis else 0.0
+
+                    edges.add((i, j))
+                    status_by_edge[(i, j)] = status
+                    ratio_by_edge[(i, j)] = ratio_val
 
                     if tested_pairs % 20 == 0:
                         progress.setValue(min(progress.maximum(), tested_pairs))
@@ -635,27 +936,55 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                     tested.add((a, b))
                     tested_pairs += 1
 
-                    vis = self._los_visible(
-                        dem_layer=dem_layer,
-                        ax=nodes[a].x,
-                        ay=nodes[a].y,
-                        bx=nodes[b].x,
-                        by=nodes[b].y,
-                        obs_height=obs_height,
-                        tgt_height=tgt_height,
-                        sample_step_m=sample_step_m,
-                    )
-                    if vis is None:
-                        failed_pairs += 1
-                        status_by_edge[(a, b)] = "샘플 실패"
-                        edges.add((a, b))
-                        continue
-                    if vis:
-                        status_by_edge[(a, b)] = "보임"
-                        edges.add((a, b))
+                    status = ""
+                    ratio_val: float = 0.0
+
+                    if use_poly_boundary_ratio:
+                        r_ab = _ratio_for_samples(
+                            nodes[a].samples,
+                            nodes[b].x,
+                            nodes[b].y,
+                            obs_h=obs_height,
+                            tgt_h=tgt_height,
+                        )
+                        r_ba = _ratio_for_samples(
+                            nodes[b].samples,
+                            nodes[a].x,
+                            nodes[a].y,
+                            obs_h=obs_height,
+                            tgt_h=tgt_height,
+                        )
+                        vals = [v for v in (r_ab, r_ba) if v is not None]
+                        if not vals:
+                            failed_pairs += 1
+                            status = "샘플 실패"
+                            ratio_val = 0.0
+                        else:
+                            ratio_val = float(sum(vals) / float(len(vals)))
+                            status = "보임" if ratio_val > 0.0 else "안보임"
                     else:
-                        status_by_edge[(a, b)] = "안보임"
-                        edges.add((a, b))
+                        vis = self._los_visible(
+                            dem_layer=dem_layer,
+                            provider=provider,
+                            ax=nodes[a].x,
+                            ay=nodes[a].y,
+                            bx=nodes[b].x,
+                            by=nodes[b].y,
+                            obs_height=obs_height,
+                            tgt_height=tgt_height,
+                            sample_step_m=sample_step_m,
+                        )
+                        if vis is None:
+                            failed_pairs += 1
+                            status = "샘플 실패"
+                            ratio_val = 0.0
+                        else:
+                            status = "보임" if vis else "안보임"
+                            ratio_val = 1.0 if vis else 0.0
+
+                    edges.add((a, b))
+                    status_by_edge[(a, b)] = status
+                    ratio_by_edge[(a, b)] = ratio_val
 
                 progress.setValue(i + 1)
                 QtWidgets.QApplication.processEvents()
@@ -668,13 +997,23 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             add_dist=True,
             crs_authid=dem_layer.crs().authid(),
             status_by_edge=status_by_edge,
+            ratio_by_edge=ratio_by_edge,
             label_distance=bool(tested_pairs <= 300),
         )
-        msg = f"완료: 검사쌍 {tested_pairs}개, 보임 간선 {len(edges)}개"
-        if failed_pairs:
-            msg += f", 샘플 실패 {failed_pairs}개(NoData/범위 밖)"
-        log_message(f"VisibilityNetwork: {msg} (all_pairs={all_pairs}, max_dist={max_dist})", level=Qgis.Info)
-        push_message(self.iface, "가시성 네트워크", msg, level=0, duration=7)
+        visible_edges = sum(1 for v in status_by_edge.values() if v == "보임")
+        hidden_edges = sum(1 for v in status_by_edge.values() if v == "안보임")
+        fail_edges = sum(1 for v in status_by_edge.values() if v == "샘플 실패")
+
+        msg = (
+            f"완료: 검사쌍 {tested_pairs}개 (보임 {visible_edges}, 안보임 {hidden_edges}, 실패 {fail_edges})"
+        )
+        if use_poly_boundary_ratio:
+            msg += "  [vis_ratio]"
+        log_message(
+            f"VisibilityNetwork: {msg} (all_pairs={all_pairs}, max_dist={max_dist}, poly_ratio={use_poly_boundary_ratio})",
+            level=Qgis.Info,
+        )
+        push_message(self.iface, "가시성 네트워크", msg, level=0, duration=8)
         self.accept()
 
     def _add_edge_layer(
@@ -687,6 +1026,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         add_dist: bool,
         crs_authid: str,
         status_by_edge: Optional[Dict[Tuple[int, int], str]] = None,
+        ratio_by_edge: Optional[Dict[Tuple[int, int], float]] = None,
         label_distance: bool = False,
     ):
         project = QgsProject.instance()
@@ -714,6 +1054,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         ]
         if status_by_edge is not None:
             fields.append(QgsField("status", QVariant.String))
+        if ratio_by_edge is not None:
+            fields.append(QgsField("vis_ratio", QVariant.Double))
         if add_dist:
             fields.append(QgsField("dist_m", QVariant.Double))
             fields.append(QgsField("dist_km", QVariant.Double))
@@ -737,6 +1079,11 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                 f["dist_km"] = dist_m / 1000.0
             if status_by_edge is not None:
                 f["status"] = str(status_by_edge.get((a, b), ""))
+            if ratio_by_edge is not None:
+                try:
+                    f["vis_ratio"] = float(ratio_by_edge.get((a, b), 0.0))
+                except Exception:
+                    f["vis_ratio"] = 0.0
             feats.append(f)
         pr.addFeatures(feats)
         layer.updateExtents()
