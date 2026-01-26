@@ -16,7 +16,7 @@ from qgis.core import (
 _UI_LOG_QUEUE_MAX = 5000
 _ui_log_queue = queue.Queue(maxsize=_UI_LOG_QUEUE_MAX)
 _ui_log_timer = None
-_log_panel_hint_shown = False
+_ui_log_listeners = set()
 
 def transform_point(point, src_crs, dest_crs):
     """Transform point from source CRS to destination CRS"""
@@ -108,6 +108,17 @@ def _flush_ui_log_queue(max_items: int = 200):
                 QgsMessageLog.logMessage(str(msg), "ArchToolkit", level)
             except Exception:
                 pass
+
+            # Also forward to any in-plugin live log UIs.
+            try:
+                listeners = list(_ui_log_listeners)
+            except Exception:
+                listeners = []
+            for cb in listeners:
+                try:
+                    cb(str(msg), level)
+                except Exception:
+                    pass
             n += 1
     except Exception:
         pass
@@ -154,56 +165,32 @@ def stop_ui_log_pump():
         _ui_log_timer = None
 
 
+def add_ui_log_listener(callback):
+    """Register a main-thread callback (msg: str, level: Qgis) for real-time log UIs."""
+    try:
+        _ui_log_listeners.add(callback)
+    except Exception:
+        pass
+
+
+def remove_ui_log_listener(callback):
+    """Unregister a previously-registered UI log callback."""
+    try:
+        _ui_log_listeners.discard(callback)
+    except Exception:
+        pass
+
+
 def ensure_log_panel_visible(iface, show_hint: bool = True):
-    """Best-effort: open the QGIS 'Log Messages' panel so users can see real-time logs.
+    """Deprecated: kept for backward compatibility.
 
-    QGIS does not always show the log panel by default. This helper makes progress
-    logs discoverable during long-running operations.
+    We no longer auto-open the QGIS 'Log Messages' panel (too intrusive). This now
+    only ensures the worker-thread log pump is running.
     """
-    global _log_panel_hint_shown
-
-    # Ensure the UI log pump is running so worker-thread logs show up in real time.
     try:
         start_ui_log_pump()
     except Exception:
         pass
-
-    try:
-        if iface is not None and hasattr(iface, "openMessageLog"):
-            iface.openMessageLog()
-    except Exception:
-        pass
-
-    # Fallbacks for QGIS versions/profiles where `openMessageLog()` isn't available.
-    try:
-        from qgis.PyQt.QtWidgets import QAction, QDockWidget
-
-        mw = iface.mainWindow() if iface is not None and hasattr(iface, "mainWindow") else None
-        if mw is not None:
-            act = mw.findChild(QAction, "mActionShowLogMessages")
-            if act is not None:
-                act.trigger()
-
-            for obj_name in ("MessageLog", "mLogDockWidget", "LogDockWidget"):
-                dock = mw.findChild(QDockWidget, obj_name)
-                if dock is not None:
-                    dock.show()
-                    dock.raise_()
-                    break
-    except Exception:
-        pass
-
-    if show_hint and not _log_panel_hint_shown:
-        try:
-            iface.messageBar().pushMessage(
-                "ArchToolkit",
-                "진행 로그: '로그 메시지' 패널에서 'ArchToolkit' 탭을 확인하세요.",
-                level=0,
-                duration=6,
-            )
-        except Exception:
-            pass
-        _log_panel_hint_shown = True
 
 
 def log_message(message, level=Qgis.Info):
@@ -227,6 +214,17 @@ def log_message(message, level=Qgis.Info):
         # Ensure the pump is running so worker-thread logs appear too.
         start_ui_log_pump()
         QgsMessageLog.logMessage(str(message), "ArchToolkit", level)
+
+        # Forward to in-plugin live log UIs.
+        try:
+            listeners = list(_ui_log_listeners)
+        except Exception:
+            listeners = []
+        for cb in listeners:
+            try:
+                cb(str(message), level)
+            except Exception:
+                pass
     except Exception:
         # Never crash due to logging
         pass

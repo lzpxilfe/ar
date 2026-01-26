@@ -25,7 +25,8 @@ from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
 import processing
 import tempfile
-from .utils import ensure_log_panel_visible, push_message, restore_ui_focus
+from .utils import push_message, restore_ui_focus
+from .live_log_dialog import ensure_live_log_dialog
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -303,8 +304,8 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
-        # Make sure users can see progress logs during long computations.
-        ensure_log_panel_visible(self.iface, show_hint=True)
+        # Live log window (non-modal) so users can see progress in real time.
+        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
 
         method_name = self.cmbInterpolation.currentText()
         method_info = self.INTERPOLATION_METHODS.get(method_name, {})

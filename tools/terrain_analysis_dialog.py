@@ -31,7 +31,8 @@ from qgis.core import (
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
 import processing
-from .utils import cleanup_files, ensure_log_panel_visible, push_message, restore_ui_focus
+from .utils import cleanup_files, push_message, restore_ui_focus
+from .live_log_dialog import ensure_live_log_dialog
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
 # No external plugins or libraries (like numpy, matplotlib) are required.
@@ -246,8 +247,8 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
-        # Make sure users can see progress logs during long computations.
-        ensure_log_panel_visible(self.iface, show_hint=True)
+        # Live log window (non-modal) so users can see progress in real time.
+        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
         
         push_message(self.iface, "처리 중", "지형 분석 실행 중...", level=0)
         self.hide()

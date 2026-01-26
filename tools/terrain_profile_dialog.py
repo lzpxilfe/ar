@@ -33,7 +33,8 @@ from qgis.core import (
     QgsLineSymbol, QgsSingleSymbolRenderer, Qgis, QgsDistanceArea
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
-from .utils import ensure_log_panel_visible, log_message, push_message, restore_ui_focus, transform_point
+from .utils import log_message, push_message, restore_ui_focus, transform_point
+from .live_log_dialog import ensure_live_log_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -457,8 +458,8 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
-        # Make sure users can see progress logs during long computations.
-        ensure_log_panel_visible(self.iface, show_hint=True)
+        # Live log window (non-modal) so users can see progress in real time.
+        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
         try:
             start_canvas = self.points[0]
             end_canvas = self.points[1]

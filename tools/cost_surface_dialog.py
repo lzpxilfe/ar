@@ -56,13 +56,13 @@ from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator
 
 from .utils import (
     cleanup_files,
-    ensure_log_panel_visible,
     is_metric_crs,
     log_message,
     push_message,
     restore_ui_focus,
     transform_point,
 )
+from .live_log_dialog import ensure_live_log_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -1839,8 +1839,8 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
-        # Make sure users can see progress logs during long computations.
-        ensure_log_panel_visible(self.iface, show_hint=True)
+        # Live log window (non-modal) so users can see progress in real time.
+        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
 
         buffer_m = float(self.spinBuffer.value())
         allow_diagonal = bool(self.chkDiagonal.isChecked())

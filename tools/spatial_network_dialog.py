@@ -45,13 +45,13 @@ from qgis.core import (
 )
 
 from .utils import (
-    ensure_log_panel_visible,
     is_metric_crs,
     log_message,
     push_message,
     restore_ui_focus,
     transform_point,
 )
+from .live_log_dialog import ensure_live_log_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -530,8 +530,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
-        # Make sure users can actually *see* progress logs during the run.
-        ensure_log_panel_visible(self.iface, show_hint=True)
+        # Live log window (non-modal) so users can see progress in real time.
+        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
 
         name_field = str(self.cmbNameField.currentData() or "")
         poly_mode = str(self.cmbPolyPointMode.currentData() or "surface")
