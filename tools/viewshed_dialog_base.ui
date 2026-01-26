@@ -435,6 +435,23 @@
        </property>
       </widget>
      </item>
+     <item row="3" column="0" colspan="2">
+      <widget class="QCheckBox" name="chkCutoutInputPolygon">
+       <property name="text">
+        <string>입력 폴리곤 내부 비우기(NoData)</string>
+       </property>
+       <property name="toolTip">
+        <string>다중 누적 가시권에서 관측점 생성에 사용한 폴리곤 레이어의 내부를 결과에서 투명하게 비웁니다.
+체크 해제 시 폴리곤 내부도 누적 결과에 포함됩니다.</string>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+       <property name="visible">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
     </layout>
    </widget>
   </item>

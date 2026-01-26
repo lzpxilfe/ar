@@ -727,10 +727,38 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 self.lblSelectedPoint.setText("선택된 위치: 없음")
 
+        # Update optional UI that depends on source + geometry type.
+        self._update_cutout_input_polygon_ui()
+
     def on_layer_selection_changed(self, layer):
         """Auto-check 'From Layer' when a layer is selected in the combo box"""
         if layer:
             self.radioFromLayer.setChecked(True)
+        self._update_cutout_input_polygon_ui()
+
+    def _update_cutout_input_polygon_ui(self):
+        """Show/enable cut-out option only when it applies (Multi + From Layer + Polygon)."""
+        if not hasattr(self, "chkCutoutInputPolygon"):
+            return
+        try:
+            is_multi = self.radioMultiPoint.isChecked()
+            from_layer = self.radioFromLayer.isChecked()
+            obs_layer = self.cmbObserverLayer.currentLayer() if from_layer else None
+            is_poly = bool(
+                obs_layer
+                and hasattr(obs_layer, "geometryType")
+                and obs_layer.geometryType() == QgsWkbTypes.PolygonGeometry
+            )
+            show = is_multi and from_layer and is_poly
+            self.chkCutoutInputPolygon.setVisible(show)
+            self.chkCutoutInputPolygon.setEnabled(show)
+            if not show:
+                self.chkCutoutInputPolygon.setChecked(False)
+        except Exception:
+            try:
+                self.chkCutoutInputPolygon.setVisible(False)
+            except Exception:
+                pass
 
     def on_layers_removed(self, layer_ids):
         """Clean up markers and annotations if the corresponding analysis layer is removed"""
@@ -3006,6 +3034,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         can see that location. Color-coded from red (1 point) to green (all points).
         """
         points = [] # Start empty, we'll collect from all sources as (pt, crs)
+        mask_geometries_dem = []
+        want_cutout_input_polygon = bool(
+            hasattr(self, "chkCutoutInputPolygon") and self.chkCutoutInputPolygon.isChecked()
+        )
         interval = self.spinLineInterval.value()
         canvas_crs = self.canvas.mapSettings().destinationCrs()
 
@@ -3036,6 +3068,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.radioFromLayer.isChecked():
             obs_layer = self.cmbObserverLayer.currentLayer()
             if obs_layer:
+                transform_to_dem = None
+                if want_cutout_input_polygon and obs_layer.geometryType() == QgsWkbTypes.PolygonGeometry:
+                    try:
+                        transform_to_dem = QgsCoordinateTransform(
+                            obs_layer.crs(), dem_layer.crs(), QgsProject.instance()
+                        )
+                    except Exception:
+                        transform_to_dem = None
+
                 # [v1.6.02] Auto-hide labels to reduce clutter
                 try:
                     obs_layer.setLabelsEnabled(False)
@@ -3066,6 +3107,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                             points.append((pt, obs_layer.crs()))
                     
                     elif geom.type() == QgsWkbTypes.PolygonGeometry:
+                        if want_cutout_input_polygon:
+                            try:
+                                geom_dem = QgsGeometry(geom)
+                                if transform_to_dem is not None:
+                                    try:
+                                        geom_dem.transform(transform_to_dem)
+                                    except Exception:
+                                        pass
+                                mask_geometries_dem.append(geom_dem)
+                            except Exception:
+                                pass
                         if geom.isMultipart():
                             polygons = geom.asMultiPolygon()
                         else:
@@ -3265,6 +3317,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Clean up intermediate vs files
             cleanup_files(temp_outputs)
+
+            # Optional: cut out input polygon interior (NoData) so the outside pattern is clearer.
+            if want_cutout_input_polygon and mask_geometries_dem:
+                try:
+                    progress.setLabelText("입력 폴리곤 내부 비우는 중...")
+                    QtWidgets.QApplication.processEvents()
+                except Exception:
+                    pass
+                self._burn_nodata_for_geometries_in_raster(
+                    final_output, mask_geometries_dem, nodata_value=-9999
+                )
     
             
             
