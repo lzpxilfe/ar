@@ -23,6 +23,7 @@ from .tools.contour_extractor_dialog import ContourExtractorDialog
 from .tools.terrain_analysis_dialog import TerrainAnalysisDialog
 from .tools.terrain_profile_dialog import TerrainProfileDialog
 from .tools.map_styling_dialog import MapStylingDialog
+from .tools.slope_aspect_drafting_dialog import SlopeAspectDraftingDialog
 from .tools.viewshed_dialog import ViewshedDialog
 from .tools.cost_surface_dialog import CostSurfaceDialog
 from .tools.cost_network_dialog import CostNetworkDialog
@@ -88,6 +89,20 @@ class ArchToolkit:
             self.style_action = QAction(QIcon(style_icon), u"도면 시각화 (Map Styling)", self.iface.mainWindow())
             self.style_action.triggered.connect(self.run_styling_tool)
 
+            # Slope/Aspect Drafting (Cartographic)
+            drafting_icon = None
+            for icon_name in ("slope_aspect.png",):
+                icon_path = os.path.join(plugin_dir, icon_name)
+                if os.path.exists(icon_path):
+                    drafting_icon = icon_path
+                    break
+            self.drafting_action = QAction(
+                QIcon(drafting_icon or style_icon),
+                u"경사도/사면방향 도면화 (Slope/Aspect Drafting)",
+                self.iface.mainWindow(),
+            )
+            self.drafting_action.triggered.connect(self.run_drafting_tool)
+
             # Viewshed Analysis
             viewshed_icon = os.path.join(plugin_dir, 'viewshed_icon.png')
             self.viewshed_action = QAction(QIcon(viewshed_icon), u"가시권 분석 (Viewshed Analysis)", self.iface.mainWindow())
@@ -101,6 +116,7 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.cost_action)
             self.iface.addPluginToMenu(self.menu_name, self.network_action)
             self.iface.addPluginToMenu(self.menu_name, self.style_action)
+            self.iface.addPluginToMenu(self.menu_name, self.drafting_action)
             self.iface.addPluginToMenu(self.menu_name, self.viewshed_action)
 
             # 3. Create Dedicated Toolbar for Visibility
@@ -123,7 +139,8 @@ class ArchToolkit:
             self.tool_menu.addAction(self.network_action)
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.style_action)
-            
+            self.tool_menu.addAction(self.drafting_action)
+             
             self.main_action.setMenu(self.tool_menu)
             
             # Add QToolButton to toolbar for instant popup support
@@ -137,7 +154,7 @@ class ArchToolkit:
             # Keep references for cleanup
             self.actions = [
                 self.dem_action, self.contour_action, self.terrain_action,
-                self.profile_action, self.cost_action, self.network_action, self.style_action, self.viewshed_action,
+                self.profile_action, self.cost_action, self.network_action, self.style_action, self.drafting_action, self.viewshed_action,
                 self.main_action
             ]
         except Exception as e:
@@ -202,6 +219,13 @@ class ArchToolkit:
     def run_styling_tool(self):
         try:
             dlg = MapStylingDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
+
+    def run_drafting_tool(self):
+        try:
+            dlg = SlopeAspectDraftingDialog(self.iface)
             dlg.exec_()
         except Exception as e:
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")

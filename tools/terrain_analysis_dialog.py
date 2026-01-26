@@ -21,35 +21,14 @@ Slope, Aspect, TRI, TPI, Roughness, Slope Position with archaeological classific
 User-configurable parameters for TPI radius, TPI thresholds, and Slope Position
 """
 import os
-import math
 import tempfile
 import uuid
-from osgeo import gdal
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtCore import QVariant
 from qgis.PyQt.QtGui import QColor
 from qgis.core import (
-    Qgis,
-    QgsFeature,
-    QgsField,
-    QgsGeometry,
-    QgsMapLayerProxyModel,
-    QgsMarkerSymbol,
-    QgsPalLayerSettings,
-    QgsPointXY,
-    QgsProject,
-    QgsRasterLayer,
-    QgsRasterShader,
-    QgsSingleBandPseudoColorRenderer,
-    QgsSingleSymbolRenderer,
-    QgsColorRampShader,
-    QgsSymbolLayer,
-    QgsTextBufferSettings,
-    QgsTextFormat,
-    QgsProperty,
-    QgsVectorLayer,
-    QgsVectorLayerSimpleLabeling,
+    QgsProject, QgsRasterLayer, QgsMapLayerProxyModel,
+    QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
 import processing
 from .utils import restore_ui_focus, push_message, cleanup_files
@@ -259,14 +238,9 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
         
-        # Drafting outputs (vectorized slope labels / aspect arrows)
-        draft_slope = bool(getattr(self, "chkDraftSlopeLabel", None) and self.chkDraftSlopeLabel.isChecked())
-        draft_aspect = bool(getattr(self, "chkDraftAspectArrow", None) and self.chkDraftAspectArrow.isChecked())
-
         has_any = any([self.chkSlope.isChecked(), self.chkAspect.isChecked(),
                        self.chkTRI.isChecked(), self.chkTPI.isChecked(), 
-                       self.chkRoughness.isChecked(), self.chkSlopePosition.isChecked(),
-                       draft_slope, draft_aspect])
+                       self.chkRoughness.isChecked(), self.chkSlopePosition.isChecked()])
         if not has_any:
             push_message(self.iface, "오류", "분석 유형을 선택해주세요", level=2)
             restore_ui_focus(self)
@@ -289,45 +263,32 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             tpi_low = self.spinTPILow.value()
             tpi_high = self.spinTPIHigh.value()
             tri_max = self.spinTRIMax.value()
-
-            # Drafting params (safe defaults if UI isn't present)
-            draft_step = int(getattr(self, "spinDraftStep", None).value()) if hasattr(self, "spinDraftStep") else 5
-            arrow_size_mm = float(getattr(self, "spinDraftArrowSize", None).value()) if hasattr(self, "spinDraftArrowSize") else 1.2
-            label_size_pt = float(getattr(self, "spinDraftLabelSize", None).value()) if hasattr(self, "spinDraftLabelSize") else 7.0
-            draft_step = max(1, int(draft_step))
-            arrow_size_mm = max(0.1, float(arrow_size_mm))
-            label_size_pt = max(4.0, float(label_size_pt))
             
-            slope_path = None
-            aspect_path = None
-
-            # Slope (also used by drafting)
-            if self.chkSlope.isChecked() or draft_slope or draft_aspect:
-                slope_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_slope_{run_id}.tif')
+            # Slope
+            if self.chkSlope.isChecked():
+                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_slope_{run_id}.tif')
                 processing.run("gdal:slope", {
-                    'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': slope_path
+                    'INPUT': dem_source, 'BAND': 1, 'SCALE': 1, 'AS_PERCENT': False, 'OUTPUT': output
                 })
-                if self.chkSlope.isChecked():
-                    cls_key = self.get_selected_classification()
-                    cls_info = self.SLOPE_CLASSIFICATIONS[cls_key]
-                    layer = QgsRasterLayer(slope_path, f"경사도_{cls_info['name']}")
-                    if layer.isValid():
-                        QgsProject.instance().addMapLayer(layer)
-                        self.apply_style(layer, cls_info['classes'], 90)
-                        results.append("경사도")
+                cls_key = self.get_selected_classification()
+                cls_info = self.SLOPE_CLASSIFICATIONS[cls_key]
+                layer = QgsRasterLayer(output, f"경사도_{cls_info['name']}")
+                if layer.isValid():
+                    QgsProject.instance().addMapLayer(layer)
+                    self.apply_style(layer, cls_info['classes'], 90)
+                    results.append("경사도")
             
-            # Aspect (also used by drafting)
-            if self.chkAspect.isChecked() or draft_aspect:
-                aspect_path = os.path.join(tempfile.gettempdir(), f'archtoolkit_aspect_{run_id}.tif')
+            # Aspect
+            if self.chkAspect.isChecked():
+                output = os.path.join(tempfile.gettempdir(), f'archtoolkit_aspect_{run_id}.tif')
                 processing.run("gdal:aspect", {
-                    'INPUT': dem_source, 'BAND': 1, 'TRIG_ANGLE': False, 'ZERO_FLAT': True, 'OUTPUT': aspect_path
+                    'INPUT': dem_source, 'BAND': 1, 'TRIG_ANGLE': False, 'ZERO_FLAT': True, 'OUTPUT': output
                 })
-                if self.chkAspect.isChecked():
-                    layer = QgsRasterLayer(aspect_path, "사면방향_8방위")
-                    if layer.isValid():
-                        QgsProject.instance().addMapLayer(layer)
-                        self.apply_style(layer, self.ASPECT_CLASSES, 360)
-                        results.append("사면방향")
+                layer = QgsRasterLayer(output, "사면방향_8방위")
+                if layer.isValid():
+                    QgsProject.instance().addMapLayer(layer)
+                    self.apply_style(layer, self.ASPECT_CLASSES, 360)
+                    results.append("사면방향")
             
             # TRI with user-defined classification threshold
             if self.chkTRI.isChecked():
@@ -362,21 +323,6 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             # Slope Position - Weiss (2001) 6-class with user thresholds
             if self.chkSlopePosition.isChecked():
                 self.run_slope_position_analysis(dem_source, slope_threshold, tpi_low, tpi_high, results, run_id)
-
-            # Drafting vector layer (slope labels + aspect arrows)
-            if draft_slope or draft_aspect:
-                created = self.create_slope_aspect_drafting_layer(
-                    slope_path=slope_path,
-                    aspect_path=aspect_path,
-                    dem_layer=dem_layer,
-                    step_cells=draft_step,
-                    arrow_size_mm=arrow_size_mm,
-                    label_size_pt=label_size_pt,
-                    draw_slope_labels=draft_slope,
-                    draw_aspect_arrows=draft_aspect,
-                )
-                if created:
-                    results.append("도면화(경사/경사향)")
             
             if results:
                 push_message(self.iface, "완료", f"분석 완료: {', '.join(results)}", level=0)
@@ -392,227 +338,6 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
         finally:
             if not success:
                 restore_ui_focus(self)
-
-    def create_slope_aspect_drafting_layer(
-        self,
-        slope_path: str,
-        aspect_path: str,
-        dem_layer: QgsRasterLayer,
-        step_cells: int,
-        arrow_size_mm: float,
-        label_size_pt: float,
-        draw_slope_labels: bool,
-        draw_aspect_arrows: bool,
-    ) -> bool:
-        """Create a point vector layer for drafting: slope labels (1°) and/or aspect arrows.
-
-        - Each sampled raster cell becomes a point at the cell center.
-        - slope is rounded to integer degrees for label readability.
-        - aspect arrows are hidden on (near-)flat slope cells.
-        """
-        if not slope_path or not os.path.exists(slope_path):
-            push_message(self.iface, "오류", "도면화용 경사도 래스터를 찾을 수 없습니다.", level=2)
-            return False
-
-        if draw_aspect_arrows and (not aspect_path or not os.path.exists(aspect_path)):
-            push_message(self.iface, "오류", "도면화용 사면방향 래스터를 찾을 수 없습니다.", level=2)
-            return False
-
-        step_cells = max(1, int(step_cells))
-
-        try:
-            ds_slope = gdal.Open(slope_path, gdal.GA_ReadOnly)
-            if ds_slope is None:
-                push_message(self.iface, "오류", "경사도 래스터를 열 수 없습니다.", level=2)
-                return False
-
-            band_slope = ds_slope.GetRasterBand(1)
-            xsize = int(ds_slope.RasterXSize)
-            ysize = int(ds_slope.RasterYSize)
-
-            ds_aspect = None
-            band_aspect = None
-            if draw_aspect_arrows:
-                ds_aspect = gdal.Open(aspect_path, gdal.GA_ReadOnly)
-                if ds_aspect is None:
-                    push_message(self.iface, "오류", "사면방향 래스터를 열 수 없습니다.", level=2)
-                    return False
-                band_aspect = ds_aspect.GetRasterBand(1)
-
-            # Safety limit: avoid generating millions of points accidentally.
-            nx = (xsize + step_cells - 1) // step_cells
-            ny = (ysize + step_cells - 1) // step_cells
-            point_count = int(nx * ny)
-            max_points = 300_000
-            if point_count > max_points:
-                push_message(
-                    self.iface,
-                    "도면화(경사/경사향)",
-                    f"생성될 점이 너무 많습니다: 약 {point_count:,}개 (최대 {max_points:,}개). "
-                    "표시 간격(셀)을 늘려주세요.",
-                    level=1,
-                    duration=8,
-                )
-                return False
-
-            gt = ds_slope.GetGeoTransform()
-            if gt is None:
-                push_message(self.iface, "오류", "래스터 지오트랜스폼 정보를 읽을 수 없습니다.", level=2)
-                return False
-
-            name = "경사도/경사향 도면화 (Slope & Aspect Drafting)"
-            layer = QgsVectorLayer("Point", name, "memory")
-            try:
-                layer.setCrs(dem_layer.crs())
-            except Exception:
-                pass
-
-            pr = layer.dataProvider()
-            pr.addAttributes(
-                [
-                    QgsField("slope_deg", QVariant.Int),
-                    QgsField("slope", QVariant.Double),
-                    QgsField("aspect_deg", QVariant.Int),
-                    QgsField("aspect", QVariant.Double),
-                    QgsField("draw_arrow", QVariant.Int),
-                ]
-            )
-            layer.updateFields()
-
-            flat_thresh_deg = 0.5
-            feats = []
-
-            # Read in row blocks for reasonable performance without huge memory spikes.
-            chunk_rows = 256
-            for row0 in range(0, ysize, chunk_rows):
-                rows_to_read = min(chunk_rows, ysize - row0)
-                slope_arr = band_slope.ReadAsArray(0, row0, xsize, rows_to_read)
-                aspect_arr = None
-                if band_aspect is not None:
-                    aspect_arr = band_aspect.ReadAsArray(0, row0, xsize, rows_to_read)
-
-                if slope_arr is None:
-                    continue
-
-                for dr in range(0, rows_to_read, step_cells):
-                    row = row0 + dr
-                    for col in range(0, xsize, step_cells):
-                        sval = slope_arr[dr, col]
-                        try:
-                            slope = float(sval)
-                        except Exception:
-                            continue
-                        if not math.isfinite(slope):
-                            continue
-
-                        slope_deg = int(round(slope))
-
-                        aspect = None
-                        aspect_deg = None
-                        draw_arrow = 0
-                        if aspect_arr is not None:
-                            aval = aspect_arr[dr, col]
-                            try:
-                                aspect = float(aval)
-                            except Exception:
-                                aspect = None
-                            if aspect is not None and math.isfinite(aspect):
-                                # Hide arrows on (near-)flat areas; keep true North slopes (aspect≈0) visible.
-                                if slope > flat_thresh_deg:
-                                    draw_arrow = 1
-                                    aspect_deg = int(round(aspect)) % 360
-                                else:
-                                    draw_arrow = 0
-                                    aspect_deg = int(round(aspect)) % 360
-
-                        # Cell center coordinates from geotransform
-                        x = gt[0] + (col + 0.5) * gt[1] + (row + 0.5) * gt[2]
-                        y = gt[3] + (col + 0.5) * gt[4] + (row + 0.5) * gt[5]
-
-                        f = QgsFeature(layer.fields())
-                        f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
-                        f["slope_deg"] = slope_deg
-                        f["slope"] = slope
-                        if aspect is not None:
-                            f["aspect"] = aspect
-                        if aspect_deg is not None:
-                            f["aspect_deg"] = aspect_deg
-                        f["draw_arrow"] = int(draw_arrow)
-                        feats.append(f)
-
-                    # batch flush
-                    if len(feats) >= 5000:
-                        pr.addFeatures(feats)
-                        feats = []
-
-            if feats:
-                pr.addFeatures(feats)
-
-            layer.updateExtents()
-
-            # Style: arrow symbol rotated by aspect + slope label with buffer.
-            symbol = QgsMarkerSymbol.createSimple(
-                {
-                    "name": "triangle",
-                    "color": "120,0,180,200",
-                    "outline_color": "0,0,0,220",
-                    "outline_width": "0.1",
-                    "size": str(float(arrow_size_mm)),
-                }
-            )
-            try:
-                sl = symbol.symbolLayer(0)
-                if sl is not None and draw_aspect_arrows:
-                    sl.setDataDefinedProperty(QgsSymbolLayer.PropertyAngle, QgsProperty.fromField("aspect_deg"))
-                    sl.setDataDefinedProperty(
-                        QgsSymbolLayer.PropertySize,
-                        QgsProperty.fromExpression(
-                            f"CASE WHEN \"draw_arrow\"=1 THEN {float(arrow_size_mm)} ELSE 0 END"
-                        ),
-                    )
-                elif sl is not None:
-                    sl.setDataDefinedProperty(QgsSymbolLayer.PropertySize, QgsProperty.fromExpression("0"))
-            except Exception:
-                pass
-
-            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-
-            if draw_slope_labels:
-                settings = QgsPalLayerSettings()
-                settings.fieldName = "slope_deg"
-                settings.placement = QgsPalLayerSettings.OverPoint
-
-                fmt = QgsTextFormat()
-                fmt.setSize(float(label_size_pt))
-                fmt.setColor(QColor(0, 0, 0))
-
-                buf = QgsTextBufferSettings()
-                buf.setEnabled(True)
-                buf.setColor(QColor(255, 255, 255))
-                buf.setSize(0.8)
-                fmt.setBuffer(buf)
-
-                settings.setFormat(fmt)
-
-                layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
-                layer.setLabelsEnabled(True)
-            else:
-                layer.setLabelsEnabled(False)
-
-            layer.triggerRepaint()
-
-            # Add on top for visibility
-            QgsProject.instance().addMapLayer(layer, False)
-            try:
-                QgsProject.instance().layerTreeRoot().insertLayer(0, layer)
-            except Exception:
-                QgsProject.instance().addMapLayer(layer)
-
-            return True
-
-        except Exception as e:
-            push_message(self.iface, "오류", f"도면화 생성 실패: {str(e)}", level=2, duration=8)
-            return False
     
     def run_tpi_analysis(self, dem_layer, dem_source, radius, threshold, results, run_id):
         """Run TPI analysis with user-specified radius and classification threshold

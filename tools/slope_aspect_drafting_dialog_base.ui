@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SlopeAspectDraftingDialog</class>
+ <widget class="QDialog" name="SlopeAspectDraftingDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>560</width>
+    <height>520</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>경사도/사면방향 도면화 (Slope &amp; Aspect Drafting) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupInfo">
+     <property name="title">
+      <string>설명</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Info">
+      <item>
+       <widget class="QLabel" name="lblDescription">
+         <property name="text">
+           <string>&lt;html&gt;&lt;b&gt;도면화(경사도/사면방향)&lt;/b&gt;는 입력 DEM을 경사도/사면방향으로 변환한 뒤, 선택한 폴리곤 작업영역(AOI)만 도면화 레이어로 생성합니다.&lt;br/&gt;- 경사도: 단계(예: 0~5°, 5~10°…)로 구간화 → 같은 구간 병합 + 라벨&lt;br/&gt;- 사면방향: 8방향(45°) 화살표 + 색상 구분&lt;br/&gt;&lt;br/&gt;※ “표시 간격(셀)”을 크게 잡으면 성능이 좋아집니다.&lt;/html&gt;</string>
+         </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #f0f0f0; padding: 6px; border-radius: 3px;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupDem">
+     <property name="title">
+      <string>1. 입력 DEM</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Dem">
+      <item>
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupMask">
+     <property name="title">
+      <string>2. 작업영역(폴리곤)</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Mask">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_Mask">
+        <item>
+         <widget class="QgsMapLayerComboBox" name="cmbMaskLayer"/>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnCreateMask">
+          <property name="text">
+           <string>새 폴리곤</string>
+          </property>
+          <property name="toolTip">
+           <string>메모리 폴리곤 레이어를 생성해 작업영역(AOI)을 그릴 수 있게 합니다.</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="chkMaskSelectedOnly">
+        <property name="text">
+         <string>선택된 피처만 사용</string>
+        </property>
+        <property name="toolTip">
+         <string>폴리곤 레이어에서 선택된 피처(들)만 작업영역으로 사용합니다.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupOutputs">
+     <property name="title">
+      <string>3. 결과</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Outputs">
+      <item>
+       <widget class="QCheckBox" name="chkSlopeRaster">
+        <property name="text">
+         <string>경사도 벡터(1° 병합) + 숫자 라벨</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+        <widget class="QCheckBox" name="chkAspectArrows">
+         <property name="text">
+          <string>사면방향 화살표(8방향/색상)</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupParams">
+     <property name="title">
+      <string>4. 옵션</string>
+     </property>
+      <layout class="QGridLayout" name="gridLayout_Params">
+       <item row="0" column="0">
+        <widget class="QLabel" name="label_Step">
+         <property name="text">
+          <string>표시 간격:</string>
+         </property>
+        </widget>
+       </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="spinStepCells">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>2000</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+        <property name="suffix">
+         <string> 셀</string>
+        </property>
+        <property name="toolTip">
+          <string>&lt;html&gt;&lt;b&gt;표시 간격(셀)&lt;/b&gt;&lt;hr/&gt;경사도 격자/사면방향 화살표의 밀도를 함께 조절합니다.&lt;br/&gt;1 = 매우 촘촘(작은 AOI 권장)&lt;br/&gt;5 = 5셀마다 1개(권장)&lt;br/&gt;10 = 더 성긴 표기(큰 AOI 권장)&lt;/html&gt;</string>
+        </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="label_SlopeClassStep">
+         <property name="text">
+          <string>경사도 단계:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QSpinBox" name="spinSlopeClassStep">
+         <property name="minimum">
+          <number>1</number>
+         </property>
+         <property name="maximum">
+          <number>90</number>
+         </property>
+         <property name="value">
+          <number>5</number>
+         </property>
+         <property name="suffix">
+          <string>°</string>
+         </property>
+         <property name="toolTip">
+          <string>&lt;html&gt;&lt;b&gt;경사도 단계(°)&lt;/b&gt;&lt;hr/&gt;같은 구간(예: 0~5°, 5~10°…)끼리 병합해 ‘구역’으로 만듭니다.&lt;br/&gt;값이 클수록 구역 수/라벨이 줄어들어 더 깔끔해집니다.&lt;/html&gt;</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="label_Flat">
+         <property name="text">
+          <string>평지 임계:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="spinFlatSlopeDeg">
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.0</double>
+        </property>
+        <property name="maximum">
+         <double>20.0</double>
+        </property>
+        <property name="singleStep">
+         <double>0.5</double>
+        </property>
+        <property name="value">
+         <double>0.5</double>
+        </property>
+        <property name="suffix">
+         <string>°</string>
+        </property>
+        <property name="toolTip">
+         <string>&lt;html&gt;&lt;b&gt;평지 임계(경사도 °)&lt;/b&gt;&lt;hr/&gt;이 값 이하에서는 사면방향 화살표를 숨깁니다(평지는 방향 의미가 약함).&lt;/html&gt;</string>
+        </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="label_ArrowSize">
+         <property name="text">
+          <string>화살표 크기:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QDoubleSpinBox" name="spinArrowSizeMm">
+        <property name="decimals">
+         <number>2</number>
+        </property>
+        <property name="minimum">
+         <double>0.1</double>
+        </property>
+        <property name="maximum">
+         <double>10.0</double>
+        </property>
+        <property name="singleStep">
+         <double>0.1</double>
+        </property>
+        <property name="value">
+         <double>1.2</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="label_LabelSize">
+         <property name="text">
+          <string>라벨 크기:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QSpinBox" name="spinLabelSizePt">
+         <property name="minimum">
+          <number>4</number>
+         </property>
+         <property name="maximum">
+          <number>24</number>
+         </property>
+         <property name="value">
+          <number>8</number>
+         </property>
+         <property name="suffix">
+          <string> pt</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>도면화 실행</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QgsMapLayerComboBox</class>
+   <extends>QComboBox</extends>
+   <header>qgis.gui</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

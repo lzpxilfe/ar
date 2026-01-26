@@ -30,5 +30,6 @@ ENV/
 !viewshed_icon.png
 !network_icon.png
 !network_icon.jpg
+!slope_aspect.png
 temp_*/
 C:\Users\nuri9\.gemini\antigravity\scratch\fix_viewshed.py
