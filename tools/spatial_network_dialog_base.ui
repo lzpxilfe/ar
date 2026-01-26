@@ -1,0 +1,329 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SpatialNetworkDialog</class>
+ <widget class="QDialog" name="SpatialNetworkDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>600</width>
+    <height>640</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>공간/가시성 네트워크 (PPA / Visibility) - ArchToolkit</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QGroupBox" name="groupInfo">
+     <property name="title">
+      <string>설명</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_Info">
+      <item>
+       <widget class="QLabel" name="lblDescription">
+        <property name="text">
+         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;
+&lt;p&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;공간/가시성 네트워크&lt;/span&gt;는 유적(노드) 사이의 관계를 선(간선)으로 생성합니다.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;b&gt;PPA(Proximal Point Analysis)&lt;/b&gt;: 지형 비용이 아니라 단순 거리(공간적 인접성) 기반으로 각 유적의 최근접 N개를 연결합니다.&lt;/li&gt;
+&lt;li&gt;&lt;b&gt;Visibility Network&lt;/b&gt;: DEM 기반 Line of Sight(가시선)으로 유적 A에서 B가 보이는 경우에만 연결합니다.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;span style=&quot;font-style:italic;&quot;&gt;Tip: 노드가 많을수록 계산량이 커지므로, 선택 피처만 사용/후보 k 제한을 권장합니다.&lt;/span&gt;&lt;/p&gt;
+&lt;/body&gt;&lt;/html&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #f0f0f0; padding: 4px; border-radius: 3px;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupMode">
+     <property name="title">
+      <string>1. 네트워크 방식</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Mode">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblNetworkType">
+        <property name="text">
+         <string>방식</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="cmbNetworkType"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupInput">
+     <property name="title">
+      <string>2. 입력 유적 레이어</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Input">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblSiteLayer">
+        <property name="text">
+         <string>레이어</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1" colspan="2">
+       <widget class="QgsMapLayerComboBox" name="cmbSiteLayer"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblNameField">
+        <property name="text">
+         <string>이름 필드(선택)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbNameField"/>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lblPolyMode">
+        <property name="text">
+         <string>폴리곤 대표점</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="2">
+       <widget class="QComboBox" name="cmbPolyPointMode"/>
+      </item>
+      <item row="3" column="0" colspan="3">
+       <widget class="QCheckBox" name="chkSelectedOnly">
+        <property name="text">
+         <string>선택된 피처만 사용(Use selected features only)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupPpa">
+     <property name="title">
+      <string>3-A. PPA 설정</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Ppa">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblPpaK">
+        <property name="text">
+         <string>최근접 N</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="spinPpaK">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>2000</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkPpaMutualOnly">
+        <property name="text">
+         <string>상호 최근접만 연결(Mutual only)</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupVisibility">
+     <property name="title">
+      <string>3-B. 가시성 네트워크 설정</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Vis">
+      <item row="0" column="0">
+       <widget class="QLabel" name="lblDemLayer">
+        <property name="text">
+         <string>DEM</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1" colspan="2">
+       <widget class="QgsMapLayerComboBox" name="cmbDemLayer"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblObsHeight">
+        <property name="text">
+         <string>관측자 높이(m)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="spinObsHeight">
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.6</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="2">
+       <widget class="QLabel" name="lblTgtHeight">
+        <property name="text">
+         <string>대상 높이(m)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="3">
+       <widget class="QDoubleSpinBox" name="spinTgtHeight">
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.0</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="lblCandidateK">
+        <property name="text">
+         <string>후보 k(최근접)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="spinCandidateK">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>2000</number>
+        </property>
+        <property name="value">
+         <number>10</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="2">
+       <widget class="QLabel" name="lblMaxDist">
+        <property name="text">
+         <string>최대 거리(m)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="3">
+       <widget class="QDoubleSpinBox" name="spinMaxDist">
+        <property name="decimals">
+         <number>0</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>100000000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>2500.000000000000000</double>
+        </property>
+        <property name="suffix">
+         <string> m</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="lblStepM">
+        <property name="text">
+         <string>샘플 간격(m)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QDoubleSpinBox" name="spinSampleStep">
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.0</double>
+        </property>
+        <property name="suffix">
+         <string> m</string>
+        </property>
+        <property name="toolTip">
+         <string>0이면 DEM 해상도 기반 자동(최소 5m). 값이 작을수록 정확하지만 느립니다.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_Buttons">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnRun">
+       <property name="text">
+        <string>실행</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnClose">
+       <property name="text">
+        <string>닫기</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
+

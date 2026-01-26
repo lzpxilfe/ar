@@ -27,6 +27,7 @@ from .tools.slope_aspect_drafting_dialog import SlopeAspectDraftingDialog
 from .tools.viewshed_dialog import ViewshedDialog
 from .tools.cost_surface_dialog import CostSurfaceDialog
 from .tools.cost_network_dialog import CostNetworkDialog
+from .tools.spatial_network_dialog import SpatialNetworkDialog
 from .tools.utils import log_exception, start_ui_log_pump, stop_ui_log_pump
 import os.path
 
@@ -92,6 +93,14 @@ class ArchToolkit:
             )
             self.network_action.triggered.connect(self.run_network_tool)
 
+            # Spatial / Visibility Network (PPA / LOS)
+            self.spatial_network_action = QAction(
+                QIcon(network_icon or cost_icon),
+                u"근접/가시성 네트워크 (PPA / Visibility)",
+                self.iface.mainWindow(),
+            )
+            self.spatial_network_action.triggered.connect(self.run_spatial_network_tool)
+
             # Map Styling
             style_icon = os.path.join(plugin_dir, 'style_icon.png')
             self.style_action = QAction(QIcon(style_icon), u"도면 시각화 (Map Styling)", self.iface.mainWindow())
@@ -123,6 +132,7 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.profile_action)
             self.iface.addPluginToMenu(self.menu_name, self.cost_action)
             self.iface.addPluginToMenu(self.menu_name, self.network_action)
+            self.iface.addPluginToMenu(self.menu_name, self.spatial_network_action)
             self.iface.addPluginToMenu(self.menu_name, self.style_action)
             self.iface.addPluginToMenu(self.menu_name, self.drafting_action)
             self.iface.addPluginToMenu(self.menu_name, self.viewshed_action)
@@ -145,6 +155,7 @@ class ArchToolkit:
             self.tool_menu.addAction(self.viewshed_action)
             self.tool_menu.addAction(self.cost_action)
             self.tool_menu.addAction(self.network_action)
+            self.tool_menu.addAction(self.spatial_network_action)
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.style_action)
             self.tool_menu.addAction(self.drafting_action)
@@ -162,7 +173,7 @@ class ArchToolkit:
             # Keep references for cleanup
             self.actions = [
                 self.dem_action, self.contour_action, self.terrain_action,
-                self.profile_action, self.cost_action, self.network_action, self.style_action, self.drafting_action, self.viewshed_action,
+                self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.viewshed_action,
                 self.main_action
             ]
         except Exception as e:
@@ -282,6 +293,18 @@ class ArchToolkit:
         except Exception as e:
             log_exception("Least-cost network tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구 실행 중 오류가 발생했습니다: {str(e)}")
+
+    def run_spatial_network_tool(self):
+        try:
+            dlg = SpatialNetworkDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            log_exception("Spatial network tool error", e)
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "오류",
+                f"도구 실행 중 오류가 발생했습니다: {str(e)}",
+            )
 
     def run_viewshed_tool(self):
         try:
