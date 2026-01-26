@@ -33,7 +33,7 @@ from qgis.core import (
     QgsLineSymbol, QgsSingleSymbolRenderer, Qgis, QgsDistanceArea
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
-from .utils import log_message, restore_ui_focus, push_message, transform_point
+from .utils import ensure_log_panel_visible, log_message, push_message, restore_ui_focus, transform_point
 
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -456,6 +456,9 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "DEM 레이어가 선택되지 않았거나 점이 부족합니다.", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
         try:
             start_canvas = self.points[0]
             end_canvas = self.points[1]

@@ -31,7 +31,7 @@ from qgis.core import (
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
 import processing
-from .utils import restore_ui_focus, push_message, cleanup_files
+from .utils import cleanup_files, ensure_log_panel_visible, push_message, restore_ui_focus
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
 # No external plugins or libraries (like numpy, matplotlib) are required.
@@ -245,6 +245,9 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "분석 유형을 선택해주세요", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
         
         push_message(self.iface, "처리 중", "지형 분석 실행 중...", level=0)
         self.hide()

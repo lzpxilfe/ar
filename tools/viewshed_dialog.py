@@ -36,7 +36,15 @@ from qgis.core import (
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator, QgsMapCanvasAnnotationItem
 from qgis.PyQt.QtGui import QTextDocument
 
-from .utils import cleanup_files, is_metric_crs, log_message, restore_ui_focus, push_message, transform_point
+from .utils import (
+    cleanup_files,
+    ensure_log_panel_visible,
+    is_metric_crs,
+    log_message,
+    restore_ui_focus,
+    push_message,
+    transform_point,
+)
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -1131,6 +1139,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if not has_manual and not has_layer:
             self.iface.messageBar().pushMessage("오류", "관측점을 선택하거나 레이어를 지정해주세요", level=2)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
         
         # Get parameters
         observer_height = self.spinObserverHeight.value()

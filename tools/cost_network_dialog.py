@@ -62,7 +62,14 @@ from .cost_surface_dialog import (
     _safe_layer_name_fragment,
     _window_geotransform,
 )
-from .utils import is_metric_crs, log_message, push_message, restore_ui_focus, transform_point
+from .utils import (
+    ensure_log_panel_visible,
+    is_metric_crs,
+    log_message,
+    push_message,
+    restore_ui_focus,
+    transform_point,
+)
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -234,6 +241,14 @@ class CostNetworkWorker(QgsTask):
             log_message(f"Network task finished callback error: {e}", level=Qgis.Warning)
 
     def _run_impl(self) -> NetworkTaskResult:
+        log_message(
+            (
+                "CostNetwork: start "
+                f"(mode={self.network_mode}, cost={self.cost_mode}, model={self.model_label or self.model_key}, "
+                f"candidate_k={self.candidate_k}, pair_buffer_m={self.pair_buffer_m}, diagonal={self.allow_diagonal})"
+            ),
+            level=Qgis.Info,
+        )
         ds = gdal.Open(self.dem_source, gdal.GA_ReadOnly)
         if ds is None:
             return NetworkTaskResult(ok=False, message="DEM을 GDAL로 열 수 없습니다.")
@@ -281,6 +296,9 @@ class CostNetworkWorker(QgsTask):
             return NetworkTaskResult(ok=False, message="유효한 유적 포인트가 2개 이상 필요합니다.")
 
         nodes = valid_nodes
+        if removed:
+            log_message(f"CostNetwork: filtered out {removed} node(s) outside DEM/NoData", level=Qgis.Info)
+        log_message(f"CostNetwork: using {len(nodes)} node(s)", level=Qgis.Info)
         coords = np.array([(float(n.x), float(n.y)) for n in nodes], dtype=np.float64)
         n_nodes = int(coords.shape[0])
 
@@ -352,6 +370,11 @@ class CostNetworkWorker(QgsTask):
         if not candidate_pairs:
             return NetworkTaskResult(ok=False, message="후보 간선이 없습니다. 후보 간선(k)을 늘려주세요.")
 
+        log_message(
+            f"CostNetwork: candidate pairs={len(candidate_pairs)} (directed paths={len(candidate_pairs) * 2})",
+            level=Qgis.Info,
+        )
+
         # Internal solver cost mode
         solver_cost_mode = "energy_j" if self.cost_mode == COST_ENERGY else "time_s"
         want_paths_for_pairs = self.network_mode in (NETWORK_KNN, NETWORK_HUB, NETWORK_ALL)
@@ -363,10 +386,20 @@ class CostNetworkWorker(QgsTask):
         max_cells = 4_000_000
         total_dir = len(candidate_pairs) * 2
         done_dir = 0
+        last_bucket = -1
 
         def update_progress():
+            nonlocal last_bucket
             try:
-                self.setProgress(100.0 * done_dir / max(1, total_dir))
+                pct = 90.0 * done_dir / max(1, total_dir)
+                self.setProgress(pct)
+                bucket = int(pct // 10.0)
+                if bucket != last_bucket:
+                    last_bucket = bucket
+                    log_message(
+                        f"CostNetwork: computing pair costs… {bucket * 10}% ({done_dir}/{total_dir})",
+                        level=Qgis.Info,
+                    )
             except Exception:
                 pass
 
@@ -553,10 +586,32 @@ class CostNetworkWorker(QgsTask):
                     ),
                 )
 
+            log_message(
+                f"CostNetwork: MST selected {len(chosen)} edge(s); computing detailed paths…",
+                level=Qgis.Info,
+            )
+            mst_done = 0
+            mst_total = max(1, len(chosen))
+            mst_last_bucket = -1
+
             # MST는 선택된 간선만 경로를 다시 계산(메모리 절약)
             for a, b in chosen:
                 if self.isCanceled():
                     return NetworkTaskResult(ok=False, message="취소됨")
+
+                mst_done += 1
+                try:
+                    pct = 90.0 + 10.0 * (mst_done / mst_total)
+                    self.setProgress(pct)
+                    bucket = int((100.0 * mst_done / mst_total) // 25.0)
+                    if bucket != mst_last_bucket:
+                        mst_last_bucket = bucket
+                        log_message(
+                            f"CostNetwork: MST paths… {int(100.0 * mst_done / mst_total)}% ({mst_done}/{mst_total})",
+                            level=Qgis.Info,
+                        )
+                except Exception:
+                    pass
 
                 ax, ay = coords[a, 0], coords[a, 1]
                 bx, by = coords[b, 0], coords[b, 1]
@@ -921,6 +976,12 @@ class CostNetworkWorker(QgsTask):
         msg = f"노드 {len(nodes)}개 / 간선 {len(edges_out)}개 생성"
         if removed:
             msg = f"{msg} (DEM 범위/NoData로 {removed}개 제외)"
+
+        try:
+            self.setProgress(100.0)
+        except Exception:
+            pass
+        log_message(f"CostNetwork: done ({msg})", level=Qgis.Info)
 
         return NetworkTaskResult(
             ok=True,
@@ -1588,6 +1649,9 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "유적 레이어를 선택하세요.", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
 
         mode = self.cmbNetworkMode.currentData()
         cost_mode = self.cmbCostMode.currentData()

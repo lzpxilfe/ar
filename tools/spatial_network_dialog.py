@@ -44,7 +44,14 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
-from .utils import is_metric_crs, log_message, push_message, restore_ui_focus, transform_point
+from .utils import (
+    ensure_log_panel_visible,
+    is_metric_crs,
+    log_message,
+    push_message,
+    restore_ui_focus,
+    transform_point,
+)
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -522,6 +529,9 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "네트워크", "선택 피처가 2개 이상 필요합니다.", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can actually *see* progress logs during the run.
+        ensure_log_panel_visible(self.iface, show_hint=True)
 
         name_field = str(self.cmbNameField.currentData() or "")
         poly_mode = str(self.cmbPolyPointMode.currentData() or "surface")

@@ -23,7 +23,7 @@ from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsProject, QgsVectorLayer, QgsMapLayerProxyModel
 import processing
-from .utils import push_message
+from .utils import ensure_log_panel_visible, push_message
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -102,6 +102,8 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
     
     def run_process(self):
         """Run the contour extraction process"""
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
         if self.radioDxf.isChecked():
             self.extract_from_dxf()
         else:

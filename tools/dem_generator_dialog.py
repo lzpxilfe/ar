@@ -25,7 +25,7 @@ from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
 import processing
 import tempfile
-from .utils import restore_ui_focus, push_message
+from .utils import ensure_log_panel_visible, push_message, restore_ui_focus
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -302,6 +302,9 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "출력 파일 경로를 지정해주세요", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
 
         method_name = self.cmbInterpolation.currentText()
         method_info = self.INTERPOLATION_METHODS.get(method_name, {})

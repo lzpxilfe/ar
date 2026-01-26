@@ -66,7 +66,7 @@ from qgis.core import (
 
 import processing
 
-from .utils import cleanup_files, push_message, restore_ui_focus
+from .utils import cleanup_files, ensure_log_panel_visible, push_message, restore_ui_focus
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -175,6 +175,9 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "생성할 결과(경사도/사면방향)를 선택해주세요.", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
 
         step_cells = max(1, int(self.spinStepCells.value()))
         flat_thresh = max(0.0, float(self.spinFlatSlopeDeg.value()))

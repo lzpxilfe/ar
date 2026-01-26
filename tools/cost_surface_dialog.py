@@ -54,7 +54,15 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator
 
-from .utils import cleanup_files, is_metric_crs, log_message, push_message, restore_ui_focus, transform_point
+from .utils import (
+    cleanup_files,
+    ensure_log_panel_visible,
+    is_metric_crs,
+    log_message,
+    push_message,
+    restore_ui_focus,
+    transform_point,
+)
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -821,6 +829,10 @@ class CostSurfaceWorker(QgsTask):
             log_message(f"Cost task finished callback error: {e}", level=Qgis.Warning)
 
     def _run_impl(self):
+        log_message(
+            f"CostSurface: start (model={self.model_label or self.model_key}, diagonal={self.allow_diagonal}, buffer_m={self.buffer_m})",
+            level=Qgis.Info,
+        )
         ds = gdal.Open(self.dem_source, gdal.GA_ReadOnly)
         if ds is None:
             return CostTaskResult(ok=False, message="DEM을 GDAL로 열 수 없습니다.")
@@ -874,6 +886,10 @@ class CostSurfaceWorker(QgsTask):
                 ),
             )
 
+        log_message(
+            f"CostSurface: DEM window {win_xsize}x{win_ysize} ({cell_count:,} cells)",
+            level=Qgis.Info,
+        )
         dem = band.ReadAsArray(xoff, yoff, win_xsize, win_ysize)
         if dem is None:
             return CostTaskResult(ok=False, message="DEM 값을 읽을 수 없습니다.")
@@ -913,6 +929,20 @@ class CostSurfaceWorker(QgsTask):
             except Exception:
                 pass
 
+        def make_progress_cb(stage: str, *, offset: float, scale: float):
+            last_bucket = -1
+
+            def _cb(p):
+                nonlocal last_bucket
+                overall = float(offset) + float(p) * float(scale)
+                progress_cb(overall)
+                bucket = int(overall // 10.0)
+                if bucket != last_bucket:
+                    last_bucket = bucket
+                    log_message(f"CostSurface: {stage}… {bucket * 10}%", level=Qgis.Info)
+
+            return _cb
+
         is_energy_model = self.model_key == MODEL_PANDOLF
         create_time_raster = bool(self.create_cost_raster)
         create_energy_raster = bool(self.create_energy_raster and is_energy_model)
@@ -931,9 +961,11 @@ class CostSurfaceWorker(QgsTask):
 
         # Time raster (seconds)
         if create_time_raster:
-            cb = progress_cb
+            log_message("CostSurface: computing time surface (seconds)…", level=Qgis.Info)
             if create_energy_raster:
-                cb = lambda p: progress_part(p, 0.0, 0.5)
+                cb = make_progress_cb("time surface", offset=0.0, scale=0.5)
+            else:
+                cb = make_progress_cb("time surface", offset=0.0, scale=1.0)
             dist_time, prev_time = _dijkstra_full(
                 dem,
                 nodata_mask,
@@ -954,9 +986,11 @@ class CostSurfaceWorker(QgsTask):
 
         # Energy raster (J)
         if create_energy_raster:
-            cb = progress_cb
+            log_message("CostSurface: computing energy surface (J)…", level=Qgis.Info)
             if create_time_raster:
-                cb = lambda p: progress_part(p, 50.0, 0.5)
+                cb = make_progress_cb("energy surface", offset=50.0, scale=0.5)
+            else:
+                cb = make_progress_cb("energy surface", offset=0.0, scale=1.0)
             dist_energy, prev_energy = _dijkstra_full(
                 dem,
                 nodata_mask,
@@ -980,6 +1014,7 @@ class CostSurfaceWorker(QgsTask):
         prev_for_path = None
         end_cost_for_path = None
         if create_path:
+            log_message("CostSurface: computing least-cost path (A*)…", level=Qgis.Info)
             if path_cost_mode == "energy_j":
                 if prev_energy is None:
                     prev_energy, end_energy_j = _astar_path(
@@ -1026,6 +1061,7 @@ class CostSurfaceWorker(QgsTask):
         cost_max = None
         isochrones_vector_path = None
         isoenergy_vector_path = None
+        log_message("CostSurface: writing outputs…", level=Qgis.Info)
         if create_time_raster and dist_time is not None:
             dist2d_s = dist_time.reshape((rows, cols))
             valid = np.isfinite(dist2d_s) & (~nodata_mask)
@@ -1802,6 +1838,9 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "오류", "최소비용경로를 생성하려면 도착점이 필요합니다.", level=2)
             restore_ui_focus(self)
             return
+
+        # Make sure users can see progress logs during long computations.
+        ensure_log_panel_visible(self.iface, show_hint=True)
 
         buffer_m = float(self.spinBuffer.value())
         allow_diagonal = bool(self.chkDiagonal.isChecked())
