@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 
-import math
+import os
 
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtCore import QDateTime, QPoint, Qt
+from qgis.PyQt.QtCore import QDateTime, QPoint, Qt, QEvent
 from qgis.PyQt.QtGui import QFontDatabase
 from qgis.core import Qgis
 
-from .utils import add_ui_log_listener, remove_ui_log_listener, start_ui_log_pump
+from .utils import add_ui_log_listener, get_log_path, remove_ui_log_listener, start_ui_log_pump
 
 _live_log_dialog = None
 
@@ -25,6 +25,32 @@ def _level_name(level) -> str:
     return "INFO"
 
 
+def _read_metadata() -> dict:
+    """Read metadata.txt (best-effort) to populate header links/version."""
+    try:
+        plugin_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        path = os.path.join(plugin_root, "metadata.txt")
+        if not os.path.exists(path):
+            return {}
+
+        out = {}
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith("["):
+                    continue
+                if "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k and v and k not in out:
+                    out[k] = v
+        return out
+    except Exception:
+        return {}
+
+
 class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
     """Lightweight, non-modal live log window for long-running tools."""
 
@@ -39,6 +65,8 @@ class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
             self.setModal(False)
         except Exception:
             pass
+
+        self._owner = None
 
         self._txt = QtWidgets.QPlainTextEdit(self)
         self._txt.setReadOnly(True)
@@ -56,7 +84,7 @@ class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
 
         btn_clear = QtWidgets.QPushButton("비우기", self)
         btn_close = QtWidgets.QPushButton("닫기", self)
-        btn_clear.clicked.connect(self._txt.clear)
+        btn_clear.clicked.connect(self.clear)
         btn_close.clicked.connect(self.close)
 
         btn_row = QtWidgets.QHBoxLayout()
@@ -81,11 +109,51 @@ class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
+        # Initial header (helps users know where to report errors / license).
+        try:
+            self.write_header()
+        except Exception:
+            pass
+
     def clear(self):
         try:
             self._txt.clear()
         except Exception:
             pass
+        try:
+            self.write_header()
+        except Exception:
+            pass
+
+    def write_header(self):
+        meta = _read_metadata()
+        version = meta.get("version", "")
+        tracker = meta.get("tracker", "")
+        author = meta.get("author", "balguljang2")
+        license_name = meta.get("license", "GPL v3")
+
+        lines = []
+        title = "ArchToolkit 작업 로그"
+        if version:
+            title = f"{title} (v{version})"
+        lines.append(title)
+        lines.append("- 진행상황/오류가 여기에 실시간으로 기록됩니다.")
+        if tracker:
+            lines.append(f"- 오류/제안 제보: {tracker}")
+        else:
+            lines.append("- 오류/제안 제보: GitHub Issues (repo tracker)")
+        try:
+            lines.append(f"- 로그 파일: {get_log_path()}")
+        except Exception:
+            pass
+        lines.append(f"- Copyright (C) 2026 {author}  ·  License: {license_name}")
+        lines.append("- 참고문헌/모델 출처: REFERENCES.md")
+        lines.append("-" * 60)
+        for ln in lines:
+            try:
+                self._txt.appendPlainText(str(ln))
+            except Exception:
+                pass
 
     def _on_log(self, message: str, level):
         try:
@@ -95,26 +163,84 @@ class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-    def show_near(self, owner=None):
-        """Show window near the owner dialog (to the right), best-effort."""
+    def _reposition_near_owner(self):
         try:
+            owner = self._owner
             if owner is not None:
                 g = owner.frameGeometry()
-                x = int(g.right() + 12)
-                y = int(g.top())
+                w = int(self.width() or 520)
+                h = int(self.height() or 360)
 
                 # Avoid positioning far off-screen (best-effort).
                 screen = QtWidgets.QApplication.primaryScreen()
                 if screen is not None:
                     avail = screen.availableGeometry()
-                    w = int(self.width() or 520)
-                    h = int(self.height() or 360)
+                    x_right = int(g.right() + 12)
+                    x_left = int(g.left() - 12 - w)
+
+                    # Prefer right side; fallback to left side if it doesn't fit.
+                    if x_right + w <= avail.right():
+                        x = x_right
+                    else:
+                        x = x_left
+
+                    y = int(g.top())
                     x = max(avail.left(), min(avail.right() - w, x))
                     y = max(avail.top(), min(avail.bottom() - h, y))
+                else:
+                    x = int(g.right() + 12)
+                    y = int(g.top())
 
                 self.move(QPoint(x, y))
         except Exception:
             pass
+
+    def attach_owner(self, owner=None):
+        if owner is self._owner:
+            return
+
+        # Detach previous owner tracking.
+        try:
+            if self._owner is not None:
+                try:
+                    self._owner.removeEventFilter(self)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        self._owner = owner
+        if owner is None:
+            return
+
+        try:
+            owner.installEventFilter(self)
+        except Exception:
+            pass
+
+        # Position immediately if we're already visible.
+        if self.isVisible():
+            self._reposition_near_owner()
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
+        try:
+            if obj is self._owner and event is not None:
+                et = int(event.type())
+                if et in (QEvent.Move, QEvent.Resize, QEvent.Show, QEvent.WindowStateChange):
+                    if self.isVisible():
+                        self._reposition_near_owner()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def show_near(self, owner=None):
+        """Show window near the owner dialog (sticky), best-effort."""
+        try:
+            self.attach_owner(owner)
+        except Exception:
+            pass
+
+        self._reposition_near_owner()
 
         try:
             self.show()
@@ -165,4 +291,3 @@ def ensure_live_log_dialog(iface=None, *, owner=None, show: bool = True, clear: 
             pass
 
     return _live_log_dialog
-
