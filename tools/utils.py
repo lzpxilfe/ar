@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import queue
 import tempfile
 import traceback
 from datetime import datetime
@@ -11,6 +12,10 @@ from qgis.core import (
     QgsUnitTypes,
     Qgis,
 )
+
+_UI_LOG_QUEUE_MAX = 5000
+_ui_log_queue = queue.Queue(maxsize=_UI_LOG_QUEUE_MAX)
+_ui_log_timer = None
 
 def transform_point(point, src_crs, dest_crs):
     """Transform point from source CRS to destination CRS"""
@@ -78,6 +83,76 @@ def _is_main_thread():
         return True
 
 
+def _queue_ui_log(message: str, level=Qgis.Info):
+    """Queue a message to be flushed to QgsMessageLog on the main thread."""
+    try:
+        _ui_log_queue.put_nowait((str(message), level))
+    except Exception:
+        # full or unavailable -> drop
+        pass
+
+
+def _flush_ui_log_queue(max_items: int = 200):
+    """Flush queued log messages into the QGIS Log Messages panel (main thread only)."""
+    if not _is_main_thread():
+        return
+    try:
+        n = 0
+        while n < max_items:
+            try:
+                msg, level = _ui_log_queue.get_nowait()
+            except Exception:
+                break
+            try:
+                QgsMessageLog.logMessage(str(msg), "ArchToolkit", level)
+            except Exception:
+                pass
+            n += 1
+    except Exception:
+        pass
+
+
+def start_ui_log_pump(interval_ms: int = 200):
+    """Start a small timer to flush worker-thread log messages into QGIS' Log Messages panel."""
+    if not _is_main_thread():
+        return
+
+    global _ui_log_timer
+    try:
+        if _ui_log_timer is not None and _ui_log_timer.isActive():
+            return
+    except Exception:
+        _ui_log_timer = None
+
+    try:
+        from qgis.PyQt.QtCore import QCoreApplication, QTimer
+
+        app = QCoreApplication.instance()
+        _ui_log_timer = QTimer(app)
+        _ui_log_timer.setInterval(max(50, int(interval_ms)))
+        _ui_log_timer.timeout.connect(_flush_ui_log_queue)
+        _ui_log_timer.start()
+    except Exception:
+        _ui_log_timer = None
+
+
+def stop_ui_log_pump():
+    """Stop the UI log pump timer (called on plugin unload)."""
+    global _ui_log_timer
+    try:
+        if _ui_log_timer is not None:
+            try:
+                _ui_log_timer.stop()
+            except Exception:
+                pass
+            try:
+                _ui_log_timer.deleteLater()
+            except Exception:
+                pass
+    finally:
+        _ui_log_timer = None
+
+
 def log_message(message, level=Qgis.Info):
     """Log to file + QGIS Message Log (file is always attempted; QGIS log only on main thread)."""
     try:
@@ -92,9 +167,12 @@ def log_message(message, level=Qgis.Info):
 
     # QgsMessageLog may not be safe off the main thread on some setups.
     if not _is_main_thread():
+        _queue_ui_log(message, level=level)
         return
 
     try:
+        # Ensure the pump is running so worker-thread logs appear too.
+        start_ui_log_pump()
         QgsMessageLog.logMessage(str(message), "ArchToolkit", level)
     except Exception:
         # Never crash due to logging

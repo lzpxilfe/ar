@@ -27,7 +27,7 @@ from .tools.slope_aspect_drafting_dialog import SlopeAspectDraftingDialog
 from .tools.viewshed_dialog import ViewshedDialog
 from .tools.cost_surface_dialog import CostSurfaceDialog
 from .tools.cost_network_dialog import CostNetworkDialog
-from .tools.utils import log_exception
+from .tools.utils import log_exception, start_ui_log_pump, stop_ui_log_pump
 import os.path
 
 class ArchToolkit:
@@ -43,6 +43,12 @@ class ArchToolkit:
 
     def initGui(self):
         try:
+            # Enable real-time logs in the QGIS "Log Messages" panel.
+            try:
+                start_ui_log_pump()
+            except Exception:
+                pass
+
             plugin_dir = os.path.dirname(__file__)
             
             # 1. Create Actions for all tools
@@ -167,6 +173,11 @@ class ArchToolkit:
         # Remove from menu
         for action in self.actions:
             self.iface.removePluginMenu(self.menu_name, action)
+
+        try:
+            stop_ui_log_pump()
+        except Exception:
+            pass
 
         # Close persistent dialogs and disconnect long-lived signals (prevents stale callbacks after reload)
         if self.viewshed_dlg is not None:
