@@ -172,7 +172,26 @@ class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
                 h = int(self.height() or 360)
 
                 # Avoid positioning far off-screen (best-effort).
-                screen = QtWidgets.QApplication.primaryScreen()
+                screen = None
+                try:
+                    center = g.center()
+                    # Use the screen where the owner window is located (multi-monitor safe).
+                    for s in QtWidgets.QApplication.screens() or []:
+                        try:
+                            if s.availableGeometry().contains(center):
+                                screen = s
+                                break
+                        except Exception:
+                            continue
+                except Exception:
+                    screen = None
+
+                if screen is None:
+                    try:
+                        screen = QtWidgets.QApplication.primaryScreen()
+                    except Exception:
+                        screen = None
+
                 if screen is not None:
                     avail = screen.availableGeometry()
                     x_right = int(g.right() + 12)
