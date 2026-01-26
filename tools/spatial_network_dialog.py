@@ -138,11 +138,19 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
-        # General hint
+        # Show the currently selected item's tooltip even when the dropdown is closed.
+        def _sync_network_type_tooltip():
+            try:
+                tip = self.cmbNetworkType.itemData(self.cmbNetworkType.currentIndex(), Qt.ToolTipRole) or ""
+                self.cmbNetworkType.setToolTip(str(tip))
+            except Exception:
+                pass
+
         try:
-            self.cmbNetworkType.setToolTip("방식에 마우스를 올리면 설명/참고문헌이 표시됩니다.")
+            self.cmbNetworkType.currentIndexChanged.connect(_sync_network_type_tooltip)
         except Exception:
             pass
+        _sync_network_type_tooltip()
 
         try:
             self.spinPpaK.setToolTip("각 유적(노드)에서 연결할 최근접 이웃 수 k입니다. (권장 3~5)")
