@@ -25,6 +25,7 @@ from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.core import (
     Qgis,
+    QgsCategorizedSymbolRenderer,
     QgsFeature,
     QgsField,
     QgsGeometry,
@@ -33,6 +34,7 @@ from qgis.core import (
     QgsPalLayerSettings,
     QgsPointXY,
     QgsProject,
+    QgsRendererCategory,
     QgsSingleSymbolRenderer,
     QgsTextBufferSettings,
     QgsTextFormat,
@@ -132,6 +134,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         tooltip_vis = (
             "가시성 네트워크(Visibility / LOS)\n"
             "- DEM 기반 Line of Sight(가시선)으로 두 유적 사이에 지형이 시선을 가리는지 샘플링하여 판정합니다.\n"
+            "- 결과 레이어는 '보임/안보임'을 색상으로 구분하고, 거리(km)는 속성(dist_km)으로 저장됩니다.\n"
             "- 계산량이 커질 수 있으므로 '후보 k'와 '최대거리'로 후보 쌍을 줄이는 것을 권장합니다.\n"
             "- 관측/대상 높이는 지표면(DEM) 위 추가 높이(m)입니다.\n\n"
             "Ref:\n"
@@ -557,6 +560,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         QtWidgets.QApplication.processEvents()
 
         edges: Set[Tuple[int, int]] = set()
+        status_by_edge: Dict[Tuple[int, int], str] = {}
         tested_pairs = 0
         failed_pairs = 0
 
@@ -588,7 +592,13 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                     )
                     if vis is None:
                         failed_pairs += 1
+                        status_by_edge[(i, j)] = "샘플 실패"
+                        edges.add((i, j))
                     elif vis:
+                        status_by_edge[(i, j)] = "보임"
+                        edges.add((i, j))
+                    else:
+                        status_by_edge[(i, j)] = "안보임"
                         edges.add((i, j))
 
                     if tested_pairs % 20 == 0:
@@ -637,8 +647,14 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                     )
                     if vis is None:
                         failed_pairs += 1
+                        status_by_edge[(a, b)] = "샘플 실패"
+                        edges.add((a, b))
                         continue
                     if vis:
+                        status_by_edge[(a, b)] = "보임"
+                        edges.add((a, b))
+                    else:
+                        status_by_edge[(a, b)] = "안보임"
                         edges.add((a, b))
 
                 progress.setValue(i + 1)
@@ -651,6 +667,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             color=QColor(0, 160, 80, 220),
             add_dist=True,
             crs_authid=dem_layer.crs().authid(),
+            status_by_edge=status_by_edge,
+            label_distance=bool(tested_pairs <= 300),
         )
         msg = f"완료: 검사쌍 {tested_pairs}개, 보임 간선 {len(edges)}개"
         if failed_pairs:
@@ -668,6 +686,8 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         color: QColor,
         add_dist: bool,
         crs_authid: str,
+        status_by_edge: Optional[Dict[Tuple[int, int], str]] = None,
+        label_distance: bool = False,
     ):
         project = QgsProject.instance()
         root = project.layerTreeRoot()
@@ -692,8 +712,11 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             QgsField("from_nm", QVariant.String),
             QgsField("to_nm", QVariant.String),
         ]
+        if status_by_edge is not None:
+            fields.append(QgsField("status", QVariant.String))
         if add_dist:
             fields.append(QgsField("dist_m", QVariant.Double))
+            fields.append(QgsField("dist_km", QVariant.Double))
         pr.addAttributes(fields)
         layer.updateFields()
 
@@ -709,22 +732,69 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             f["from_nm"] = na.name
             f["to_nm"] = nb.name
             if add_dist:
-                f["dist_m"] = float(math.hypot(nb.x - na.x, nb.y - na.y))
+                dist_m = float(math.hypot(nb.x - na.x, nb.y - na.y))
+                f["dist_m"] = dist_m
+                f["dist_km"] = dist_m / 1000.0
+            if status_by_edge is not None:
+                f["status"] = str(status_by_edge.get((a, b), ""))
             feats.append(f)
         pr.addFeatures(feats)
         layer.updateExtents()
 
-        # Simple styling
-        sym = QgsLineSymbol.createSimple(
-            {"color": f"{color.red()},{color.green()},{color.blue()},{color.alpha()}", "width": "0.7"}
-        )
-        layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        # Styling
+        if status_by_edge is not None:
+            categories: List[QgsRendererCategory] = []
 
-        # Optional: label distances lightly (disabled by default)
+            def _mk_sym(col: QColor, *, dashed: bool = False, dotted: bool = False) -> QgsLineSymbol:
+                sym = QgsLineSymbol.createSimple(
+                    {
+                        "color": f"{col.red()},{col.green()},{col.blue()},{col.alpha()}",
+                        "width": "0.7",
+                    }
+                )
+                if dashed or dotted:
+                    try:
+                        ls = "dash" if dashed else "dot"
+                        sym.symbolLayer(0).setPenStyle(Qt.DashLine if ls == "dash" else Qt.DotLine)
+                    except Exception:
+                        pass
+                return sym
+
+            categories.append(QgsRendererCategory("보임", _mk_sym(QColor(0, 180, 0, 220)), "보임"))
+            categories.append(QgsRendererCategory("안보임", _mk_sym(QColor(220, 0, 0, 180), dashed=True), "안보임"))
+            categories.append(QgsRendererCategory("샘플 실패", _mk_sym(QColor(120, 120, 120, 180), dotted=True), "샘플 실패"))
+
+            renderer = QgsCategorizedSymbolRenderer("status", categories)
+            layer.setRenderer(renderer)
+        else:
+            sym = QgsLineSymbol.createSimple(
+                {"color": f"{color.red()},{color.green()},{color.blue()},{color.alpha()}", "width": "0.7"}
+            )
+            layer.setRenderer(QgsSingleSymbolRenderer(sym))
+
+        # Labels: enable only when requested (or small graphs)
         try:
             pal = QgsPalLayerSettings()
-            pal.enabled = False
-            layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+            if label_distance and add_dist:
+                pal.enabled = True
+                pal.isExpression = True
+                pal.fieldName = 'round("dist_km", 2) || \' km\''
+
+                fmt = QgsTextFormat()
+                fmt.setSize(8)
+                fmt.setColor(QColor(40, 40, 40))
+                buf = QgsTextBufferSettings()
+                buf.setEnabled(True)
+                buf.setSize(1.0)
+                buf.setColor(QColor(255, 255, 255))
+                fmt.setBuffer(buf)
+                pal.setFormat(fmt)
+
+                layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+                layer.setLabelsEnabled(True)
+            else:
+                pal.enabled = False
+                layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
         except Exception:
             pass
 
