@@ -416,10 +416,10 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
 
         out_layer = layer
         try:
-            # Merge adjacent cells with the same slope degree to reduce visual clutter.
+            # Merge adjacent cells with the same 1-degree value to reduce label clutter.
             dissolve_params = {
                 "INPUT": layer,
-                "FIELD": ["slope_class"],
+                "FIELD": ["slope_deg"],
                 "OUTPUT": "memory:",
             }
             try:
@@ -490,19 +490,15 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
     ):
         """Style slope grid polygons + labels (Reds, step classes)."""
         try:
-            idx = layer.fields().indexFromName("slope_class")
-            vals = []
-            if idx >= 0:
-                try:
-                    vals = sorted(
-                        int(v)
-                        for v in layer.uniqueValues(idx)
-                        if v is not None and str(v) != ""
-                    )
-                except Exception:
-                    vals = []
-            if not vals:
+            deg_idx = layer.fields().indexFromName("slope_deg")
+            if deg_idx < 0:
                 return
+
+            cls_idx = layer.fields().indexFromName("slope_class")
+            if cls_idx < 0:
+                layer.dataProvider().addAttributes([QgsField("slope_class", QVariant.Int)])
+                layer.updateFields()
+                cls_idx = layer.fields().indexFromName("slope_class")
 
             ramp = None
             try:
@@ -524,21 +520,37 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
             changes = {}
             for ft in layer.getFeatures():
                 try:
-                    v0 = int(ft["slope_class"])
+                    slope_deg = int(ft["slope_deg"])
                 except Exception:
                     continue
-                if v0 < 0:
-                    v0 = 0
-                if v0 > 90:
-                    v0 = 90
-                v1 = min(v0 + cls_step, 90)
-                text = "90°" if v0 >= 90 else f"{v0}~{v1}°"
-                changes[ft.id()] = {label_idx: text}
+                if slope_deg < 0:
+                    slope_deg = 0
+                if slope_deg > 90:
+                    slope_deg = 90
+                slope_class = int((slope_deg // cls_step) * cls_step)
+                if slope_class < 0:
+                    slope_class = 0
+                if slope_class > 90:
+                    slope_class = 90
+
+                changes[ft.id()] = {label_idx: f"{slope_deg}°", cls_idx: slope_class}
             if changes:
                 try:
                     layer.dataProvider().changeAttributeValues(changes)
                 except Exception:
                     pass
+
+            vals = []
+            try:
+                vals = sorted(
+                    int(v)
+                    for v in layer.uniqueValues(cls_idx)
+                    if v is not None and str(v) != ""
+                )
+            except Exception:
+                vals = []
+            if not vals:
+                return
 
             cats = []
             for v in vals:
