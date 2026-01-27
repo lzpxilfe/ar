@@ -247,6 +247,16 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("background:#f0f0f0; padding:6px; border-radius:4px;")
+        desc.setToolTip(
+            "워크플로우:\n"
+            "1) RGB 지구화학도(WMS/래스터)를 조사지역 경계(사각형)로 잘라 GeoTIFF로 저장\n"
+            "2) RGB → 값(%)으로 변환(범례 기반)\n"
+            "3) 값 → 구간(class)으로 분류\n"
+            "4) class 래스터를 폴리곤화하고(옵션) 구간별로 dissolve\n\n"
+            "팁:\n"
+            "- 검은 경계선/텍스트가 지저분하면 '검은 경계선 제거(보간)'을 켜보세요.\n"
+            "- 픽셀 크기를 작게 할수록 디테일은 좋아지지만 느려질 수 있습니다."
+        )
         layout.addWidget(desc)
 
         grp_in = QtWidgets.QGroupBox("1. 입력")
@@ -343,6 +353,65 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.btnClose.clicked.connect(self.reject)
         self.btnRun.clicked.connect(self.run)
         self.cmbPreset.currentIndexChanged.connect(self._on_preset_changed)
+
+        # Tooltips: keep the dialog short, show detailed guidance on hover.
+        try:
+            self.cmbRaster.setToolTip(
+                "RGB 지구화학도 래스터/WMS 레이어를 선택하세요.\n"
+                "- 보통 3밴드(R,G,B)입니다.\n"
+                "- DEM 같은 단일밴드 래스터는 대상이 아닙니다."
+            )
+            self.cmbAoi.setToolTip(
+                "조사지역(폴리곤) 레이어를 선택하세요.\n"
+                "- 선택 피처만 사용할 수도 있습니다.\n"
+                "- 실제로는 폴리곤 클립이 아니라 '경계 사각형(extent)'으로 잘라냅니다."
+            )
+            self.chkSelectedOnly.setToolTip(
+                "조사지역 레이어에서 '선택된 피처'만 사용해 경계(extent)를 계산합니다.\n"
+                "선택이 없으면 전체 피처를 사용합니다."
+            )
+            self.cmbPreset.setToolTip(
+                "원소/범례 프리셋을 선택합니다.\n"
+                "현재는 Fe2O3(산화철)만 제공됩니다.\n"
+                "다른 원소는 범례(이미지/값/색)를 받으면 추가할 수 있습니다."
+            )
+            self.txtUnit.setToolTip(
+                "표시용 단위입니다.\n"
+                "결과 폴리곤의 라벨(예: 3.1-3.5%)에 붙습니다."
+            )
+            self.spinPixelSize.setToolTip(
+                "내보낼 래스터의 픽셀 크기(지도 단위/px)입니다.\n"
+                "- 0이면 현재 지도 해상도(mapUnitsPerPixel)를 사용합니다.\n"
+                "- 값이 작을수록 디테일↑, 처리시간/파일크기↑\n"
+                "- WMS 색을 보존하려고 최근접(Nearest)으로 리샘플링합니다."
+            )
+            self.spinExtentBuffer.setToolTip(
+                "조사지역 폴리곤을 감싸는 '경계 사각형(extent)'에 버퍼(m)를 추가합니다.\n"
+                "0이면 버퍼 없음."
+            )
+            self.chkDissolve.setToolTip(
+                "같은 구간(class)끼리 하나의 폴리곤으로 합칩니다.\n"
+                "끄면 폴리곤 조각이 매우 많아질 수 있습니다."
+            )
+            self.chkFixMax.setToolTip(
+                "색상 매칭 결과의 최댓값이 범례 최댓값(예: 51%)보다 작게 나오면\n"
+                "전체를 비율로 스케일해서 0~최댓값 범위를 맞춥니다.\n"
+                "지도 일부만 잘랐을 때(고농도 구간이 포함되지 않을 때) 유용합니다."
+            )
+            self.chkInpaint.setToolTip(
+                "무채색(검정/짙은 회색) 경계선을 NoData로 만든 뒤 주변 값으로 메웁니다.\n"
+                "지괴 경계선/텍스트 등 '검은 선'이 결과를 깨뜨릴 때 켜세요.\n"
+                "너무 과하면 경계 부근이 부드러워질 수 있습니다."
+            )
+            self.spinFillDist.setToolTip(
+                "보간 최대 검색 거리(px)입니다.\n"
+                "- 경계선이 두껍거나 지저분할수록 값을 키워보세요.\n"
+                "- 값이 클수록 더 멀리까지 메우지만 느려질 수 있습니다."
+            )
+            self.btnRun.setToolTip("실행합니다. (중간 산출물은 창을 닫을 때 정리됩니다)")
+            self.btnClose.setToolTip("닫기")
+        except Exception:
+            pass
 
         self.resize(640, 540)
 
