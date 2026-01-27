@@ -22,6 +22,7 @@ Draw a line on DEM and display elevation profile with graphical chart
 import os
 import csv
 import datetime
+from typing import List, Optional
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt, QPointF, QRectF, QVariant
@@ -29,12 +30,31 @@ from qgis.PyQt.QtWidgets import QMessageBox, QFileDialog, QWidget
 from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPalette, QPainterPath, QImage
 from qgis.core import (
     QgsProject, QgsMapLayerProxyModel, QgsPointXY, QgsRaster,
-    QgsVectorLayer, QgsField, QgsFeature, QgsGeometry, QgsWkbTypes,
-    QgsLineSymbol, QgsSingleSymbolRenderer, Qgis, QgsDistanceArea
+    QgsVectorLayer, QgsField, QgsFeature, QgsFeatureRequest, QgsGeometry, QgsWkbTypes,
+    QgsLineSymbol, QgsSingleSymbolRenderer, QgsSymbolLayer, QgsProperty, Qgis, QgsDistanceArea
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
 from .utils import log_message, push_message, restore_ui_focus, transform_point
 from .live_log_dialog import ensure_live_log_dialog
+
+PROFILE_LAYER_NAME = "Terrain Profile Lines"
+PROFILE_GROUP_NAME = "ArchToolkit - Terrain Profile"
+
+
+def _profile_color_palette() -> List[QColor]:
+    # A small set of distinct, print-friendly colors (rotates when exceeded).
+    return [
+        QColor("#1f77b4"),  # blue
+        QColor("#ff7f0e"),  # orange
+        QColor("#2ca02c"),  # green
+        QColor("#d62728"),  # red
+        QColor("#9467bd"),  # purple
+        QColor("#8c564b"),  # brown
+        QColor("#e377c2"),  # pink
+        QColor("#7f7f7f"),  # gray
+        QColor("#bcbd22"),  # olive
+        QColor("#17becf"),  # cyan
+    ]
 
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -82,6 +102,9 @@ class ProfileChartWidget(QWidget):
         
         # Callback for map synchronization
         self.on_hover_callback = None  # Function(x, y) to show position on map
+
+        # Profile line color (can be varied per saved profile)
+        self.profile_color = QColor(0, 100, 255)
         
         # Margins
         self.margin_left = 60
@@ -240,6 +263,13 @@ class ProfileChartWidget(QWidget):
         painter = QPainter(self)
         self.draw_chart(painter, self.width(), self.height())
 
+    def set_profile_color(self, color: QColor):
+        try:
+            self.profile_color = QColor(color)
+        except Exception:
+            self.profile_color = QColor(0, 100, 255)
+        self.update()
+
     def draw_chart(self, painter, width, height):
         if not self.data:
             painter.drawText(QRectF(0, 0, width, height), Qt.AlignCenter, "데이터가 없습니다.")
@@ -300,12 +330,12 @@ class ProfileChartWidget(QWidget):
                 path.lineTo(px, py)
             
         # Draw the line
-        painter.setPen(QPen(QColor(0, 100, 255), 2))
+        painter.setPen(QPen(self.profile_color, 2))
         painter.drawPath(path)
-            
+             
         # Draw Fill (area below profile)
         painter.setOpacity(0.15)
-        painter.setBrush(QBrush(QColor(0, 100, 255)))
+        painter.setBrush(QBrush(self.profile_color))
         painter.setPen(Qt.NoPen)
         
         if not first_point:  # Only if we drew something
@@ -372,7 +402,7 @@ class ProfileChartWidget(QWidget):
 
 
 class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
-    
+     
     def __init__(self, iface, parent=None):
         super(TerrainProfileDialog, self).__init__(parent)
         self.setupUi(self)
@@ -388,6 +418,12 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         # Profile data
         self.points = []
         self.profile_data = []
+
+        # Persistent profile layer (multi-profile support)
+        self._profile_layer = None
+        self._profile_layer_id = None
+        self._ignore_selection_changed = False
+        self._last_selected_fid = None
         
         # Setup
         self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.RasterLayer)
@@ -398,6 +434,19 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btnExportCsv.clicked.connect(self.export_csv)
         self.btnExportImage.clicked.connect(self.export_image)
         self.btnClose.clicked.connect(self.cleanup_and_close)
+
+        try:
+            self.btnClear.setText("현재 초기화")
+            self.btnClear.setToolTip("현재 그래프/임시 표시만 초기화합니다. 저장된 단면선 레이어는 유지됩니다.")
+        except Exception:
+            pass
+        try:
+            self.label_Header.setToolTip(
+                "팁: 저장된 단면선 레이어에서 선을 '선택'하면 해당 단면이 자동으로 열립니다.\n"
+                f"- 레이어 이름: {PROFILE_LAYER_NAME}"
+            )
+        except Exception:
+            pass
         
         # Rubber band for drawing line
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
@@ -416,6 +465,15 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         # Map tool
         self.map_tool = None
         self.original_tool = None
+
+        # If the profile layer already exists in the project, hook selection to open profiles.
+        try:
+            layers = QgsProject.instance().mapLayersByName(PROFILE_LAYER_NAME)
+            if layers:
+                self._ensure_profile_layer_schema(layers[0])
+                self._connect_profile_layer(layers[0])
+        except Exception:
+            pass
     
     def show_position_on_map(self, x, y):
         """Show hover position on map"""
@@ -525,13 +583,23 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                         valid_samples += 1
             
             if self.profile_data:
+                # Save line to persistent layer first (assigns a per-profile color).
+                profile_color = None
+                try:
+                    profile_color = self.save_line_to_layer(total_distance_m, dem_layer=dem_layer, num_samples=num_samples)
+                except Exception:
+                    profile_color = None
+
+                if profile_color is not None:
+                    try:
+                        self.chart.set_profile_color(profile_color)
+                    except Exception:
+                        pass
+
                 self.chart.set_data(self.profile_data)
                 self.update_stats()
                 self.btnExportCsv.setEnabled(True)
                 self.btnExportImage.setEnabled(True)
-                
-                # Save line to persistent layer
-                self.save_line_to_layer(total_distance_m)
                 
                 # Clear rubber band completely - line is now in vector layer
                 self.rubber_band.reset(QgsWkbTypes.LineGeometry)
@@ -548,17 +616,306 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             if self.original_tool:
                 self.canvas.setMapTool(self.original_tool)
             restore_ui_focus(self)
+
+    def _connect_profile_layer(self, layer: QgsVectorLayer):
+        if layer is None or not isinstance(layer, QgsVectorLayer):
+            return
+
+        try:
+            if self._profile_layer_id == layer.id():
+                return
+        except Exception:
+            pass
+
+        # Best-effort disconnect previous.
+        try:
+            if self._profile_layer is not None:
+                self._profile_layer.selectionChanged.disconnect(self._on_profile_layer_selection_changed)
+        except Exception:
+            pass
+
+        self._profile_layer = layer
+        try:
+            self._profile_layer_id = layer.id()
+        except Exception:
+            self._profile_layer_id = None
+
+        try:
+            layer.selectionChanged.connect(self._on_profile_layer_selection_changed)
+        except Exception:
+            pass
+
+    def _on_profile_layer_selection_changed(self, *_args):
+        if self._ignore_selection_changed:
+            return
+        layer = self._profile_layer
+        if layer is None:
+            return
+        try:
+            feats = layer.selectedFeatures()
+        except Exception:
+            feats = []
+        if not feats:
+            return
+
+        ft = feats[0]
+        try:
+            fid = int(ft.id())
+        except Exception:
+            fid = None
+        if fid is not None and fid == self._last_selected_fid:
+            return
+        self._last_selected_fid = fid
+
+        try:
+            self._open_profile_from_feature(layer, ft)
+        except Exception as e:
+            log_message(f"TerrainProfile: open from selection failed: {e}", level=Qgis.Warning)
+
+    def _open_profile_from_feature(self, layer: QgsVectorLayer, ft: QgsFeature):
+        """Recompute and show profile when a saved profile line is selected."""
+        dem_layer = None
+        try:
+            dem_id = ft.attribute("dem_id")
+            if dem_id:
+                dem_layer = QgsProject.instance().mapLayer(str(dem_id))
+        except Exception:
+            dem_layer = None
+
+        if dem_layer is None:
+            dem_layer = self.cmbDemLayer.currentLayer()
+        if dem_layer is None:
+            push_message(self.iface, "오류", "프로파일을 열 DEM을 선택해주세요.", level=2)
+            restore_ui_focus(self)
+            return
+
+        try:
+            num_samples = int(ft.attribute("samples") or 0)
+        except Exception:
+            num_samples = 0
+        if num_samples <= 0:
+            num_samples = int(self.spinSamples.value())
+
+        # Color (optional)
+        try:
+            r = int(ft.attribute("r"))
+            g = int(ft.attribute("g"))
+            b = int(ft.attribute("b"))
+            self.chart.set_profile_color(QColor(r, g, b))
+        except Exception:
+            pass
+
+        geom = ft.geometry()
+        if geom is None or geom.isEmpty():
+            return
+
+        try:
+            line_crs = layer.crs()
+        except Exception:
+            line_crs = self.canvas.mapSettings().destinationCrs()
+        canvas_crs = self.canvas.mapSettings().destinationCrs()
+
+        # Extract endpoints
+        pts = None
+        try:
+            if geom.isMultipart():
+                mp = geom.asMultiPolyline()
+                if mp and mp[0]:
+                    pts = mp[0]
+            else:
+                pts = geom.asPolyline()
+        except Exception:
+            pts = None
+        if not pts or len(pts) < 2:
+            return
+
+        start_line = QgsPointXY(pts[0])
+        end_line = QgsPointXY(pts[-1])
+        start_canvas = transform_point(start_line, line_crs, canvas_crs)
+        end_canvas = transform_point(end_line, line_crs, canvas_crs)
+
+        self.points = [start_canvas, end_canvas]
+        self._compute_profile_for_points(dem_layer=dem_layer, start_canvas=start_canvas, end_canvas=end_canvas, num_samples=num_samples)
+        restore_ui_focus(self)
+
+    def _compute_profile_for_points(self, *, dem_layer, start_canvas: QgsPointXY, end_canvas: QgsPointXY, num_samples: int):
+        if dem_layer is None:
+            return
+        if num_samples <= 0:
+            num_samples = 200
+
+        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
+
+        canvas_crs = self.canvas.mapSettings().destinationCrs()
+        dem_crs = dem_layer.crs()
+
+        self.profile_data = []
+
+        distance_area = QgsDistanceArea()
+        distance_area.setSourceCrs(canvas_crs, QgsProject.instance().transformContext())
+        distance_area.setEllipsoid(QgsProject.instance().ellipsoid() or "WGS84")
+        try:
+            distance_area.setEllipsoidalMode(True)
+        except AttributeError:
+            pass
+
+        total_distance_m = float(distance_area.measureLine(start_canvas, end_canvas))
+
+        push_message(
+            self.iface,
+            "단면 분석",
+            f"선택한 단면선 {total_distance_m:.1f}m, {num_samples}개 샘플 추출 중...",
+            level=0,
+        )
+
+        valid_samples = 0
+        for i in range(num_samples + 1):
+            fraction = i / num_samples
+            x_canvas = start_canvas.x() + fraction * (end_canvas.x() - start_canvas.x())
+            y_canvas = start_canvas.y() + fraction * (end_canvas.y() - start_canvas.y())
+            sample_canvas = QgsPointXY(x_canvas, y_canvas)
+
+            sample_dem = transform_point(sample_canvas, canvas_crs, dem_crs)
+            result = dem_layer.dataProvider().identify(sample_dem, QgsRaster.IdentifyFormatValue)
+            if not result.isValid():
+                continue
+            results_dict = result.results()
+            value = results_dict.get(1, None)
+            if value is None and results_dict:
+                value = list(results_dict.values())[0]
+            if value is None:
+                continue
+            try:
+                if value == dem_layer.dataProvider().sourceNoDataValue(1):
+                    continue
+            except Exception:
+                pass
+            try:
+                elev = float(value)
+            except Exception:
+                continue
+            dist = fraction * total_distance_m
+            self.profile_data.append({"distance": dist, "elevation": elev, "x": x_canvas, "y": y_canvas})
+            valid_samples += 1
+
+        if self.profile_data:
+            self.chart.set_data(self.profile_data)
+            self.update_stats()
+            self.btnExportCsv.setEnabled(True)
+            self.btnExportImage.setEnabled(True)
+            push_message(self.iface, "단면 완료", f"{valid_samples}개 유효 샘플 추출 완료!", level=0)
+        else:
+            push_message(self.iface, "경고", "유효한 고도 데이터를 추출하지 못했습니다. DEM 범위를 확인하세요.", level=1)
+
+    def _ensure_profile_layer_schema(self, layer: QgsVectorLayer):
+        """Ensure older projects' profile layers have the fields/style needed for multi-profile viewing."""
+        if layer is None or not isinstance(layer, QgsVectorLayer):
+            return
+
+        pr = layer.dataProvider()
+        required = [
+            QgsField("no", QVariant.Int),
+            QgsField("distance", QVariant.Double, "m", 10, 2),
+            QgsField("min_elev", QVariant.Double, "m", 10, 2),
+            QgsField("max_elev", QVariant.Double, "m", 10, 2),
+            QgsField("date", QVariant.String),
+            QgsField("dem_id", QVariant.String),
+            QgsField("samples", QVariant.Int),
+            QgsField("r", QVariant.Int),
+            QgsField("g", QVariant.Int),
+            QgsField("b", QVariant.Int),
+        ]
+
+        missing = []
+        for f in required:
+            try:
+                if layer.fields().indexFromName(f.name()) < 0:
+                    missing.append(f)
+            except Exception:
+                missing.append(f)
+
+        if missing:
+            try:
+                pr.addAttributes(missing)
+                layer.updateFields()
+            except Exception:
+                pass
+
+        # If the layer was created before we had per-feature colors, populate r/g/b for existing features.
+        try:
+            idx_r = layer.fields().indexFromName("r")
+            idx_g = layer.fields().indexFromName("g")
+            idx_b = layer.fields().indexFromName("b")
+            if idx_r >= 0 and idx_g >= 0 and idx_b >= 0:
+                palette = _profile_color_palette()
+                if palette:
+                    changes = {}
+                    for ft in layer.getFeatures():
+                        try:
+                            r0 = ft.attribute("r")
+                            g0 = ft.attribute("g")
+                            b0 = ft.attribute("b")
+                        except Exception:
+                            r0 = g0 = b0 = None
+                        has_color = False
+                        try:
+                            has_color = (r0 is not None) and (g0 is not None) and (b0 is not None)
+                        except Exception:
+                            has_color = False
+                        if has_color:
+                            continue
+                        try:
+                            no = int(ft.attribute("no") or 0)
+                        except Exception:
+                            no = 0
+                        if no <= 0:
+                            try:
+                                no = int(ft.id()) + 1
+                            except Exception:
+                                no = 1
+                        c = palette[(no - 1) % len(palette)]
+                        changes[int(ft.id())] = {
+                            idx_r: int(c.red()),
+                            idx_g: int(c.green()),
+                            idx_b: int(c.blue()),
+                        }
+                    if changes:
+                        pr.changeAttributeValues(changes)
+                        layer.triggerRepaint()
+        except Exception:
+            pass
+
+        # Ensure renderer uses per-feature colors when possible.
+        try:
+            if layer.fields().indexFromName("r") >= 0:
+                symbol = QgsLineSymbol.createSimple({'color': '0,0,0,200', 'width': '1.4'})
+                sl = symbol.symbolLayer(0)
+                if sl is not None:
+                    sl.setDataDefinedProperty(
+                        QgsSymbolLayer.PropertyStrokeColor,
+                        QgsProperty.fromExpression('color_rgba("r","g","b",220)'),
+                    )
+                layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+                layer.triggerRepaint()
+        except Exception:
+            pass
+
     def get_or_create_profile_layer(self):
         """Get or create a memory layer to store profile lines"""
-        layer_name = "Terrain Profile Lines"
-        layers = QgsProject.instance().mapLayersByName(layer_name)
+        layers = QgsProject.instance().mapLayersByName(PROFILE_LAYER_NAME)
         
         if layers:
-            return layers[0]
+            layer = layers[0]
+            try:
+                self._ensure_profile_layer_schema(layer)
+                self._connect_profile_layer(layer)
+            except Exception:
+                pass
+            return layer
         
         # Create new memory layer
         crs = self.canvas.mapSettings().destinationCrs().authid()
-        layer = QgsVectorLayer(f"LineString?crs={crs}", layer_name, "memory")
+        layer = QgsVectorLayer(f"LineString?crs={crs}", PROFILE_LAYER_NAME, "memory")
         
         # Add fields
         pr = layer.dataProvider()
@@ -567,36 +924,88 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             QgsField("distance", QVariant.Double, "m", 10, 2),
             QgsField("min_elev", QVariant.Double, "m", 10, 2),
             QgsField("max_elev", QVariant.Double, "m", 10, 2),
-            QgsField("date", QVariant.String)
+            QgsField("date", QVariant.String),
+            QgsField("dem_id", QVariant.String),
+            QgsField("samples", QVariant.Int),
+            QgsField("r", QVariant.Int),
+            QgsField("g", QVariant.Int),
+            QgsField("b", QVariant.Int),
         ])
         layer.updateFields()
 
-        symbol = QgsLineSymbol.createSimple({'color': 'red', 'width': '1.0'})
+        symbol = QgsLineSymbol.createSimple({'color': '0,0,0,200', 'width': '1.4'})
+        try:
+            sl = symbol.symbolLayer(0)
+            if sl is not None:
+                sl.setDataDefinedProperty(
+                    QgsSymbolLayer.PropertyStrokeColor,
+                    QgsProperty.fromExpression('color_rgba("r","g","b",220)'),
+                )
+        except Exception:
+            pass
         layer.setRenderer(QgsSingleSymbolRenderer(symbol))
 
-        QgsProject.instance().addMapLayer(layer)
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        group = root.findGroup(PROFILE_GROUP_NAME)
+        if group is None:
+            group = root.insertGroup(0, PROFILE_GROUP_NAME)
+        project.addMapLayer(layer, False)
+        group.insertLayer(0, layer)
+
+        try:
+            # Keep group near top
+            if group.parent() == root:
+                idx = root.children().index(group)
+                if idx != 0:
+                    root.removeChildNode(group)
+                    root.insertChildNode(0, group)
+        except Exception:
+            pass
+
+        try:
+            self._ensure_profile_layer_schema(layer)
+            self._connect_profile_layer(layer)
+        except Exception:
+            pass
         return layer
 
-    def save_line_to_layer(self, total_distance):
+    def save_line_to_layer(self, total_distance, *, dem_layer=None, num_samples: int = 0) -> Optional[QColor]:
         """Save the profile line to the memory layer"""
         layer = self.get_or_create_profile_layer()
         if not layer: return
 
+        try:
+            self._connect_profile_layer(layer)
+        except Exception:
+            pass
+
         elevs = [p['elevation'] for p in self.profile_data]
+
+        next_no = int(layer.featureCount()) + 1
+        palette = _profile_color_palette()
+        color = palette[(next_no - 1) % len(palette)] if palette else QColor(0, 100, 255)
         
         feat = QgsFeature(layer.fields())
         feat.setGeometry(QgsGeometry.fromPolylineXY([self.points[0], self.points[1]]))
         feat.setAttributes([
-            layer.featureCount() + 1,
+            next_no,
             total_distance,
             min(elevs),
             max(elevs),
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            (dem_layer.id() if dem_layer is not None else ""),
+            int(num_samples or 0),
+            int(color.red()),
+            int(color.green()),
+            int(color.blue()),
         ])
         
         layer.dataProvider().addFeatures([feat])
         layer.updateExtents()
         layer.triggerRepaint()
+
+        return color
     
     def update_stats(self):
         if not self.profile_data: return
@@ -656,19 +1065,13 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self.rubber_band.reset()
         self.hover_marker.reset(QgsWkbTypes.PointGeometry)
         self.chart.set_data([])
+        try:
+            self.chart.set_profile_color(QColor(0, 100, 255))
+        except Exception:
+            pass
         self.lblStats.setText("지도를 클릭하여 단면을 생성하세요.")
         self.btnExportCsv.setEnabled(False)
         self.btnExportImage.setEnabled(False)
-        
-        # Also clear the persistent layer features
-        layer_name = "Terrain Profile Lines"
-        layers = QgsProject.instance().mapLayersByName(layer_name)
-        if layers:
-            layer = layers[0]
-            if layer.isEditable() or layer.dataProvider().capabilities() & layer.dataProvider().DeleteFeatures:
-                # Remove all features
-                layer.dataProvider().truncate()
-                layer.triggerRepaint()
     
     def cleanup_and_close(self):
         """Explicit cleanup called when Close button is clicked"""
@@ -684,9 +1087,23 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         """Clean up: remove temporary layer and map tools when dialog closes"""
         self._cleanup()
         event.accept()
-    
+
+    def cleanup_for_unload(self):
+        """Called from plugin unload to disconnect signals safely."""
+        try:
+            if self._profile_layer is not None:
+                self._profile_layer.selectionChanged.disconnect(self._on_profile_layer_selection_changed)
+        except Exception:
+            pass
+        self._profile_layer = None
+        self._profile_layer_id = None
+        self._cleanup()
+     
     def _cleanup(self):
-        """Internal cleanup method - removes rubber bands and temporary layer"""
+        """Internal cleanup method - removes rubber bands and restores map tool.
+
+        Note: saved profile line layers are kept (multi-profile library).
+        """
         try:
             # Clear rubber bands completely
             if hasattr(self, 'rubber_band') and self.rubber_band:
@@ -707,16 +1124,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                         self.canvas.scene().removeItem(self.hover_marker)
                     except Exception:
                         pass
-            
-            # Remove the temporary profile layer from project
-            layer_name = "Terrain Profile Lines"
-            layers = QgsProject.instance().mapLayersByName(layer_name)
-            for layer in layers:
-                try:
-                    QgsProject.instance().removeMapLayer(layer.id())
-                except Exception:
-                    pass
-            
+             
             # Restore original map tool
             if hasattr(self, 'original_tool') and self.original_tool:
                 try:

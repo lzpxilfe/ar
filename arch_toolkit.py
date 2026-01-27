@@ -31,6 +31,7 @@ class ArchToolkit:
         self.main_action = None
         self.viewshed_dlg = None # [v1.6.20] Persistent reference for marker cleanup
         self.cost_dlg = None  # Persistent reference for temp/preview cleanup
+        self.profile_dlg = None  # Persistent reference for multi-profile selection/view
 
     def initGui(self):
         try:
@@ -241,6 +242,22 @@ class ArchToolkit:
             except Exception:
                 pass
             self.cost_dlg = None
+
+        if self.profile_dlg is not None:
+            try:
+                if hasattr(self.profile_dlg, "cleanup_for_unload"):
+                    self.profile_dlg.cleanup_for_unload()
+            except Exception:
+                pass
+            try:
+                self.profile_dlg.close()
+            except Exception:
+                pass
+            try:
+                self.profile_dlg.deleteLater()
+            except Exception:
+                pass
+            self.profile_dlg = None
              
         # Remove toolbar cleanly from mainWindow
         if self.toolbar:
@@ -288,8 +305,12 @@ class ArchToolkit:
     def run_profile_tool(self):
         try:
             from .tools.terrain_profile_dialog import TerrainProfileDialog
-            dlg = TerrainProfileDialog(self.iface)
-            dlg.exec_()
+            if self.profile_dlg is None:
+                self.profile_dlg = TerrainProfileDialog(self.iface)
+            # Non-modal: lets users click/choose saved profile lines on the map.
+            self.profile_dlg.show()
+            self.profile_dlg.raise_()
+            self.profile_dlg.activateWindow()
         except Exception as e:
             log_exception("Terrain profile tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
