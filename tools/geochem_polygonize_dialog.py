@@ -548,19 +548,47 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
             # 4) Polygonize -> dissolve
             log_message("GeoChem: polygonize…", level=Qgis.Info)
-            poly = processing.run(
+            poly_layer_name = f"{preset.key}_poly_{run_id}"
+            poly_path = os.path.join(self._tmp_dir, f"{preset.key}_poly_{run_id}.gpkg")
+            poly_uri = f"{poly_path}|layername={poly_layer_name}"
+            try:
+                if os.path.exists(poly_path):
+                    os.remove(poly_path)
+            except Exception:
+                pass
+
+            poly_out = processing.run(
                 "gdal:polygonize",
                 {
                     "INPUT": cls_path,
                     "BAND": 1,
                     "FIELD": "class_id",
                     "EIGHT_CONNECTEDNESS": True,
-                    "OUTPUT": "memory:",
+                    "OUTPUT": poly_uri,
                 },
-            )["OUTPUT"]
+            ).get("OUTPUT")
 
-            if not isinstance(poly, QgsVectorLayer):
-                raise RuntimeError("Polygonize failed")
+            log_message(f"GeoChem: polygonize OUTPUT type={type(poly_out).__name__} value={poly_out}", level=Qgis.Info)
+
+            poly: Optional[QgsVectorLayer] = None
+            if isinstance(poly_out, QgsVectorLayer):
+                poly = poly_out
+            else:
+                out_str = str(poly_out) if poly_out is not None else ""
+                uri_candidates = [out_str, poly_uri, poly_path]
+                for uri in uri_candidates:
+                    if not uri or uri.strip().lower() in {"memory:", "temporary_output"}:
+                        continue
+                    try:
+                        cand = QgsVectorLayer(uri, f"{preset.label} polygons", "ogr")
+                        if cand.isValid():
+                            poly = cand
+                            break
+                    except Exception:
+                        continue
+
+            if poly is None or not isinstance(poly, QgsVectorLayer) or not poly.isValid():
+                raise RuntimeError("Polygonize failed (no valid vector layer output)")
 
             # Drop nodata (class_id == 0)
             try:
