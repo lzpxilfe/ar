@@ -53,6 +53,15 @@ class ArchToolkit:
             contour_icon = os.path.join(plugin_dir, 'contour_icon.png')
             self.contour_action = QAction(QIcon(contour_icon), u"등고선 추출 (Extract Contours)", self.iface.mainWindow())
             self.contour_action.triggered.connect(self.run_contour_tool)
+
+            # Cadastral overlap table (Survey area vs Parcels)
+            cad_icon = os.path.join(plugin_dir, 'style_icon.png')
+            self.cad_overlap_action = QAction(
+                QIcon(cad_icon if os.path.exists(cad_icon) else QIcon()),
+                u"지적도 중첩 면적표 (Cadastral Overlap)",
+                self.iface.mainWindow(),
+            )
+            self.cad_overlap_action.triggered.connect(self.run_cadastral_overlap_tool)
             
             # Terrain Analysis
             terrain_icon = os.path.join(plugin_dir, 'terrain_icon.png')
@@ -131,6 +140,7 @@ class ArchToolkit:
             # 2. Add to Plugin Menu
             self.iface.addPluginToMenu(self.menu_name, self.dem_action)
             self.iface.addPluginToMenu(self.menu_name, self.contour_action)
+            self.iface.addPluginToMenu(self.menu_name, self.cad_overlap_action)
             self.iface.addPluginToMenu(self.menu_name, self.terrain_action)
             self.iface.addPluginToMenu(self.menu_name, self.profile_action)
             self.iface.addPluginToMenu(self.menu_name, self.cost_action)
@@ -152,6 +162,7 @@ class ArchToolkit:
             self.tool_menu = QMenu(self.iface.mainWindow())
             self.tool_menu.addAction(self.dem_action)
             self.tool_menu.addAction(self.contour_action)
+            self.tool_menu.addAction(self.cad_overlap_action)
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.terrain_action)
             self.tool_menu.addAction(self.profile_action)
@@ -175,7 +186,7 @@ class ArchToolkit:
             
             # Keep references for cleanup
             self.actions = [
-                self.dem_action, self.contour_action, self.terrain_action,
+                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action,
                 self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.viewshed_action,
                 self.main_action
             ]
@@ -248,6 +259,16 @@ class ArchToolkit:
             dlg.exec_()
         except Exception as e:
             log_exception("Contour tool error", e)
+            QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
+
+    def run_cadastral_overlap_tool(self):
+        try:
+            from .tools.cadastral_overlap_dialog import CadastralOverlapDialog
+
+            dlg = CadastralOverlapDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            log_exception("Cadastral overlap tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_terrain_tool(self):
