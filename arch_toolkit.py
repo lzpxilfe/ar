@@ -55,9 +55,14 @@ class ArchToolkit:
             self.contour_action.triggered.connect(self.run_contour_tool)
 
             # Cadastral overlap table (Survey area vs Parcels)
-            cad_icon = os.path.join(plugin_dir, 'style_icon.png')
+            cad_icon = None
+            for icon_name in ("jijuk.png", "jijuk.jpg", "jijuk.jpeg", "style_icon.png"):
+                icon_path = os.path.join(plugin_dir, icon_name)
+                if os.path.exists(icon_path):
+                    cad_icon = icon_path
+                    break
             self.cad_overlap_action = QAction(
-                QIcon(cad_icon if os.path.exists(cad_icon) else QIcon()),
+                QIcon(cad_icon or ""),
                 u"지적도 중첩 면적표 (Cadastral Overlap)",
                 self.iface.mainWindow(),
             )
