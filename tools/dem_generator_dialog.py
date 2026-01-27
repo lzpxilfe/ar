@@ -63,41 +63,42 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         }
     }
     
-    # DXF Layer definitions for Korean digital topographic maps
-    # NOTE: Only essential contour lines default=True to avoid bridges/structures
+    # DXF Layer definitions for Korean digital topographic maps (DXF/NGI 표준코드 + 구(숫자) 코드 혼재)
     DXF_LAYER_INFO = {
         # --- 현행 수치지형도(일반적으로 많이 쓰이는 F*** 코드) ---
-        'F0017110': {'name': '주곡선', 'desc': '기본 등고선 (5m 간격)', 'category': '등고선', 'default': True},
-        'F0017111': {'name': '계곡선', 'desc': '굵은 등고선 (25m 간격)', 'category': '등고선', 'default': True},
-        'F0017112': {'name': '간곡선', 'desc': '완만 지형 파선 (선택적)', 'category': '등고선', 'default': False},
-        'F0017113': {'name': '조곡선', 'desc': '아주 완만한 지형 점선', 'category': '등고선', 'default': False},
-        'F0017114': {'name': '지성선', 'desc': '능선/계곡 변화점', 'category': '지형', 'default': False},
-        'F0017115': {'name': '지성선(추가)', 'desc': '지형 굴곡 보조', 'category': '지형', 'default': False},
-        'F0017120': {'name': '등고선 수치', 'desc': '등고선 숫자', 'category': '텍스트', 'default': False},
-        'F0027111': {'name': '표고점(지형)', 'desc': '순수 지형 높이 (산정상 등)', 'category': '포인트', 'default': True},
-        'F0027217': {'name': '표고점(구조물)', 'desc': '⚠️ 교량/구조물 높이 포함 주의!', 'category': '포인트', 'default': False},
+        # 주요 활용 코드(예시): 등고선 F0017111/F0017114, 표고점 F0027217, 기준점 H0027311/H0027312
+        'F0017110': {'name': '등고선(기타/확인필요)', 'desc': '데이터셋에 따라 존재할 수 있는 등고선 코드(확인 필요). 보통 F0017111/F0017114를 주로 사용', 'category': '현행(등고선)', 'default': False},
+        'F0017111': {'name': '주곡선', 'desc': '등고선(주곡선). DEM 생성의 기본 입력', 'category': '현행(등고선)', 'default': True},
+        'F0017112': {'name': '등고선(보조)', 'desc': '등고선 보조 코드(데이터셋별 상이). 필요 시 선택', 'category': '현행(등고선)', 'default': False},
+        'F0017113': {'name': '등고선(보조)', 'desc': '등고선 보조 코드(데이터셋별 상이). 필요 시 선택', 'category': '현행(등고선)', 'default': False},
+        'F0017114': {'name': '간곡선', 'desc': '등고선(간곡선/보조). 주곡선 사이를 보완', 'category': '현행(등고선)', 'default': True},
+        'F0017115': {'name': '지형선(보조)', 'desc': '지형 굴곡 보조선(데이터셋별 상이). DEM 보간에는 보통 선택적', 'category': '현행(지형)', 'default': False},
+        'F0017120': {'name': '등고선 수치', 'desc': '등고선 숫자(텍스트). DEM 보간에는 보통 불필요', 'category': '현행(텍스트)', 'default': False},
+        'F0027217': {'name': '표고점', 'desc': '표고점(Spot height). 등고선만으로 부족한 지점 보완(권장)', 'category': '현행(포인트)', 'default': True},
+        'H0027311': {'name': '삼각점', 'desc': '삼각점(기준점). 데이터에 존재하면 보간 품질 향상(선택)', 'category': '현행(포인트)', 'default': False},
+        'H0027312': {'name': '수준점', 'desc': '수준점(기준점). 데이터에 존재하면 보간 품질 향상(선택)', 'category': '현행(포인트)', 'default': False},
         'E0011111': {'name': '하천중심선', 'desc': '하천 물길 (고도값 없을 수 있음)', 'category': '수계', 'default': False},
         'E0011112': {'name': '하천경계선', 'desc': '강물/지면 경계', 'category': '수계', 'default': False},
         'E0041311': {'name': '호수/저수지', 'desc': '수면 경계', 'category': '수계', 'default': False}
         ,
         # --- 구(2000년대 등) 수치지형도: 숫자 레이어 코드 ---
         # 주로 71XX(등고선), 7217(표고점), 73XX(기준점/수치) 형태로 등장합니다.
-        # (예) "Layer" IN ('7111','7114','7217' ...)
+        # (예) "Layer" IN ('7111','7114','2121','2122')
         "7111": {
             "name": "주곡선(구)",
-            "desc": "구 수치지도(숫자 코드) 등고선. (현행 예: CAA002)",
+            "desc": "구 수치지도(숫자 코드) 주곡선(등고선)",
             "category": "구수치(등고선)",
             "default": False,
         },
         "7114": {
             "name": "계곡선(구)",
-            "desc": "구 수치지도(숫자 코드) 등고선(계곡선). (현행 예: CAA001)",
+            "desc": "구 수치지도(숫자 코드) 계곡선(등고선)",
             "category": "구수치(등고선)",
             "default": False,
         },
         "7217": {
             "name": "표고점(구)",
-            "desc": "구 수치지도(숫자 코드) 표고점. (현행 예: CA002)",
+            "desc": "구 수치지도(숫자 코드) 표고점(Spot height)",
             "category": "구수치(표고점)",
             "default": False,
         },
@@ -119,60 +120,30 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             "category": "구수치(해안)",
             "default": False,
         },
-        # --- 일부 데이터셋에서 쓰이는 영문 코드(참고용) ---
-        "CAA001": {
-            "name": "등고선(계곡선)",
-            "desc": "영문 코드 등고선(계곡선). (구 코드 예: 7114)",
-            "category": "현행(영문코드)",
-            "default": False,
-        },
-        "CAA002": {
-            "name": "등고선(주곡선)",
-            "desc": "영문 코드 등고선(주곡선). (구 코드 예: 7111)",
-            "category": "현행(영문코드)",
-            "default": False,
-        },
-        "CA002": {
-            "name": "표고점",
-            "desc": "영문 코드 표고점. (구 코드 예: 7217)",
-            "category": "현행(영문코드)",
-            "default": False,
-        },
-        "CA0021": {
-            "name": "표고점수치",
-            "desc": "영문 코드 표고점수치(표기). DEM 보간에는 보통 불필요",
-            "category": "현행(영문코드)",
-            "default": False,
-        },
     }
 
     DXF_LAYER_PRESETS = {
         "modern_f": {
-            "label": "현행 수치지형도 (F*** 레이어)",
-            "codes": ["F0017110", "F0017111", "F0027111"],
+            "label": "현행 수치지형도 (F/H 코드)",
+            "era": "modern",
+            "codes": ["F0017111", "F0017114", "F0027217"],
             "tooltip": (
-                "현행 수치지형도(DXF)에서 많이 보이는 F*** 레이어 프리셋입니다.\n"
-                "- 등고선(주곡선/계곡선) + 표고점(지형)만 기본 선택\n"
-                "- 교량/구조물 표고점(F0027217)은 기본 제외"
+                "현행 수치지형도(DXF)에서 많이 쓰는 프리셋입니다.\n"
+                "- 등고선(F0017111, F0017114) + 표고점(F0027217)\n"
+                "- (선택) 기준점: 삼각점(H0027311), 수준점(H0027312)\n"
+                "- DEM 보간에 불필요한 텍스트(등고선 수치 등)는 기본 제외"
             ),
         },
         "legacy_numeric": {
-            "label": "구 수치지형도 (숫자 레이어: 71XX/72XX/73XX)",
-            "codes": ["7111", "7114", "7217", "2121", "2122"],
+            "label": "구 수치지형도 (숫자 레이어)",
+            "era": "legacy",
+            "codes": ["7111", "7114", "2121", "2122"],
             "tooltip": (
                 "구(2000년대 등) 수치지형도에서 레이어 이름이 숫자로 들어오는 경우가 있습니다.\n"
-                "예) \"Layer\" IN ('7111','7114','7217','2121','2122')\n"
-                "- 71XX: 등고선, 7217: 표고점\n"
+                "예) \"Layer\" IN ('7111','7114','2121','2122')\n"
+                "- 71XX: 등고선(주곡선/계곡선)\n"
+                "- (선택) 7217: 표고점(Spot height)\n"
                 "- 2121/2122(해안선)은 필요할 때만: 해안/수면을 0m 기준으로 강제할 수 있습니다(주의)"
-            ),
-        },
-        "modern_ca": {
-            "label": "현행 수치지형도 (영문 코드: CA*/CAA*)",
-            "codes": ["CAA001", "CAA002", "CA002"],
-            "tooltip": (
-                "일부 데이터셋은 등고선/표고점 레이어가 CAA001/CAA002/CA002 같은 영문 코드로 들어옵니다.\n"
-                "- 등고선 + 표고점만 기본 선택\n"
-                "- (필요 시) CA0021(표고점수치)은 수치 표기라 DEM 보간에는 보통 불필요"
             ),
         },
     }
@@ -258,6 +229,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         self.tblLayers.setColumnWidth(2, 100)
         
         self.layer_checkboxes = {}
+        self.layer_row_by_code = {}
         row = 0
         self.tblLayers.setRowCount(len(self.DXF_LAYER_INFO))
         
@@ -285,29 +257,51 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             desc_item = QTableWidgetItem(info['desc'])
             desc_item.setFlags(desc_item.flags() & ~Qt.ItemIsEditable)
             self.tblLayers.setItem(row, 3, desc_item)
+
+            self.layer_row_by_code[str(layer_code)] = int(row)
             
             row += 1
 
     def setup_layer_presets(self):
-        """Add a compact 'layer preset' selector without changing the .ui file."""
+        """Add compact era/preset selectors without changing the .ui file."""
         try:
             # horizontalLayout is defined in dem_generator_dialog_base.ui (row with SelectAll/Deselect/Load DXF).
             layout = getattr(self, "horizontalLayout", None)
             if layout is None:
                 return
 
+            # State: keep selections per era (so switching doesn't feel destructive)
+            if not hasattr(self, "_selected_codes_by_era"):
+                self._selected_codes_by_era = {"modern": set(), "legacy": set()}
+            if not hasattr(self, "_current_dxf_era"):
+                self._current_dxf_era = "modern"
+
+            # --- Era selector (구/현행) ---
+            self.lblDxfEra = QtWidgets.QLabel("시기", self)
+            self.cmbDxfEra = QtWidgets.QComboBox(self)
+            self.cmbDxfEra.setMinimumWidth(170)
+            self.cmbDxfEra.addItem("현행 수치지형도", "modern")
+            self.cmbDxfEra.addItem("구 수치지형도(숫자)", "legacy")
+            try:
+                self.cmbDxfEra.setItemData(
+                    0,
+                    "현행 수치지형도는 보통 F***/H*** 같은 표준코드(예: F0017111, F0017114, F0027217)를 사용합니다.",
+                    Qt.ToolTipRole,
+                )
+                self.cmbDxfEra.setItemData(
+                    1,
+                    "구 수치지형도는 레이어가 숫자 코드로 들어오는 경우가 있습니다. (예: 7111, 7114, 2121, 2122)",
+                    Qt.ToolTipRole,
+                )
+            except Exception:
+                pass
+
             self.lblLayerPreset = QtWidgets.QLabel("프리셋", self)
             self.cmbLayerPreset = QtWidgets.QComboBox(self)
             self.cmbLayerPreset.setMinimumWidth(220)
 
-            # Add presets
-            self.cmbLayerPreset.addItem("프리셋 선택…", "")
-            for key, item in self.DXF_LAYER_PRESETS.items():
-                self.cmbLayerPreset.addItem(item.get("label", key), key)
-                idx = self.cmbLayerPreset.count() - 1
-                tip = item.get("tooltip", "")
-                if tip:
-                    self.cmbLayerPreset.setItemData(idx, tip, Qt.ToolTipRole)
+            # Populate presets based on era
+            self._refresh_layer_preset_items()
 
             def _sync_tip():
                 try:
@@ -321,23 +315,139 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             self.cmbLayerPreset.currentIndexChanged.connect(_sync_tip)
             _sync_tip()
 
+            def _sync_era_tip():
+                try:
+                    self.cmbDxfEra.setToolTip(
+                        str(self.cmbDxfEra.itemData(self.cmbDxfEra.currentIndex(), Qt.ToolTipRole) or "")
+                    )
+                except Exception:
+                    pass
+
+            # Set default era before connecting (avoids early signal cascades)
+            try:
+                if str(self._current_dxf_era) == "legacy":
+                    self.cmbDxfEra.setCurrentIndex(1)
+                else:
+                    self.cmbDxfEra.setCurrentIndex(0)
+            except Exception:
+                pass
+
+            self.cmbDxfEra.currentIndexChanged.connect(self.on_dxf_era_changed)
+            self.cmbDxfEra.currentIndexChanged.connect(_sync_era_tip)
+            _sync_era_tip()
+
             # Insert after "선택 해제" (keeps the same row height)
             try:
                 idx = int(layout.indexOf(self.btnDeselectAll))
                 if idx >= 0:
-                    layout.insertWidget(idx + 1, self.lblLayerPreset)
-                    layout.insertWidget(idx + 2, self.cmbLayerPreset)
+                    layout.insertWidget(idx + 1, self.lblDxfEra)
+                    layout.insertWidget(idx + 2, self.cmbDxfEra)
+                    layout.insertWidget(idx + 3, self.lblLayerPreset)
+                    layout.insertWidget(idx + 4, self.cmbLayerPreset)
                 else:
-                    layout.insertWidget(0, self.lblLayerPreset)
-                    layout.insertWidget(1, self.cmbLayerPreset)
+                    layout.insertWidget(0, self.lblDxfEra)
+                    layout.insertWidget(1, self.cmbDxfEra)
+                    layout.insertWidget(2, self.lblLayerPreset)
+                    layout.insertWidget(3, self.cmbLayerPreset)
             except Exception:
                 try:
-                    layout.insertWidget(0, self.lblLayerPreset)
-                    layout.insertWidget(1, self.cmbLayerPreset)
+                    layout.insertWidget(0, self.lblDxfEra)
+                    layout.insertWidget(1, self.cmbDxfEra)
+                    layout.insertWidget(2, self.lblLayerPreset)
+                    layout.insertWidget(3, self.cmbLayerPreset)
                 except Exception:
                     pass
+
+            # Apply initial filter + remember current selection
+            self._apply_dxf_era_filter()
+            try:
+                self._selected_codes_by_era[str(self._current_dxf_era)] = set(self.get_selected_layer_codes())
+            except Exception:
+                pass
         except Exception:
             pass
+
+    def _code_era(self, code: str) -> str:
+        code = str(code or "")
+        return "legacy" if code.isdigit() else "modern"
+
+    def _is_code_visible(self, code: str) -> bool:
+        try:
+            row = int((self.layer_row_by_code or {}).get(str(code)))
+        except Exception:
+            return True
+        try:
+            return not bool(self.tblLayers.isRowHidden(row))
+        except Exception:
+            return True
+
+    def _set_visible_checked_codes(self, codes):
+        codes = set([str(c) for c in (codes or [])])
+        for code, checkbox in (self.layer_checkboxes or {}).items():
+            if not self._is_code_visible(code):
+                continue
+            try:
+                checkbox.setChecked(str(code) in codes)
+            except Exception:
+                continue
+
+    def _apply_dxf_era_filter(self):
+        era = str(getattr(self, "_current_dxf_era", "modern") or "modern")
+        for code, row in (self.layer_row_by_code or {}).items():
+            try:
+                show = self._code_era(code) == era
+                self.tblLayers.setRowHidden(int(row), not bool(show))
+            except Exception:
+                continue
+
+    def _refresh_layer_preset_items(self):
+        era = str(getattr(self, "_current_dxf_era", "modern") or "modern")
+        try:
+            self.cmbLayerPreset.blockSignals(True)
+        except Exception:
+            pass
+        try:
+            self.cmbLayerPreset.clear()
+            self.cmbLayerPreset.addItem("프리셋 선택…", "")
+            for key, item in (self.DXF_LAYER_PRESETS or {}).items():
+                if str(item.get("era", "")) != era:
+                    continue
+                self.cmbLayerPreset.addItem(item.get("label", key), key)
+                idx = self.cmbLayerPreset.count() - 1
+                tip = item.get("tooltip", "")
+                if tip:
+                    self.cmbLayerPreset.setItemData(idx, tip, Qt.ToolTipRole)
+        finally:
+            try:
+                self.cmbLayerPreset.blockSignals(False)
+            except Exception:
+                pass
+
+    def on_dxf_era_changed(self):
+        new_era = ""
+        try:
+            new_era = str(self.cmbDxfEra.currentData() or "")
+        except Exception:
+            new_era = ""
+        if new_era not in ("modern", "legacy"):
+            return
+
+        # Save current era selections (visible only)
+        try:
+            self._selected_codes_by_era[str(self._current_dxf_era)] = set(self.get_selected_layer_codes())
+        except Exception:
+            pass
+
+        self._current_dxf_era = str(new_era)
+        self._apply_dxf_era_filter()
+        self._refresh_layer_preset_items()
+
+        # Restore selection for new era, or apply recommended defaults
+        codes = set((self._selected_codes_by_era or {}).get(str(new_era)) or [])
+        if not codes:
+            default_key = "legacy_numeric" if new_era == "legacy" else "modern_f"
+            codes = set((self.DXF_LAYER_PRESETS.get(default_key) or {}).get("codes") or [])
+        self._set_visible_checked_codes(codes)
 
     def on_layer_preset_changed(self):
         key = ""
@@ -354,26 +464,40 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         if not codes:
             return
 
-        # Apply: uncheck everything then check preset codes.
-        for code, checkbox in (self.layer_checkboxes or {}).items():
-            try:
-                checkbox.setChecked(str(code) in codes)
-            except Exception:
-                continue
+        self._set_visible_checked_codes(codes)
+        try:
+            self._selected_codes_by_era[str(self._current_dxf_era)] = set(self.get_selected_layer_codes())
+        except Exception:
+            pass
     
     def select_all_layers(self):
-        for checkbox in self.layer_checkboxes.values():
-            checkbox.setChecked(True)
+        for code, checkbox in (self.layer_checkboxes or {}).items():
+            if not self._is_code_visible(code):
+                continue
+            try:
+                checkbox.setChecked(True)
+            except Exception:
+                pass
     
     def deselect_all_layers(self):
-        for checkbox in self.layer_checkboxes.values():
-            checkbox.setChecked(False)
+        for code, checkbox in (self.layer_checkboxes or {}).items():
+            if not self._is_code_visible(code):
+                continue
+            try:
+                checkbox.setChecked(False)
+            except Exception:
+                pass
     
     def get_selected_layer_codes(self):
         selected = []
-        for code, checkbox in self.layer_checkboxes.items():
-            if checkbox.isChecked():
-                selected.append(code)
+        for code, checkbox in (self.layer_checkboxes or {}).items():
+            if not self._is_code_visible(code):
+                continue
+            try:
+                if checkbox.isChecked():
+                    selected.append(str(code))
+            except Exception:
+                continue
         return selected
     
     def load_dxf_file(self):
@@ -485,20 +609,12 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Build query for DXF layer filtering
         selected_codes = self.get_selected_layer_codes()
-        
-        # Auto-exclude bridge/structure elevation points
-        BRIDGE_CODES = ['F0027217']  # 교량/구조물 표고점
-        excluded = len([c for c in selected_codes if c in BRIDGE_CODES])
-        filtered_codes = [c for c in selected_codes if c not in BRIDGE_CODES]
-        
-        if filtered_codes:
-            query = '"Layer" IN (' + ','.join([f"'{code}'" for code in filtered_codes]) + ')'
+
+        # No silent auto-excludes: use exactly what the user selected in the table.
+        if selected_codes:
+            query = '"Layer" IN (' + ','.join([f"'{code}'" for code in selected_codes]) + ')'
         else:
             query = None
-        
-        # Notify if bridge points were excluded
-        if excluded > 0:
-            push_message(self.iface, "알림", f"교량/구조물 표고점 {excluded}개 유형 자동 제외됨", level=0)
         
         push_message(self.iface, "처리 중", f"{len(selected_layers)}개 레이어 병합 중...", level=0)
         self.hide()
