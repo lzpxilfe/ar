@@ -39,6 +39,9 @@ from .live_log_dialog import ensure_live_log_dialog
 
 PROFILE_LAYER_NAME = "Terrain Profile Lines"
 PROFILE_GROUP_NAME = "ArchToolkit - Terrain Profile"
+PROFILE_SINGLE_SUBGROUP_NAME = "단면선 (개별 레이어)"
+PROFILE_KIND_PROP = "ArchToolkit/profile_kind"
+PROFILE_KIND_SINGLE = "terrain_profile_single"
 
 
 def _profile_color_palette() -> List[QColor]:
@@ -424,7 +427,10 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self._profile_layer_id = None
         self._ignore_selection_changed = False
         self._last_selected_fid = None
-        
+        self._ignore_current_layer_changed = False
+        self._layer_tree_view = None
+        self._single_layers_enabled = True
+
         # Setup
         self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.RasterLayer)
         
@@ -447,6 +453,42 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             )
         except Exception:
             pass
+
+        # Optional: create a per-profile layer as well (so users can click a layer to reopen).
+        try:
+            self.chkSingleLayers = QtWidgets.QCheckBox("개별 레이어도 생성", self)
+            self.chkSingleLayers.setObjectName("chkSingleLayers")
+            self.chkSingleLayers.setChecked(True)
+            self.chkSingleLayers.setToolTip(
+                "단면선을 '1개=1개 레이어'로도 추가합니다.\n"
+                "레이어 패널에서 해당 레이어를 클릭(현재 레이어)하면 단면 그래프가 자동으로 열립니다.\n"
+                "많이 생성하면 레이어가 많아질 수 있어 필요할 때만 켜세요."
+            )
+            try:
+                idx = int(self.horizontalLayout.indexOf(self.btnDrawLine))
+                if idx >= 0:
+                    self.horizontalLayout.insertWidget(idx, self.chkSingleLayers)
+                else:
+                    self.horizontalLayout.addWidget(self.chkSingleLayers)
+            except Exception:
+                self.horizontalLayout.addWidget(self.chkSingleLayers)
+
+            def _sync_single_layers(on: bool):
+                self._single_layers_enabled = bool(on)
+
+            self.chkSingleLayers.toggled.connect(_sync_single_layers)
+            self._single_layers_enabled = bool(self.chkSingleLayers.isChecked())
+        except Exception:
+            self.chkSingleLayers = None
+            self._single_layers_enabled = True
+
+        # Layer panel click → open profile (for per-profile layers).
+        try:
+            view = self.iface.layerTreeView()
+            view.currentLayerChanged.connect(self._on_current_layer_changed)
+            self._layer_tree_view = view
+        except Exception:
+            self._layer_tree_view = None
         
         # Rubber band for drawing line
         self.rubber_band = QgsRubberBand(self.canvas, QgsWkbTypes.LineGeometry)
@@ -644,6 +686,31 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.selectionChanged.connect(self._on_profile_layer_selection_changed)
         except Exception:
             pass
+
+    def _on_current_layer_changed(self, layer):
+        if self._ignore_current_layer_changed:
+            return
+        if layer is None:
+            return
+        if not isinstance(layer, QgsVectorLayer):
+            return
+        try:
+            kind = str(layer.customProperty(PROFILE_KIND_PROP, "") or "")
+        except Exception:
+            kind = ""
+        if kind != PROFILE_KIND_SINGLE:
+            return
+
+        try:
+            ft = None
+            for f in layer.getFeatures(QgsFeatureRequest().setLimit(1)):
+                ft = f
+                break
+            if ft is None:
+                return
+            self._open_profile_from_feature(layer, ft)
+        except Exception as e:
+            log_message(f"TerrainProfile: open from layer click failed: {e}", level=Qgis.Warning)
 
     def _on_profile_layer_selection_changed(self, *_args):
         if self._ignore_selection_changed:
@@ -900,6 +967,109 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+    def _ensure_single_group(self):
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        group = root.findGroup(PROFILE_GROUP_NAME)
+        if group is None:
+            group = root.insertGroup(0, PROFILE_GROUP_NAME)
+        sub = group.findGroup(PROFILE_SINGLE_SUBGROUP_NAME)
+        if sub is None:
+            try:
+                sub = group.insertGroup(0, PROFILE_SINGLE_SUBGROUP_NAME)
+            except Exception:
+                sub = group.addGroup(PROFILE_SINGLE_SUBGROUP_NAME)
+            try:
+                sub.setExpanded(False)
+            except Exception:
+                pass
+        return sub
+
+    def _create_single_profile_layer(
+        self,
+        *,
+        no: int,
+        total_distance: float,
+        min_elev: float,
+        max_elev: float,
+        start: QgsPointXY,
+        end: QgsPointXY,
+        dem_layer,
+        num_samples: int,
+        color: QColor,
+    ):
+        """Create a '1 profile = 1 layer' line layer so users can click the layer to reopen the chart."""
+        if not self._single_layers_enabled:
+            return None
+
+        crs = self.canvas.mapSettings().destinationCrs().authid()
+        name = f"단면선_{int(no):03d} ({float(total_distance):.0f}m)"
+        layer = QgsVectorLayer(f"LineString?crs={crs}", name, "memory")
+        pr = layer.dataProvider()
+        pr.addAttributes(
+            [
+                QgsField("no", QVariant.Int),
+                QgsField("distance", QVariant.Double, "m", 10, 2),
+                QgsField("min_elev", QVariant.Double, "m", 10, 2),
+                QgsField("max_elev", QVariant.Double, "m", 10, 2),
+                QgsField("date", QVariant.String),
+                QgsField("dem_id", QVariant.String),
+                QgsField("samples", QVariant.Int),
+                QgsField("r", QVariant.Int),
+                QgsField("g", QVariant.Int),
+                QgsField("b", QVariant.Int),
+            ]
+        )
+        layer.updateFields()
+
+        f = QgsFeature(layer.fields())
+        f.setGeometry(QgsGeometry.fromPolylineXY([start, end]))
+        f.setAttributes(
+            [
+                int(no),
+                float(total_distance),
+                float(min_elev),
+                float(max_elev),
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                (dem_layer.id() if dem_layer is not None else ""),
+                int(num_samples or 0),
+                int(color.red()),
+                int(color.green()),
+                int(color.blue()),
+            ]
+        )
+        pr.addFeatures([f])
+        layer.updateExtents()
+
+        # Fixed color for this layer.
+        try:
+            symbol = QgsLineSymbol.createSimple(
+                {
+                    "color": f"{int(color.red())},{int(color.green())},{int(color.blue())},220",
+                    "width": "1.6",
+                }
+            )
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        except Exception:
+            pass
+
+        try:
+            layer.setCustomProperty(PROFILE_KIND_PROP, PROFILE_KIND_SINGLE)
+        except Exception:
+            pass
+
+        project = QgsProject.instance()
+        sub = self._ensure_single_group()
+
+        try:
+            self._ignore_current_layer_changed = True
+            project.addMapLayer(layer, False)
+            sub.insertLayer(0, layer)
+        finally:
+            self._ignore_current_layer_changed = False
+
+        return layer
+
     def get_or_create_profile_layer(self):
         """Get or create a memory layer to store profile lines"""
         layers = QgsProject.instance().mapLayersByName(PROFILE_LAYER_NAME)
@@ -1019,6 +1189,22 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         finally:
             self._ignore_selection_changed = False
 
+        # Optional: also create a dedicated layer for this profile (so users can click the layer to reopen).
+        try:
+            self._create_single_profile_layer(
+                no=int(next_no),
+                total_distance=float(total_distance),
+                min_elev=float(min(elevs)),
+                max_elev=float(max(elevs)),
+                start=self.points[0],
+                end=self.points[1],
+                dem_layer=dem_layer,
+                num_samples=int(num_samples or 0),
+                color=color,
+            )
+        except Exception:
+            pass
+
         return color
     
     def update_stats(self):
@@ -1109,8 +1295,14 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._profile_layer.selectionChanged.disconnect(self._on_profile_layer_selection_changed)
         except Exception:
             pass
+        try:
+            if self._layer_tree_view is not None:
+                self._layer_tree_view.currentLayerChanged.disconnect(self._on_current_layer_changed)
+        except Exception:
+            pass
         self._profile_layer = None
         self._profile_layer_id = None
+        self._layer_tree_view = None
         self._cleanup()
      
     def _cleanup(self):
