@@ -12,6 +12,7 @@ DEM 기반 이동 비용 모델을 이용해 유적(포인트/폴리곤) 간 최
 주의: 실제 도로/하천/토지피복을 알지 못하며, DEM 경사 기반 이동 비용만 고려합니다.
 """
 
+import heapq
 import math
 import os
 import threading
@@ -184,6 +185,95 @@ class _UnionFind:
             self.parent[rb] = ra
             self.rank[ra] += 1
         return True
+
+
+def _sna_dijkstra_weighted(*, start: int, adj: List[List[Tuple[int, float]]]) -> List[float]:
+    n = int(len(adj))
+    dist = [math.inf] * n
+    s = int(start)
+    if not (0 <= s < n):
+        return dist
+    dist[s] = 0.0
+    heap: List[Tuple[float, int]] = [(0.0, s)]
+    eps = 1e-12
+    while heap:
+        dv, v = heapq.heappop(heap)
+        if dv > dist[v] + eps:
+            continue
+        for w, weight in adj[v]:
+            try:
+                ww = float(weight)
+            except Exception:
+                continue
+            if not math.isfinite(ww) or ww <= 0:
+                continue
+            nd = dv + ww
+            if nd < dist[w] - eps:
+                dist[w] = nd
+                heapq.heappush(heap, (nd, int(w)))
+    return dist
+
+
+def _sna_closeness_centrality_weighted(*, n: int, adj: List[List[Tuple[int, float]]]) -> List[float]:
+    out = [0.0] * int(n)
+    for s in range(int(n)):
+        dist = _sna_dijkstra_weighted(start=s, adj=adj)
+        reachable = [d for d in dist if 0.0 < float(d) < math.inf]
+        if not reachable:
+            out[s] = 0.0
+        else:
+            out[s] = float(len(reachable)) / float(sum(reachable))
+    return out
+
+
+def _sna_betweenness_centrality_weighted(*, n: int, adj: List[List[Tuple[int, float]]]) -> List[float]:
+    """Brandes betweenness for weighted undirected graphs (no external deps)."""
+    bc = [0.0] * int(n)
+    eps = 1e-12
+    for s in range(int(n)):
+        stack: List[int] = []
+        pred: List[List[int]] = [[] for _ in range(int(n))]
+        sigma = [0.0] * int(n)
+        sigma[s] = 1.0
+        dist = [math.inf] * int(n)
+        dist[s] = 0.0
+
+        heap: List[Tuple[float, int]] = [(0.0, int(s))]
+        while heap:
+            dv, v = heapq.heappop(heap)
+            if dv > dist[v] + eps:
+                continue
+            stack.append(int(v))
+            for w, weight in adj[v]:
+                try:
+                    ww = float(weight)
+                except Exception:
+                    continue
+                if not math.isfinite(ww) or ww <= 0:
+                    continue
+                nd = dv + ww
+                if nd < dist[w] - eps:
+                    dist[w] = nd
+                    heapq.heappush(heap, (nd, int(w)))
+                    sigma[w] = sigma[v]
+                    pred[w] = [int(v)]
+                elif abs(nd - dist[w]) <= eps:
+                    sigma[w] += sigma[v]
+                    pred[w].append(int(v))
+
+        delta = [0.0] * int(n)
+        while stack:
+            w = stack.pop()
+            for v in pred[w]:
+                if sigma[w] > 0:
+                    delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w])
+            if w != s:
+                bc[w] += delta[w]
+
+    # Undirected normalization: each shortest path counted twice.
+    for i in range(int(n)):
+        bc[i] = bc[i] * 0.5
+    return bc
 
 
 class CostNetworkWorker(QgsTask):
@@ -1035,6 +1125,12 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+        # Social Network Analysis (SNA) options (compact; details via tooltips).
+        try:
+            self._init_sna_controls()
+        except Exception:
+            pass
+
         try:
             plugin_dir = os.path.dirname(os.path.dirname(__file__))
             network_icon = None
@@ -1205,6 +1301,94 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             layout.insertWidget(0, scroll, 1)
         except Exception:
             layout.insertWidget(0, scroll)
+
+    def _init_sna_controls(self):
+        """Inject compact SNA options into the existing UI (no .ui edits)."""
+
+        layout = getattr(self, "gridLayout_Network", None)
+        if layout is None:
+            return
+
+        # Avoid double-inserting if dialog is re-used.
+        if getattr(self, "groupSna", None) is not None:
+            return
+
+        group = QtWidgets.QGroupBox("SNA (Social Network Analysis)")
+        group.setObjectName("groupSna")
+        self.groupSna = group
+
+        v = QtWidgets.QVBoxLayout(group)
+        v.setContentsMargins(6, 4, 6, 4)
+        v.setSpacing(2)
+
+        self.chkSnaEnable = QtWidgets.QCheckBox("SNA 지표 계산(노드 속성 추가)")
+        self.chkSnaEnable.setChecked(True)
+        self.chkSnaEnable.setToolTip(
+            "네트워크를 '선 몇 개'가 아니라, 각 노드의 구조적 역할로 해석할 수 있게 지표를 계산합니다.\n"
+            "- degree: 연결 수\n"
+            "- component/comp_size: 연결된 덩어리(컴포넌트)와 크기\n"
+            "- (선택) closeness/betweenness: 가중치(시간/에너지) 기반 중심성(느릴 수 있음)\n\n"
+            "Ref: Wasserman & Faust (1994); Freeman (1979); Brandes (2001)"
+        )
+        v.addWidget(self.chkSnaEnable)
+
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        self.chkSnaCloseness = QtWidgets.QCheckBox("closeness(느림)")
+        self.chkSnaCloseness.setChecked(False)
+        self.chkSnaCloseness.setToolTip(
+            "근접 중심성(closeness): 다른 노드까지의 최단 비용 합이 작을수록 값이 커집니다.\n"
+            "가중치(시간/에너지) 기반으로 계산하며, 노드 수가 크면 느릴 수 있습니다.\n"
+            "Ref: Freeman (1979)"
+        )
+        row.addWidget(self.chkSnaCloseness)
+
+        self.chkSnaBetweenness = QtWidgets.QCheckBox("betweenness(매우 느림)")
+        self.chkSnaBetweenness.setChecked(False)
+        self.chkSnaBetweenness.setToolTip(
+            "매개 중심성(betweenness): 다른 노드 쌍의 최단 비용 경로를 '중개'하는 정도입니다.\n"
+            "가중치(시간/에너지) 기반이며, 큰 데이터에서는 자동으로 생략될 수 있습니다.\n"
+            "Ref: Freeman (1979); Brandes (2001)"
+        )
+        row.addWidget(self.chkSnaBetweenness)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        hint = QtWidgets.QLabel("※ closeness/betweenness는 유적 수가 많으면 자동 생략될 수 있습니다.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#666; font-size:8pt;")
+        v.addWidget(hint)
+
+        def _sync_enabled(on: bool):
+            self.chkSnaCloseness.setEnabled(bool(on))
+            self.chkSnaBetweenness.setEnabled(bool(on))
+
+        try:
+            self.chkSnaEnable.toggled.connect(_sync_enabled)
+        except Exception:
+            pass
+        _sync_enabled(self.chkSnaEnable.isChecked())
+
+        # Place it near the bottom of the Network group, just above the long help text if present.
+        help_lbl = getattr(self, "lblNetworkHelp", None)
+        if help_lbl is not None:
+            try:
+                idx = int(layout.indexOf(help_lbl))
+                if idx >= 0:
+                    r, c, rs, cs = layout.getItemPosition(idx)
+                    layout.removeWidget(help_lbl)
+                    layout.addWidget(group, r, 0, 1, 3)
+                    layout.addWidget(help_lbl, r + 1, 0, 1, 3)
+                    return
+            except Exception:
+                pass
+
+        try:
+            layout.addWidget(group, int(layout.rowCount()), 0, 1, 3)
+        except Exception:
+            layout.addWidget(group)
 
     def _apply_help_texts(self):
         # High-level description (keep it short; details go into tooltips)
@@ -1865,17 +2049,167 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         run_group = parent_group.insertGroup(0, group_name)
         run_group.setExpanded(False)
 
+        nodes = res.nodes or []
+        edges = res.edges or []
+
+        # SNA (optional): compute node metrics from the final edge set.
+        do_sna = False
+        do_close = False
+        do_betw = False
+        deg: List[int] = [0] * int(len(nodes))
+        comp_id: List[int] = [0] * int(len(nodes))
+        comp_size: List[int] = [1] * int(len(nodes))
+        closeness: Optional[List[float]] = None
+        betweenness: Optional[List[float]] = None
+        try:
+            do_sna = bool(getattr(getattr(self, "chkSnaEnable", None), "isChecked", lambda: False)())
+            do_close = do_sna and bool(getattr(getattr(self, "chkSnaCloseness", None), "isChecked", lambda: False)())
+            do_betw = do_sna and bool(getattr(getattr(self, "chkSnaBetweenness", None), "isChecked", lambda: False)())
+        except Exception:
+            do_sna = False
+            do_close = False
+            do_betw = False
+
+        if do_sna and len(nodes) >= 1:
+            try:
+                n_nodes = int(len(nodes))
+                edge_weights: Dict[Tuple[int, int], float] = {}
+                for e in edges:
+                    try:
+                        a = int(e.a)
+                        b = int(e.b)
+                    except Exception:
+                        continue
+                    if a == b:
+                        continue
+                    if not (0 <= a < n_nodes and 0 <= b < n_nodes):
+                        continue
+
+                    w = None
+                    if res.cost_mode == COST_ENERGY:
+                        w = e.energy_kcal_sym
+                    else:
+                        w = e.time_min_sym
+                    try:
+                        w = float(w) if w is not None else None
+                    except Exception:
+                        w = None
+                    if w is None or (not math.isfinite(float(w))) or float(w) <= 0:
+                        try:
+                            w = float(e.dist_m)
+                        except Exception:
+                            w = 1.0
+
+                    key = (a, b) if a < b else (b, a)
+                    prev = edge_weights.get(key)
+                    if prev is None or float(w) < float(prev):
+                        edge_weights[key] = float(w)
+
+                pairs = set(edge_weights.keys())
+                deg = [0] * int(n_nodes)
+                uf = _UnionFind(int(n_nodes))
+                for a, b in pairs:
+                    deg[a] += 1
+                    deg[b] += 1
+                    uf.union(a, b)
+
+                rep_to_comp: Dict[int, int] = {}
+                comp_id = [0] * int(n_nodes)
+                for i in range(int(n_nodes)):
+                    rep = int(uf.find(i))
+                    cid = rep_to_comp.get(rep)
+                    if cid is None:
+                        cid = int(len(rep_to_comp))
+                        rep_to_comp[rep] = cid
+                    comp_id[i] = int(cid)
+
+                comp_sizes = [0] * max(1, int(len(rep_to_comp)))
+                for cid in comp_id:
+                    comp_sizes[int(cid)] += 1
+                comp_size = [int(comp_sizes[int(cid)]) for cid in comp_id]
+
+                if int(n_nodes) > 500 and (do_close or do_betw):
+                    log_message(
+                        f"CostNetwork: SNA closeness/betweenness skipped (n={int(n_nodes)} > 500)",
+                        level=Qgis.Warning,
+                    )
+                    do_close = False
+                    do_betw = False
+
+                if do_close or do_betw:
+                    adj: List[List[Tuple[int, float]]] = [[] for _ in range(int(n_nodes))]
+                    for (a, b), wv in edge_weights.items():
+                        wv = float(wv)
+                        if not math.isfinite(wv) or wv <= 0:
+                            continue
+                        adj[a].append((b, wv))
+                        adj[b].append((a, wv))
+
+                    if do_close:
+                        closeness = _sna_closeness_centrality_weighted(n=int(n_nodes), adj=adj)
+                    if do_betw:
+                        betweenness = _sna_betweenness_centrality_weighted(n=int(n_nodes), adj=adj)
+            except Exception as e:
+                log_message(f"CostNetwork: SNA compute error: {e}", level=Qgis.Warning)
+                do_sna = False
+                do_close = False
+                do_betw = False
+
         # Nodes
         pt_layer = QgsVectorLayer(f"Point?crs={res.dem_authid}", "유적 노드 (Sites)", "memory")
         pr = pt_layer.dataProvider()
-        pr.addAttributes([QgsField("fid", QVariant.String), QgsField("name", QVariant.String), QgsField("is_hub", QVariant.Int)])
+        fields = [QgsField("fid", QVariant.String), QgsField("name", QVariant.String), QgsField("is_hub", QVariant.Int)]
+        if do_sna:
+            fields.extend(
+                [
+                    QgsField("degree", QVariant.Int),
+                    QgsField("component", QVariant.Int),
+                    QgsField("comp_size", QVariant.Int),
+                ]
+            )
+            if do_close:
+                fields.append(QgsField("closeness", QVariant.Double))
+            if do_betw:
+                fields.append(QgsField("betweenness", QVariant.Double))
+        pr.addAttributes(fields)
         pt_layer.updateFields()
 
+        try:
+            if do_sna:
+                def _set_alias(field_name: str, alias: str):
+                    idx = int(pt_layer.fields().indexFromName(field_name))
+                    if idx >= 0:
+                        pt_layer.setFieldAlias(idx, alias)
+
+                _set_alias("degree", "연결 수(degree)")
+                _set_alias("component", "컴포넌트ID(component)")
+                _set_alias("comp_size", "컴포넌트 크기(comp_size)")
+                if do_close:
+                    _set_alias("closeness", "근접 중심성(closeness)")
+                if do_betw:
+                    _set_alias("betweenness", "매개 중심성(betweenness)")
+        except Exception:
+            pass
+
         feats = []
-        for n in (res.nodes or []):
+        for i, n in enumerate(nodes):
             f = QgsFeature(pt_layer.fields())
             f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(float(n.x), float(n.y))))
-            f.setAttributes([str(n.fid), str(n.name), 1 if n.is_hub else 0])
+            attrs: List[object] = [str(n.fid), str(n.name), 1 if n.is_hub else 0]
+            if do_sna:
+                attrs.extend([int(deg[i]) if i < len(deg) else 0, int(comp_id[i]) if i < len(comp_id) else 0])
+                attrs.append(int(comp_size[i]) if i < len(comp_size) else 1)
+                if do_close:
+                    try:
+                        attrs.append(float(closeness[i]) if closeness is not None else 0.0)
+                    except Exception:
+                        attrs.append(0.0)
+                if do_betw:
+                    try:
+                        attrs.append(float(betweenness[i]) if betweenness is not None else 0.0)
+                    except Exception:
+                        attrs.append(0.0)
+            f.setAttributes(attrs)
             feats.append(f)
         pr.addFeatures(feats)
         pt_layer.updateExtents()
@@ -1886,7 +2220,7 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         sym_hub = QgsMarkerSymbol.createSimple(
             {"name": "star", "color": "255,200,0,230", "outline_color": "120,80,0,200", "size": "3.4"}
         )
-        any_hub = any(bool(n.is_hub) for n in (res.nodes or []))
+        any_hub = any(bool(n.is_hub) for n in nodes)
         pt_layer.setRenderer(
             QgsCategorizedSymbolRenderer(
                 "is_hub",
@@ -1917,9 +2251,8 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         )
         line_layer.updateFields()
 
-        nodes = res.nodes or []
         feats = []
-        for e in (res.edges or []):
+        for e in edges:
             if not e.coords or len(e.coords) < 2:
                 continue
             a = int(e.a)

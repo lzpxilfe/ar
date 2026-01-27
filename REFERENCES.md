@@ -53,6 +53,19 @@
 
 > Prim, R.C. (1957). "Shortest connection network and some generalizations." *Bell System Technical Journal*, 36(6), pp. 1389–1401.
 
+## 사회 네트워크 분석 (SNA: Social Network Analysis)
+
+**중심성(centrality) 개념:**
+> Freeman, L.C. (1979). "Centrality in social networks: Conceptual clarification." *Social Networks*, 1(3), pp. 215–239.
+
+**SNA 방법론(개론/표준 참고서):**
+> Wasserman, S., & Faust, K. (1994). *Social Network Analysis: Methods and Applications*. Cambridge University Press.
+
+> Newman, M.E.J. (2010). *Networks: An Introduction*. Oxford University Press.
+
+**Betweenness 계산(Brandes 알고리즘):**
+> Brandes, U. (2001). "A faster algorithm for betweenness centrality." *Journal of Mathematical Sociology*, 25(2), pp. 163–177.
+
 ## 근접성 네트워크 (PPA: Proximal Point Analysis)
 
 > Terrell, J.E. (1977). "Human Biogeography in the Solomon Islands." *Fieldiana Anthropology*, 68(1), pp. 1–47.
