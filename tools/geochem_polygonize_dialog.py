@@ -617,9 +617,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
             # 4) Polygonize -> dissolve
             log_message("GeoChem: polygonize…", level=Qgis.Info)
-            poly_layer_name = f"{preset.key}_poly_{run_id}"
             poly_path = os.path.join(self._tmp_dir, f"{preset.key}_poly_{run_id}.gpkg")
-            poly_uri = f"{poly_path}|layername={poly_layer_name}"
             try:
                 if os.path.exists(poly_path):
                     os.remove(poly_path)
@@ -633,7 +631,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                     "BAND": 1,
                     "FIELD": "class_id",
                     "EIGHT_CONNECTEDNESS": True,
-                    "OUTPUT": poly_uri,
+                    "OUTPUT": poly_path,
                 },
             ).get("OUTPUT")
 
@@ -644,10 +642,47 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 poly = poly_out
             else:
                 out_str = str(poly_out) if poly_out is not None else ""
-                uri_candidates = [out_str, poly_uri, poly_path]
+                out_path = (out_str.split("|", 1)[0] or "").strip()
+                if out_path:
+                    poly_path = out_path
+
+                try:
+                    exists = os.path.exists(poly_path)
+                    size = os.path.getsize(poly_path) if exists else 0
+                    log_message(f"GeoChem: polygonize file exists={exists} size={size}", level=Qgis.Info)
+                except Exception:
+                    pass
+
+                # Try to discover the layer name from the GeoPackage and load it reliably.
+                layer_name = None
+                try:
+                    vds = gdal.OpenEx(poly_path, gdal.OF_VECTOR)
+                    if vds is not None:
+                        names = []
+                        try:
+                            n = int(vds.GetLayerCount() or 0)
+                        except Exception:
+                            n = 0
+                        for i in range(n):
+                            try:
+                                lyr = vds.GetLayerByIndex(i)
+                                if lyr is not None:
+                                    names.append(str(lyr.GetName()))
+                            except Exception:
+                                continue
+                        vds = None
+                        log_message(f"GeoChem: gpkg layers={names}", level=Qgis.Info)
+                        if names:
+                            layer_name = names[0]
+                except Exception:
+                    pass
+
+                uri_candidates = []
+                if layer_name:
+                    uri_candidates.append(f"{poly_path}|layername={layer_name}")
+                uri_candidates.append(poly_path)
+
                 for uri in uri_candidates:
-                    if not uri or uri.strip().lower() in {"memory:", "temporary_output"}:
-                        continue
                     try:
                         cand = QgsVectorLayer(uri, f"{preset.label} polygons", "ogr")
                         if cand.isValid():
