@@ -224,9 +224,15 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         try:
             plugin_dir = os.path.dirname(os.path.dirname(__file__))
-            fallback_icon = os.path.join(plugin_dir, "terrain_icon.png")
-            if os.path.exists(fallback_icon):
-                self.setWindowIcon(QIcon(fallback_icon))
+            icon_candidates = [
+                os.path.join(plugin_dir, "tools", "geochem.png"),
+                os.path.join(plugin_dir, "geochem.png"),
+                os.path.join(plugin_dir, "terrain_icon.png"),
+            ]
+            for p in icon_candidates:
+                if os.path.exists(p):
+                    self.setWindowIcon(QIcon(p))
+                    break
         except Exception:
             pass
 

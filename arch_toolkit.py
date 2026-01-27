@@ -76,9 +76,17 @@ class ArchToolkit:
             self.terrain_action.triggered.connect(self.run_terrain_tool)
 
             # GeoChem (WMS RGB -> class polygons)
-            geochem_icon = os.path.join(plugin_dir, 'terrain_icon.png')
+            geochem_icon = None
+            for icon_path in (
+                os.path.join(plugin_dir, "tools", "geochem.png"),
+                os.path.join(plugin_dir, "geochem.png"),
+                os.path.join(plugin_dir, "terrain_icon.png"),
+            ):
+                if os.path.exists(icon_path):
+                    geochem_icon = icon_path
+                    break
             self.geochem_action = QAction(
-                QIcon(geochem_icon),
+                QIcon(geochem_icon or ""),
                 u"지구화학도 폴리곤화 (GeoChem WMS → Polygons)",
                 self.iface.mainWindow(),
             )
