@@ -1005,6 +1005,20 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         layer.updateExtents()
         layer.triggerRepaint()
 
+        # Highlight the newly added line so users can immediately see which line matches the current chart.
+        try:
+            self._ignore_selection_changed = True
+            try:
+                layer.removeSelection()
+            except Exception:
+                pass
+            try:
+                layer.selectByExpression(f"\"no\" = {int(next_no)}")
+            except Exception:
+                pass
+        finally:
+            self._ignore_selection_changed = False
+
         return color
     
     def update_stats(self):
