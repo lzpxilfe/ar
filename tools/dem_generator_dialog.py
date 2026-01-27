@@ -66,6 +66,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
     # DXF Layer definitions for Korean digital topographic maps
     # NOTE: Only essential contour lines default=True to avoid bridges/structures
     DXF_LAYER_INFO = {
+        # --- 현행 수치지형도(일반적으로 많이 쓰이는 F*** 코드) ---
         'F0017110': {'name': '주곡선', 'desc': '기본 등고선 (5m 간격)', 'category': '등고선', 'default': True},
         'F0017111': {'name': '계곡선', 'desc': '굵은 등고선 (25m 간격)', 'category': '등고선', 'default': True},
         'F0017112': {'name': '간곡선', 'desc': '완만 지형 파선 (선택적)', 'category': '등고선', 'default': False},
@@ -78,6 +79,102 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         'E0011111': {'name': '하천중심선', 'desc': '하천 물길 (고도값 없을 수 있음)', 'category': '수계', 'default': False},
         'E0011112': {'name': '하천경계선', 'desc': '강물/지면 경계', 'category': '수계', 'default': False},
         'E0041311': {'name': '호수/저수지', 'desc': '수면 경계', 'category': '수계', 'default': False}
+        ,
+        # --- 구(2000년대 등) 수치지형도: 숫자 레이어 코드 ---
+        # 주로 71XX(등고선), 7217(표고점), 73XX(기준점/수치) 형태로 등장합니다.
+        # (예) "Layer" IN ('7111','7114','7217' ...)
+        "7111": {
+            "name": "주곡선(구)",
+            "desc": "구 수치지도(숫자 코드) 등고선. (현행 예: CAA002)",
+            "category": "구수치(등고선)",
+            "default": False,
+        },
+        "7114": {
+            "name": "계곡선(구)",
+            "desc": "구 수치지도(숫자 코드) 등고선(계곡선). (현행 예: CAA001)",
+            "category": "구수치(등고선)",
+            "default": False,
+        },
+        "7217": {
+            "name": "표고점(구)",
+            "desc": "구 수치지도(숫자 코드) 표고점. (현행 예: CA002)",
+            "category": "구수치(표고점)",
+            "default": False,
+        },
+        "7132": {
+            "name": "표고점수치(구)",
+            "desc": "구 수치지도(숫자 코드) 표고점 수치(텍스트/표기). DEM 보간에는 보통 불필요",
+            "category": "구수치(텍스트)",
+            "default": False,
+        },
+        "2121": {
+            "name": "해안선(육지)(구)",
+            "desc": "구 수치지도(숫자 코드) 해안선(육지). 해안/수면을 0m 기준으로 쓰고 싶을 때만 선택(주의)",
+            "category": "구수치(해안)",
+            "default": False,
+        },
+        "2122": {
+            "name": "해안선(섬)(구)",
+            "desc": "구 수치지도(숫자 코드) 해안선(섬). 해안/수면 처리를 위해 선택할 수 있음(주의)",
+            "category": "구수치(해안)",
+            "default": False,
+        },
+        # --- 일부 데이터셋에서 쓰이는 영문 코드(참고용) ---
+        "CAA001": {
+            "name": "등고선(계곡선)",
+            "desc": "영문 코드 등고선(계곡선). (구 코드 예: 7114)",
+            "category": "현행(영문코드)",
+            "default": False,
+        },
+        "CAA002": {
+            "name": "등고선(주곡선)",
+            "desc": "영문 코드 등고선(주곡선). (구 코드 예: 7111)",
+            "category": "현행(영문코드)",
+            "default": False,
+        },
+        "CA002": {
+            "name": "표고점",
+            "desc": "영문 코드 표고점. (구 코드 예: 7217)",
+            "category": "현행(영문코드)",
+            "default": False,
+        },
+        "CA0021": {
+            "name": "표고점수치",
+            "desc": "영문 코드 표고점수치(표기). DEM 보간에는 보통 불필요",
+            "category": "현행(영문코드)",
+            "default": False,
+        },
+    }
+
+    DXF_LAYER_PRESETS = {
+        "modern_f": {
+            "label": "현행 수치지형도 (F*** 레이어)",
+            "codes": ["F0017110", "F0017111", "F0027111"],
+            "tooltip": (
+                "현행 수치지형도(DXF)에서 많이 보이는 F*** 레이어 프리셋입니다.\n"
+                "- 등고선(주곡선/계곡선) + 표고점(지형)만 기본 선택\n"
+                "- 교량/구조물 표고점(F0027217)은 기본 제외"
+            ),
+        },
+        "legacy_numeric": {
+            "label": "구 수치지형도 (숫자 레이어: 71XX/72XX/73XX)",
+            "codes": ["7111", "7114", "7217", "2121", "2122"],
+            "tooltip": (
+                "구(2000년대 등) 수치지형도에서 레이어 이름이 숫자로 들어오는 경우가 있습니다.\n"
+                "예) \"Layer\" IN ('7111','7114','7217','2121','2122')\n"
+                "- 71XX: 등고선, 7217: 표고점\n"
+                "- 2121/2122(해안선)은 필요할 때만: 해안/수면을 0m 기준으로 강제할 수 있습니다(주의)"
+            ),
+        },
+        "modern_ca": {
+            "label": "현행 수치지형도 (영문 코드: CA*/CAA*)",
+            "codes": ["CAA001", "CAA002", "CA002"],
+            "tooltip": (
+                "일부 데이터셋은 등고선/표고점 레이어가 CAA001/CAA002/CA002 같은 영문 코드로 들어옵니다.\n"
+                "- 등고선 + 표고점만 기본 선택\n"
+                "- (필요 시) CA0021(표고점수치)은 수치 표기라 DEM 보간에는 보통 불필요"
+            ),
+        },
     }
 
     
@@ -92,6 +189,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         self.populate_scales()
         self.populate_interpolation_methods()
         self.setup_layer_table()
+        self.setup_layer_presets()
         self.setup_layer_list()
         
         # Connect signals
@@ -189,6 +287,79 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             self.tblLayers.setItem(row, 3, desc_item)
             
             row += 1
+
+    def setup_layer_presets(self):
+        """Add a compact 'layer preset' selector without changing the .ui file."""
+        try:
+            # horizontalLayout is defined in dem_generator_dialog_base.ui (row with SelectAll/Deselect/Load DXF).
+            layout = getattr(self, "horizontalLayout", None)
+            if layout is None:
+                return
+
+            self.lblLayerPreset = QtWidgets.QLabel("프리셋", self)
+            self.cmbLayerPreset = QtWidgets.QComboBox(self)
+            self.cmbLayerPreset.setMinimumWidth(220)
+
+            # Add presets
+            self.cmbLayerPreset.addItem("프리셋 선택…", "")
+            for key, item in self.DXF_LAYER_PRESETS.items():
+                self.cmbLayerPreset.addItem(item.get("label", key), key)
+                idx = self.cmbLayerPreset.count() - 1
+                tip = item.get("tooltip", "")
+                if tip:
+                    self.cmbLayerPreset.setItemData(idx, tip, Qt.ToolTipRole)
+
+            def _sync_tip():
+                try:
+                    self.cmbLayerPreset.setToolTip(
+                        str(self.cmbLayerPreset.itemData(self.cmbLayerPreset.currentIndex(), Qt.ToolTipRole) or "")
+                    )
+                except Exception:
+                    pass
+
+            self.cmbLayerPreset.currentIndexChanged.connect(self.on_layer_preset_changed)
+            self.cmbLayerPreset.currentIndexChanged.connect(_sync_tip)
+            _sync_tip()
+
+            # Insert after "선택 해제" (keeps the same row height)
+            try:
+                idx = int(layout.indexOf(self.btnDeselectAll))
+                if idx >= 0:
+                    layout.insertWidget(idx + 1, self.lblLayerPreset)
+                    layout.insertWidget(idx + 2, self.cmbLayerPreset)
+                else:
+                    layout.insertWidget(0, self.lblLayerPreset)
+                    layout.insertWidget(1, self.cmbLayerPreset)
+            except Exception:
+                try:
+                    layout.insertWidget(0, self.lblLayerPreset)
+                    layout.insertWidget(1, self.cmbLayerPreset)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def on_layer_preset_changed(self):
+        key = ""
+        try:
+            key = str(self.cmbLayerPreset.currentData() or "")
+        except Exception:
+            key = ""
+
+        if not key:
+            return
+
+        preset = self.DXF_LAYER_PRESETS.get(key) or {}
+        codes = set(preset.get("codes") or [])
+        if not codes:
+            return
+
+        # Apply: uncheck everything then check preset codes.
+        for code, checkbox in (self.layer_checkboxes or {}).items():
+            try:
+                checkbox.setChecked(str(code) in codes)
+            except Exception:
+                continue
     
     def select_all_layers(self):
         for checkbox in self.layer_checkboxes.values():
