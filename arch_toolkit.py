@@ -32,6 +32,7 @@ class ArchToolkit:
         self.viewshed_dlg = None # [v1.6.20] Persistent reference for marker cleanup
         self.cost_dlg = None  # Persistent reference for temp/preview cleanup
         self.profile_dlg = None  # Persistent reference for multi-profile selection/view
+        self.geochem_dlg = None  # Optional: keep reference if we later add temp cleanup
 
     def initGui(self):
         try:
@@ -73,7 +74,16 @@ class ArchToolkit:
             terrain_icon = os.path.join(plugin_dir, 'terrain_icon.png')
             self.terrain_action = QAction(QIcon(terrain_icon), u"지형 분석 (Terrain Analysis)", self.iface.mainWindow())
             self.terrain_action.triggered.connect(self.run_terrain_tool)
-            
+
+            # GeoChem (WMS RGB -> class polygons)
+            geochem_icon = os.path.join(plugin_dir, 'terrain_icon.png')
+            self.geochem_action = QAction(
+                QIcon(geochem_icon),
+                u"지구화학도 폴리곤화 (GeoChem WMS → Polygons)",
+                self.iface.mainWindow(),
+            )
+            self.geochem_action.triggered.connect(self.run_geochem_tool)
+             
             # Terrain Profile
             profile_icon = os.path.join(plugin_dir, 'profile_icon.png')
             self.profile_action = QAction(QIcon(profile_icon), u"지형 단면 (Terrain Profile)", self.iface.mainWindow())
@@ -148,6 +158,7 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.contour_action)
             self.iface.addPluginToMenu(self.menu_name, self.cad_overlap_action)
             self.iface.addPluginToMenu(self.menu_name, self.terrain_action)
+            self.iface.addPluginToMenu(self.menu_name, self.geochem_action)
             self.iface.addPluginToMenu(self.menu_name, self.profile_action)
             self.iface.addPluginToMenu(self.menu_name, self.cost_action)
             self.iface.addPluginToMenu(self.menu_name, self.network_action)
@@ -171,6 +182,7 @@ class ArchToolkit:
             self.tool_menu.addAction(self.cad_overlap_action)
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.terrain_action)
+            self.tool_menu.addAction(self.geochem_action)
             self.tool_menu.addAction(self.profile_action)
             self.tool_menu.addAction(self.viewshed_action)
             self.tool_menu.addAction(self.cost_action)
@@ -192,7 +204,7 @@ class ArchToolkit:
             
             # Keep references for cleanup
             self.actions = [
-                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action,
+                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action, self.geochem_action,
                 self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.viewshed_action,
                 self.main_action
             ]
@@ -313,6 +325,16 @@ class ArchToolkit:
             self.profile_dlg.activateWindow()
         except Exception as e:
             log_exception("Terrain profile tool error", e)
+            QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
+
+    def run_geochem_tool(self):
+        try:
+            from .tools.geochem_polygonize_dialog import GeoChemPolygonizeDialog
+
+            dlg = GeoChemPolygonizeDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            log_exception("GeoChem tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_styling_tool(self):
