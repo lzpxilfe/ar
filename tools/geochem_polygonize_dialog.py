@@ -56,7 +56,7 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapLayerComboBox
 
-from .utils import log_message, push_message, restore_ui_focus
+from .utils import log_exception, log_message, push_message, restore_ui_focus
 from .live_log_dialog import ensure_live_log_dialog
 
 
@@ -259,10 +259,10 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         grid.addWidget(QtWidgets.QLabel("RGB 래스터(WMS)"), 0, 0)
         grid.addWidget(self.cmbRaster, 0, 1, 1, 2)
-        grid.addWidget(QtWidgets.QLabel("AOI 폴리곤"), 1, 0)
+        grid.addWidget(QtWidgets.QLabel("조사지역 폴리곤"), 1, 0)
         grid.addWidget(self.cmbAoi, 1, 1, 1, 2)
 
-        self.chkSelectedOnly = QtWidgets.QCheckBox("AOI 선택 피처만 사용")
+        self.chkSelectedOnly = QtWidgets.QCheckBox("조사지역 선택 피처만 사용")
         self.chkSelectedOnly.setChecked(False)
         grid.addWidget(self.chkSelectedOnly, 2, 0, 1, 3)
 
@@ -299,7 +299,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.spinExtentBuffer.setMaximum(10000000.0)
         self.spinExtentBuffer.setSingleStep(100.0)
         self.spinExtentBuffer.setValue(0.0)
-        self.spinExtentBuffer.setToolTip("AOI 경계의 바깥쪽으로 버퍼(m)를 줍니다. 0이면 버퍼 없음.")
+        self.spinExtentBuffer.setToolTip("조사지역 경계(사각형)의 바깥쪽으로 버퍼(m)를 줍니다. 0이면 버퍼 없음.")
 
         self.chkDissolve = QtWidgets.QCheckBox("구간별로 합치기(dissolve)")
         self.chkDissolve.setChecked(True)
@@ -320,7 +320,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         grid2.addWidget(QtWidgets.QLabel("픽셀 크기(지도 단위/px)"), 0, 0)
         grid2.addWidget(self.spinPixelSize, 0, 1)
-        grid2.addWidget(QtWidgets.QLabel("AOI extent 버퍼(m)"), 0, 2)
+        grid2.addWidget(QtWidgets.QLabel("조사지역 경계(사각형) 버퍼(m)"), 0, 2)
         grid2.addWidget(self.spinExtentBuffer, 0, 3)
 
         grid2.addWidget(self.chkDissolve, 1, 0, 1, 2)
@@ -381,11 +381,11 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             restore_ui_focus(self)
             return
         if aoi is None or not isinstance(aoi, QgsVectorLayer):
-            push_message(self.iface, "오류", "AOI 폴리곤 레이어를 선택해주세요.", level=2, duration=7)
+            push_message(self.iface, "오류", "조사지역 폴리곤 레이어를 선택해주세요.", level=2, duration=7)
             restore_ui_focus(self)
             return
         if aoi.geometryType() != QgsWkbTypes.PolygonGeometry:
-            push_message(self.iface, "오류", "AOI는 폴리곤 레이어여야 합니다.", level=2, duration=7)
+            push_message(self.iface, "오류", "조사지역은 폴리곤 레이어여야 합니다.", level=2, duration=7)
             restore_ui_focus(self)
             return
 
@@ -402,13 +402,13 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         do_inpaint = bool(self.chkInpaint.isChecked())
         fill_dist = int(self.spinFillDist.value())
 
-        # AOI extent (bounding rectangle), optionally buffered.
+        # Survey area extent (bounding rectangle), optionally buffered.
         try:
             feats = aoi.selectedFeatures() if bool(self.chkSelectedOnly.isChecked()) else list(aoi.getFeatures())
         except Exception:
             feats = aoi.selectedFeatures() if bool(self.chkSelectedOnly.isChecked()) else []
         if not feats:
-            push_message(self.iface, "오류", "AOI 피처가 없습니다. (선택 또는 레이어 내용 확인)", level=2, duration=7)
+            push_message(self.iface, "오류", "조사지역 피처가 없습니다. (선택 또는 레이어 내용 확인)", level=2, duration=7)
             restore_ui_focus(self)
             return
 
@@ -419,7 +419,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 continue
             aoi_geom = g if aoi_geom is None else aoi_geom.combine(g)
         if aoi_geom is None or aoi_geom.isEmpty():
-            push_message(self.iface, "오류", "AOI 지오메트리를 만들 수 없습니다.", level=2, duration=7)
+            push_message(self.iface, "오류", "조사지역 지오메트리를 만들 수 없습니다.", level=2, duration=7)
             restore_ui_focus(self)
             return
 
@@ -428,7 +428,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         if buf > 0:
             extent.grow(buf)
 
-        # Transform AOI extent to raster CRS if needed.
+        # Transform survey-area extent to raster CRS if needed.
         try:
             if aoi.crs() != raster.crs():
                 ct = QgsCoordinateTransform(aoi.crs(), raster.crs(), QgsProject.instance())
@@ -437,7 +437,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             log_message(f"GeoChem: extent transform failed: {e}", level=Qgis.Warning)
 
         if extent.isEmpty() or extent.width() <= 0 or extent.height() <= 0:
-            push_message(self.iface, "오류", "AOI extent가 비어있습니다.", level=2, duration=7)
+            push_message(self.iface, "오류", "조사지역 경계(사각형)가 비어있습니다.", level=2, duration=7)
             restore_ui_focus(self)
             return
 
@@ -463,9 +463,13 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         rgb_path = os.path.join(self._tmp_dir, f"wms_rgb_{run_id}.tif")
         val_path = os.path.join(self._tmp_dir, f"{preset.key}_value_{run_id}.tif")
         cls_path = os.path.join(self._tmp_dir, f"{preset.key}_class_{run_id}.tif")
+        log_message(f"GeoChem: tmp={self._tmp_dir}", level=Qgis.Info)
+        log_message(f"GeoChem: out rgb={rgb_path}", level=Qgis.Info)
+        log_message(f"GeoChem: out val={val_path}", level=Qgis.Info)
+        log_message(f"GeoChem: out cls={cls_path}", level=Qgis.Info)
 
         try:
-            # 1) Export WMS RGB to GeoTIFF within AOI extent (rectangular).
+            # 1) Export WMS RGB to GeoTIFF within survey-area extent (rectangular).
             ok = self._export_raster_to_geotiff(raster=raster, out_path=rgb_path, extent=extent, width=width, height=height)
             if not ok:
                 push_message(self.iface, "오류", "WMS 래스터를 GeoTIFF로 저장하지 못했습니다.", level=2, duration=9)
@@ -581,19 +585,21 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             self._add_to_project(layer=poly, preset=preset, run_id=run_id, extent=extent)
             push_message(self.iface, "지구화학도 폴리곤화", "완료", level=0, duration=7)
         except Exception as e:
-            log_message(f"GeoChem error: {e}", level=Qgis.Critical)
-            push_message(self.iface, "오류", f"처리 실패: {e}", level=2, duration=10)
-        finally:
-            # Keep temp dir until dialog closes (useful for debugging), but remove if everything succeeded.
-            # If users need the intermediate rasters, we can add an option later.
+            log_exception("GeoChem error", e)
             try:
-                self._cleanup_tmp()
+                log_message(f"GeoChem: kept temp folder for debug: {self._tmp_dir}", level=Qgis.Warning)
             except Exception:
                 pass
+            push_message(self.iface, "오류", f"처리 실패: {e}", level=2, duration=10)
+        finally:
             restore_ui_focus(self)
 
     def _export_raster_to_geotiff(self, *, raster: QgsRasterLayer, out_path: str, extent: QgsRectangle, width: int, height: int) -> bool:
-        """Export the raster (including WMS) to a GeoTIFF using QGIS raster writer."""
+        """Export the raster (including WMS) to a GeoTIFF.
+
+        1) Try QGIS raster writer (fast, works for many providers).
+        2) Fallback to Processing GDAL warp (more robust for some WMS providers).
+        """
         try:
             from qgis.core import QgsRasterFileWriter, QgsRasterPipe
         except Exception:
@@ -605,7 +611,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             if not pipe.set(provider.clone()):
                 # Fallback: some providers may not support clone() cleanly.
                 if not pipe.set(provider):
-                    return False
+                    raise RuntimeError("pipe.set(provider) failed")
             writer = QgsRasterFileWriter(out_path)
             writer.setOutputFormat("GTiff")
             writer.setCreateOptions(["COMPRESS=LZW", "TILED=YES"])
@@ -613,10 +619,42 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             res = writer.writeRaster(pipe, int(width), int(height), extent, raster.crs(), ctx)
             if res != 0:
                 log_message(f"GeoChem: writeRaster returned {res}", level=Qgis.Warning)
-                return False
-            return True
+                raise RuntimeError(f"writeRaster failed ({res})")
+            if os.path.exists(out_path):
+                return True
         except Exception as e:
-            log_message(f"GeoChem: export failed: {e}", level=Qgis.Warning)
+            log_message(f"GeoChem: QGIS export failed, trying GDAL warp… ({e})", level=Qgis.Warning)
+
+        # Fallback: GDAL warp through Processing (more provider-compatible)
+        try:
+            extent_str = f"{extent.xMinimum()},{extent.xMaximum()},{extent.yMinimum()},{extent.yMaximum()}"
+            # Match the requested width/height via target resolution in layer CRS units.
+            px = max(extent.width() / max(1, int(width)), extent.height() / max(1, int(height)))
+            px = float(px) if px > 0 else None
+            processing.run(
+                "gdal:warpreproject",
+                {
+                    "INPUT": raster,
+                    "SOURCE_CRS": None,
+                    "TARGET_CRS": None,
+                    "RESAMPLING": 0,  # Nearest (preserve legend colors)
+                    "NODATA": None,
+                    "TARGET_RESOLUTION": px,
+                    "OPTIONS": "COMPRESS=LZW|TILED=YES",
+                    "DATA_TYPE": 0,
+                    "TARGET_EXTENT": extent_str,
+                    "TARGET_EXTENT_CRS": raster.crs().authid() if raster.crs() else None,
+                    "MULTITHREADING": False,
+                    "EXTRA": "",
+                    "OUTPUT": out_path,
+                },
+            )
+            if os.path.exists(out_path):
+                return True
+            log_message("GeoChem: GDAL warp completed but output missing", level=Qgis.Warning)
+            return False
+        except Exception as e:
+            log_message(f"GeoChem: GDAL warp export failed: {e}", level=Qgis.Warning)
             return False
 
     def _write_single_band_geotiff(
