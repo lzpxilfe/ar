@@ -11,6 +11,7 @@ Notes
 import heapq
 import math
 import os
+import threading
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -798,6 +799,7 @@ class CostSurfaceWorker(QgsTask):
         on_done,
     ):
         super().__init__("비용표면/최소비용경로 (Cost Surface / LCP)", QgsTask.CanCancel)
+        self._cancel_event = threading.Event()
         self.dem_source = dem_source
         self.dem_authid = dem_authid
         self.start_xy = start_xy
@@ -812,6 +814,23 @@ class CostSurfaceWorker(QgsTask):
         self.create_path = bool(create_path)
         self.on_done = on_done
         self.result_obj = CostTaskResult(ok=False)
+
+    def cancel(self):
+        # Avoid calling QgsTask.isCanceled() from worker thread (can be unstable on some setups).
+        try:
+            self._cancel_event.set()
+        except Exception:
+            pass
+        try:
+            return super().cancel()
+        except Exception:
+            return True
+
+    def _is_cancelled(self) -> bool:
+        try:
+            return bool(self._cancel_event.is_set())
+        except Exception:
+            return False
 
     def run(self):
         try:
@@ -921,7 +940,7 @@ class CostSurfaceWorker(QgsTask):
         end_rc = (e_row, e_col) if has_end else None
 
         def cancel_check():
-            return self.isCanceled()
+            return self._is_cancelled()
 
         def progress_cb(p):
             try:

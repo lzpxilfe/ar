@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 지형/경관 분석 툴킷 (Viewshed/LOS/Cost Surface/DEM/프로파일/지형지수)
-version=1.6.99
+version=1.6.100
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -38,7 +38,8 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.6.99 - 지적도 중첩 면적표: 조사지역 폴리곤 피처별로 결과 레이어 분리 옵션 추가
+changelog=1.6.100 - 안정성: 비용표면/최소비용 네트워크 작업 취소 처리 개선(드물게 발생하던 크래시 완화)
+  1.6.99 - 지적도 중첩 면적표: 조사지역 폴리곤 피처별로 결과 레이어 분리 옵션 추가
   1.6.98 - 지적도 중첩 면적표: 전용 아이콘(jijuk.png) 적용 + 필드 표시명(한글) 개선
   1.6.97 - 조사 지원: 지적도×조사지역 ‘중첩 면적표’ 도구 추가(클립+포함면적/비율 필드)
   1.6.96 - DEM 생성: CA/CAA 프리셋 제거 + 구/현행 선택으로 레이어 목록 분리(혼동 방지)

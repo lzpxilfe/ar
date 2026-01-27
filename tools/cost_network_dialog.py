@@ -14,6 +14,7 @@ DEM 기반 이동 비용 모델을 이용해 유적(포인트/폴리곤) 간 최
 
 import math
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -207,6 +208,7 @@ class CostNetworkWorker(QgsTask):
         on_done,
     ):
         super().__init__("최소비용 네트워크 (Least-cost Network)", QgsTask.CanCancel)
+        self._cancel_event = threading.Event()
         self.dem_source = dem_source
         self.dem_authid = dem_authid
         self.nodes = list(nodes)
@@ -224,6 +226,23 @@ class CostNetworkWorker(QgsTask):
         self.cost_mode = str(cost_mode or COST_TIME)
         self.on_done = on_done
         self.result_obj = NetworkTaskResult(ok=False)
+
+    def cancel(self):
+        # Avoid calling QgsTask.isCanceled() from worker thread (can be unstable on some setups).
+        try:
+            self._cancel_event.set()
+        except Exception:
+            pass
+        try:
+            return super().cancel()
+        except Exception:
+            return True
+
+    def _is_cancelled(self) -> bool:
+        try:
+            return bool(self._cancel_event.is_set())
+        except Exception:
+            return False
 
     def run(self):
         try:
@@ -270,7 +289,7 @@ class CostNetworkWorker(QgsTask):
         valid_nodes: List[NetworkNode] = []
         removed = 0
         for n in self.nodes:
-            if self.isCanceled():
+            if self._is_cancelled():
                 return NetworkTaskResult(ok=False, message="취소됨")
             try:
                 px, py = gdal.ApplyGeoTransform(inv, float(n.x), float(n.y))
@@ -323,7 +342,7 @@ class CostNetworkWorker(QgsTask):
 
         if self.network_mode in (NETWORK_MST, NETWORK_KNN, NETWORK_ALL):
             for i in range(n_nodes):
-                if self.isCanceled():
+                if self._is_cancelled():
                     return NetworkTaskResult(ok=False, message="취소됨")
                 dxs = coords[:, 0] - coords[i, 0]
                 dys = coords[:, 1] - coords[i, 1]
@@ -345,7 +364,7 @@ class CostNetworkWorker(QgsTask):
             # Non-hub -> nearest hubs
             if hubs:
                 for i in range(n_nodes):
-                    if self.isCanceled():
+                    if self._is_cancelled():
                         return NetworkTaskResult(ok=False, message="취소됨")
                     if i in hubs:
                         continue
@@ -404,7 +423,7 @@ class CostNetworkWorker(QgsTask):
                 pass
 
         for a, b in candidate_pairs:
-            if self.isCanceled():
+            if self._is_cancelled():
                 return NetworkTaskResult(ok=False, message="취소됨")
 
             ax, ay = coords[a, 0], coords[a, 1]
@@ -455,7 +474,7 @@ class CostNetworkWorker(QgsTask):
             end_rc = (b_row, b_col)
 
             def cancel_check():
-                return self.isCanceled()
+                return self._is_cancelled()
 
             # A -> B
             prev_ab, cost_ab = _astar_path(
@@ -596,7 +615,7 @@ class CostNetworkWorker(QgsTask):
 
             # MST는 선택된 간선만 경로를 다시 계산(메모리 절약)
             for a, b in chosen:
-                if self.isCanceled():
+                if self._is_cancelled():
                     return NetworkTaskResult(ok=False, message="취소됨")
 
                 mst_done += 1
@@ -654,7 +673,7 @@ class CostNetworkWorker(QgsTask):
                     self.model_key,
                     self.model_params,
                     cost_mode=solver_cost_mode,
-                    cancel_check=lambda: self.isCanceled(),
+                    cancel_check=self._is_cancelled,
                 )
                 if prev is None or cost_ab is None:
                     continue
