@@ -359,6 +359,14 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+        try:
+            self.btnInterpretGuide.setToolTip(
+                "현재 선택한 네트워크(PPA/가시성) 결과를 어떻게 읽어야 하는지\n"
+                "해석 가이드를 작은 창으로 표시합니다."
+            )
+        except Exception:
+            pass
+
     def _ensure_extra_widgets(self):
         """Create optional widgets at runtime (keeps .ui stable and avoids regressions)."""
         # --- PPA graph controls ---
@@ -430,6 +438,38 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                         self.verticalLayout.addWidget(self.groupSna)
                     except Exception:
                         pass
+        except Exception:
+            pass
+
+        # --- Interpretation guide button (kept in the button row to avoid increasing dialog height) ---
+        try:
+            if not hasattr(self, "btnInterpretGuide"):
+                self.btnInterpretGuide = QtWidgets.QPushButton("해석 가이드", self)
+                self.btnInterpretGuide.setObjectName("btnInterpretGuide")
+                try:
+                    from qgis.core import QgsApplication
+
+                    self.btnInterpretGuide.setIcon(QgsApplication.getThemeIcon("/mActionHelpContents.svg"))
+                except Exception:
+                    pass
+
+                # Insert just before "실행" so the main buttons stay at the right.
+                try:
+                    idx = int(self.horizontalLayout_Buttons.indexOf(self.btnRun))
+                    if idx >= 0:
+                        self.horizontalLayout_Buttons.insertWidget(idx, self.btnInterpretGuide)
+                    else:
+                        self.horizontalLayout_Buttons.addWidget(self.btnInterpretGuide)
+                except Exception:
+                    try:
+                        self.horizontalLayout_Buttons.addWidget(self.btnInterpretGuide)
+                    except Exception:
+                        pass
+
+                try:
+                    self.btnInterpretGuide.clicked.connect(self._show_interpretation_guide)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -505,6 +545,152 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             self.spinPolyMaxBoundaryPts.setToolTip("폴리곤 1개당 경계 샘플 점의 최대 개수(속도 제한)입니다.")
         except Exception:
             pass
+
+    def _interpretation_guide_html(self) -> str:
+        mode = None
+        try:
+            mode = str(self.cmbNetworkType.currentData() or "")
+        except Exception:
+            mode = ""
+
+        # Keep it practical: how to read the output layers/fields and when to use each option.
+        ppa = """
+        <h3>근접성 네트워크 (PPA)</h3>
+        <p><b>무엇을 보는가?</b><br>
+        지형(DEM)을 무시하고 <b>직선거리(유클리드)</b>로 “이웃” 관계를 연결합니다.
+        평원/도서 지역처럼 지형 영향이 약한 환경이나, <b>‘이웃 공동체’</b> 가설을 빠르게 점검할 때 유용합니다.</p>
+
+        <p><b>결과를 어떻게 읽나?</b><br>
+        <ul>
+          <li><b>Edge 레이어</b>: 유적 간 “이웃” 연결. <code>dist_km</code>는 직선거리(km).</li>
+          <li><b>Nodes 레이어(SNA)</b>: <code>degree</code>(연결 수), <code>component</code>(연결 덩어리), <code>comp_size</code>(덩어리 크기).</li>
+        </ul></p>
+
+        <p><b>스파게티(선 과다) 줄이는 팁</b><br>
+        <ul>
+          <li><b>Mutual k‑NN</b>: 서로의 k 안에 들어갈 때만 연결(더 보수적).</li>
+          <li><b>Gabriel/RNG</b>: Delaunay에서 더 “필요한” 간선만 남겨 희소화.</li>
+          <li><b>Max dist(m)</b>: 너무 먼 간선은 제거(현실적 상호작용 범위 반영).</li>
+        </ul></p>
+        """
+
+        vis = """
+        <h3>가시성 네트워크 (Visibility / LOS)</h3>
+        <p><b>무엇을 보는가?</b><br>
+        DEM 기반 Line of Sight(가시선)으로 유적 A↔B 사이에 지형이 시선을 가리는지 샘플링해 연결합니다.
+        방어·봉수·감시/통신 체계처럼 <b>‘보이는가’</b>가 핵심인 질문에 적합합니다.</p>
+
+        <p><b>결과를 어떻게 읽나?</b><br>
+        <ul>
+          <li><b>Edge 레이어(LOS)</b>: <code>status</code>로 “상호 보임/단방향 보임/상호 안보임/샘플 실패”를 구분합니다.</li>
+          <li><b>방향성</b>: <code>vis_ab</code>, <code>vis_ba</code> (0/1)로 A→B, B→A를 따로 기록합니다.</li>
+          <li><b>폴리곤 입력</b>: 경계 샘플링을 켜면 <code>vis_ratio_ab</code>(0~1)처럼 “얼마나 보이는가”를 비율로 확인할 수 있습니다.</li>
+        </ul></p>
+
+        <p><b>연산량 줄이는 팁</b><br>
+        <ul>
+          <li><b>후보 k</b>: 각 노드에서 가까운 후보만 검사(빠름).</li>
+          <li><b>반경 내 모든 쌍</b>: 작은 데이터에만 권장(정확하지만 느림).</li>
+          <li><b>Max dist(m)</b>: 먼 쌍은 애초에 검사하지 않음.</li>
+        </ul></p>
+        """
+
+        sna = """
+        <h3>SNA 지표(점 레이어)</h3>
+        <p><b>왜 필요한가?</b><br>
+        “선 몇 개”로 끝나지 않고, <b>중심지/요충지/고립</b>이 어디인지 수치로 드러내기 위함입니다.</p>
+        <ul>
+          <li><code>degree</code>: 연결 수(많을수록 ‘허브’ 후보).</li>
+          <li><code>component</code>/<code>comp_size</code>: 네트워크가 몇 덩어리로 끊기는지, 각 덩어리의 크기.</li>
+          <li><code>closeness</code>: 전체에 ‘가까운’ 정도(노드가 많으면 느릴 수 있음).</li>
+          <li><code>betweenness</code>: 다른 노드 사이를 ‘중개’하는 정도(매우 느릴 수 있어 큰 데이터는 자동 스킵될 수 있음).</li>
+        </ul>
+        """
+
+        refs = """
+        <h3>참고(요약)</h3>
+        <ul>
+          <li>근접 그래프: Delaunay(1934), Gabriel &amp; Sokal(1969), Toussaint(1980)</li>
+          <li>고고학 네트워크 리뷰: Brughmans &amp; Peeples(2017)</li>
+          <li>가시성/가시성 그래프: Gillings &amp; Wheatley(2001), Turner et al.(2001), Van Dyke et al.(2016)</li>
+        </ul>
+        """
+
+        body = ""
+        if mode == NETWORK_VISIBILITY:
+            body = vis + sna + ppa
+        else:
+            body = ppa + sna + vis
+
+        return (
+            "<html><head><meta charset='utf-8'></head><body style='font-family:Sans-Serif;'>"
+            "<h2>네트워크 해석 가이드</h2>"
+            "<p style='color:#444'>Tip: 각 옵션 위에 마우스를 올리면 짧은 설명/참고문헌을 바로 볼 수 있어요.</p>"
+            + body
+            + refs
+            + "</body></html>"
+        )
+
+    def _show_interpretation_guide(self):
+        try:
+            # Reuse if already open (prevents multiple floating dialogs).
+            if getattr(self, "_interpretGuideDialog", None) is not None:
+                try:
+                    if self._interpretGuideDialog.isVisible():
+                        self._interpretGuideBrowser.setHtml(self._interpretation_guide_html())
+                        self._interpretGuideDialog.raise_()
+                        self._interpretGuideDialog.activateWindow()
+                        return
+                except Exception:
+                    pass
+
+            dlg = QtWidgets.QDialog(self)
+            dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+            dlg.setWindowTitle("해석 가이드 (Network Interpretation)")
+            dlg.resize(560, 520)
+
+            layout = QtWidgets.QVBoxLayout(dlg)
+            browser = QtWidgets.QTextBrowser(dlg)
+            browser.setOpenExternalLinks(True)
+            browser.setHtml(self._interpretation_guide_html())
+            layout.addWidget(browser)
+
+            row = QtWidgets.QHBoxLayout()
+            btn_copy = QtWidgets.QPushButton("복사", dlg)
+            btn_close = QtWidgets.QPushButton("닫기", dlg)
+            row.addStretch(1)
+            row.addWidget(btn_copy)
+            row.addWidget(btn_close)
+            layout.addLayout(row)
+
+            def _copy():
+                try:
+                    QtWidgets.QApplication.clipboard().setText(browser.toPlainText())
+                except Exception:
+                    pass
+
+            btn_copy.clicked.connect(_copy)
+            btn_close.clicked.connect(dlg.close)
+
+            # Keep python refs for stability (avoid GC on modeless dialogs).
+            self._interpretGuideDialog = dlg
+            self._interpretGuideBrowser = browser
+
+            def _clear_refs():
+                try:
+                    self._interpretGuideDialog = None
+                    self._interpretGuideBrowser = None
+                except Exception:
+                    pass
+
+            try:
+                dlg.destroyed.connect(lambda _=None: _clear_refs())
+            except Exception:
+                pass
+
+            dlg.show()
+        except Exception as e:
+            log_message(f"InterpretGuide: failed to open guide dialog: {e}", level=Qgis.Warning)
 
     def _on_mode_changed(self):
         mode = self.cmbNetworkType.currentData()

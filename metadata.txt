@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 지형/경관 분석 툴킷 (Viewshed/LOS/Cost Surface/DEM/프로파일/지형지수)
-version=1.6.93
+version=1.6.94
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -38,7 +38,8 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.6.93 - 네트워크: 근접/가시성 네트워크 레이어 생성 안정화 + PPA/LOS 옵션 툴팁(참고문헌) 보강
+changelog=1.6.94 - 네트워크: 툴팁 + “해석 가이드” 버튼으로 결과 해석/의미 설명 강화
+  1.6.93 - 네트워크: 근접/가시성 네트워크 레이어 생성 안정화 + PPA/LOS 옵션 툴팁(참고문헌) 보강
   1.6.92 - 로그: 2모니터 환경에서도 분석 창이 있는 화면에 붙도록 위치 계산 개선
   1.6.91 - 로그: 작업 로그 창 헤더(제보/라이선스) 추가 + 분석 창 옆에 붙어서 따라다니도록 개선
   1.6.90 - 로그: 분석 창 옆 실시간 작업 로그 창 추가(패널 자동 팝업 제거)
