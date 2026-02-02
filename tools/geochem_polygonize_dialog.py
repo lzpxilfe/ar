@@ -92,8 +92,25 @@ FE2O3_POINTS: List[LegendPoint] = [
     LegendPoint(51.0, (115, 12, 12)),
 ]
 
+PB_POINTS: List[LegendPoint] = [
+    # Legend from percentile ramp (ppm): 5=18, 10=20, 15=21, 25=24, 50=28, 75=32, 90=36, 95=41, 99=57, 100=1363
+    # We reuse the same base palette as other GeoChem layers (blue->red) to match the WMS styling.
+    LegendPoint(0.0, (204, 204, 204)),  # Absent data
+    LegendPoint(18.0, (0, 38, 115)),  # 5%
+    LegendPoint(20.0, (0, 112, 255)),  # 10%
+    LegendPoint(21.0, (0, 197, 255)),  # 15%
+    LegendPoint(24.0, (0, 255, 0)),  # 25%
+    LegendPoint(28.0, (85, 255, 0)),  # 50%
+    LegendPoint(32.0, (255, 255, 0)),  # 75%
+    LegendPoint(36.0, (255, 170, 0)),  # 90%
+    LegendPoint(41.0, (255, 85, 0)),  # 95%
+    LegendPoint(57.0, (230, 0, 0)),  # 99%
+    LegendPoint(1363.0, (115, 12, 12)),  # 100%
+]
+
 PRESETS: Dict[str, GeoChemPreset] = {
     "fe2o3": GeoChemPreset(key="fe2o3", label="Fe2O3 (산화철)", unit="%", points=FE2O3_POINTS),
+    "pb": GeoChemPreset(key="pb", label="Pb (납)", unit="ppm", points=PB_POINTS),
 }
 
 
