@@ -507,11 +507,22 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         grid3.addWidget(self.chkDropNoData, 2, 0, 1, 2)
         layout.addWidget(grp_out)
 
-        grp_center = QtWidgets.QGroupBox("5. 가중 중심점(포인트)")
+        grp_center = QtWidgets.QGroupBox("5. 중심점(포인트)")
         grid4 = QtWidgets.QGridLayout(grp_center)
-        self.chkWeightedCenter = QtWidgets.QCheckBox("가중 중심점 생성")
+        self.chkWeightedCenter = QtWidgets.QCheckBox("중심점 생성")
         self.chkWeightedCenter.setChecked(False)
-        self.chkWeightedCenter.setToolTip("값 래스터에서 가중 중심점을 계산해 포인트 레이어로 추가합니다.")
+        self.chkWeightedCenter.setToolTip("값 래스터에서 중심점을 계산해 포인트 레이어로 추가합니다.")
+
+        self.cmbCenterMethod = QtWidgets.QComboBox(grp_center)
+        self.cmbCenterMethod.addItem("가중 평균 중심(질량중심)", "weighted_mean")
+        self.cmbCenterMethod.addItem("무가중 평균 중심(선택 픽셀 중심)", "mean")
+        self.cmbCenterMethod.addItem("최대값 픽셀(peak)", "peak")
+        self.cmbCenterMethod.setToolTip(
+            "중심점 산정 방식입니다.\n"
+            "- 가중 평균: 값이 클수록 중심이 더 끌립니다.\n"
+            "- 무가중 평균: 선택된 영역의 기하학적 중심(픽셀 평균)입니다.\n"
+            "- peak: 선택된 픽셀 중 값이 가장 큰 위치입니다."
+        )
 
         self.cmbWeightRule = QtWidgets.QComboBox(grp_center)
         self.cmbWeightRule.addItem("값 그대로 (w = value)", "value")
@@ -542,14 +553,16 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.spinWeightTopPct.setToolTip("상위 X%만 사용 (예: 10이면 상위 10%)")
 
         grid4.addWidget(self.chkWeightedCenter, 0, 0, 1, 2)
-        grid4.addWidget(QtWidgets.QLabel("가중치 규칙"), 1, 0)
-        grid4.addWidget(self.cmbWeightRule, 1, 1)
-        grid4.addWidget(QtWidgets.QLabel("p"), 2, 0)
-        grid4.addWidget(self.spinWeightPower, 2, 1)
-        grid4.addWidget(QtWidgets.QLabel("t"), 3, 0)
-        grid4.addWidget(self.spinWeightThreshold, 3, 1)
-        grid4.addWidget(QtWidgets.QLabel("X(%)"), 4, 0)
-        grid4.addWidget(self.spinWeightTopPct, 4, 1)
+        grid4.addWidget(QtWidgets.QLabel("중심점 방식"), 1, 0)
+        grid4.addWidget(self.cmbCenterMethod, 1, 1)
+        grid4.addWidget(QtWidgets.QLabel("가중치 규칙"), 2, 0)
+        grid4.addWidget(self.cmbWeightRule, 2, 1)
+        grid4.addWidget(QtWidgets.QLabel("p"), 3, 0)
+        grid4.addWidget(self.spinWeightPower, 3, 1)
+        grid4.addWidget(QtWidgets.QLabel("t"), 4, 0)
+        grid4.addWidget(self.spinWeightThreshold, 4, 1)
+        grid4.addWidget(QtWidgets.QLabel("X(%)"), 5, 0)
+        grid4.addWidget(self.spinWeightTopPct, 5, 1)
         layout.addWidget(grp_center)
 
         btn_row = QtWidgets.QHBoxLayout()
@@ -567,6 +580,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.chkAddRasters.stateChanged.connect(self._on_add_rasters_changed)
         self.chkWeightedCenter.stateChanged.connect(self._update_weight_ui)
         self.cmbWeightRule.currentIndexChanged.connect(self._update_weight_ui)
+        self.cmbCenterMethod.currentIndexChanged.connect(self._update_weight_ui)
 
         self._update_polygon_ui()
         self._update_weight_ui()
@@ -670,6 +684,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
     def _update_weight_ui(self):
         try:
             enabled = bool(self.chkWeightedCenter.isChecked())
+            self.cmbCenterMethod.setEnabled(enabled)
             self.cmbWeightRule.setEnabled(enabled)
             rule = str(self.cmbWeightRule.currentData() or "")
             self.spinWeightPower.setEnabled(enabled and rule == "power")
@@ -733,6 +748,11 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         do_save_rasters = bool(getattr(self, "chkSaveRasters", None) and self.chkSaveRasters.isChecked())
         do_add_rasters = bool(getattr(self, "chkAddRasters", None) and self.chkAddRasters.isChecked())
         do_weight_center = bool(getattr(self, "chkWeightedCenter", None) and self.chkWeightedCenter.isChecked())
+        center_method = (
+            str(getattr(self, "cmbCenterMethod", None).currentData() or "weighted_mean")
+            if getattr(self, "cmbCenterMethod", None)
+            else "weighted_mean"
+        )
         weight_rule = str(getattr(self, "cmbWeightRule", None).currentData() or "value") if getattr(self, "cmbWeightRule", None) else "value"
         weight_power = int(getattr(self, "spinWeightPower", None).value()) if getattr(self, "spinWeightPower", None) else 2
         weight_threshold = float(getattr(self, "spinWeightThreshold", None).value()) if getattr(self, "spinWeightThreshold", None) else 0.0
@@ -1165,13 +1185,14 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                         preset=preset,
                         unit=unit,
                         run_id=run_id,
+                        center_method=center_method,
                         weight_rule=weight_rule,
                         weight_power=weight_power,
                         weight_threshold=weight_threshold,
                         weight_top_pct=weight_top_pct,
                     )
                 except Exception as e:
-                    log_message(f"GeoChem: weighted center failed: {e}", level=Qgis.Warning)
+                    log_message(f"GeoChem: center failed: {e}", level=Qgis.Warning)
                     center_layer = None
 
             poly: Optional[QgsVectorLayer] = None
@@ -1425,12 +1446,13 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         preset: GeoChemPreset,
         unit: str,
         run_id: str,
+        center_method: str,
         weight_rule: str,
         weight_power: int,
         weight_threshold: float,
         weight_top_pct: float,
     ) -> Optional[QgsVectorLayer]:
-        """Compute weighted center from a value raster and return a point memory layer (or None)."""
+        """Compute a center point from a value raster and return a point memory layer (or None)."""
         if geotransform is None:
             return None
 
@@ -1445,19 +1467,25 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         except Exception:
             pass
         if not np.any(valid):
-            log_message("GeoChem: weighted center skipped (no valid pixels)", level=Qgis.Warning)
+            log_message("GeoChem: center skipped (no valid pixels)", level=Qgis.Warning)
             return None
+
+        method = (center_method or "weighted_mean").strip()
+        if method not in ("weighted_mean", "mean", "peak"):
+            method = "weighted_mean"
 
         rule = (weight_rule or "value").strip()
         thr_used = None
+        sel = np.zeros(v.shape, dtype=bool)
 
         # Build weight array (float64) with zeros outside selection.
         w = np.zeros(v.shape, dtype=np.float64)
         try:
             if rule == "power":
                 p = max(1, int(weight_power))
-                vv = np.maximum(v[valid].astype(np.float64, copy=False), 0.0)
-                w[valid] = np.power(vv, float(p))
+                sel = valid
+                vv = np.maximum(v[sel].astype(np.float64, copy=False), 0.0)
+                w[sel] = np.power(vv, float(p))
                 param = float(p)
             elif rule == "threshold":
                 t = float(weight_threshold)
@@ -1479,27 +1507,74 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 w[sel] = v[sel].astype(np.float64, copy=False)
                 param = float(pct)
             else:
-                vv = np.maximum(v[valid].astype(np.float64, copy=False), 0.0)
-                w[valid] = vv
+                sel = valid
+                vv = np.maximum(v[sel].astype(np.float64, copy=False), 0.0)
+                w[sel] = vv
                 param = float(1.0)
         except Exception:
-            log_message("GeoChem: weighted center skipped (weight computation failed)", level=Qgis.Warning)
+            log_message("GeoChem: center skipped (weight computation failed)", level=Qgis.Warning)
+            return None
+
+        if not np.any(sel):
+            log_message("GeoChem: center skipped (no pixels after selection)", level=Qgis.Warning)
             return None
 
         sum_w = float(np.sum(w))
-        if not math.isfinite(sum_w) or sum_w <= 0:
-            log_message("GeoChem: weighted center skipped (sum_w <= 0)", level=Qgis.Warning)
-            return None
-
+        pix_n = 0
         try:
-            row_sums = np.sum(w, axis=1, dtype=np.float64)
-            col_sums = np.sum(w, axis=0, dtype=np.float64)
-            rows = np.arange(w.shape[0], dtype=np.float64)
-            cols = np.arange(w.shape[1], dtype=np.float64)
-            mean_row = float(np.dot(row_sums, rows) / sum_w)
-            mean_col = float(np.dot(col_sums, cols) / sum_w)
+            pix_n = int(np.count_nonzero(sel))
         except Exception:
-            log_message("GeoChem: weighted center skipped (centroid accumulation failed)", level=Qgis.Warning)
+            pix_n = 0
+
+        mean_row = None
+        mean_col = None
+        peak_val = None
+
+        if method == "peak":
+            try:
+                vv = np.where(sel, v, np.float32(-np.inf))
+                idx = int(np.argmax(vv))
+                ncol = int(v.shape[1])
+                mean_row = float(idx // ncol)
+                mean_col = float(idx % ncol)
+                peak_val = float(vv[int(mean_row), int(mean_col)])
+            except Exception:
+                log_message("GeoChem: center skipped (peak computation failed)", level=Qgis.Warning)
+                return None
+        else:
+            if method == "weighted_mean":
+                if not math.isfinite(sum_w) or sum_w <= 0:
+                    log_message("GeoChem: center skipped (sum_w <= 0)", level=Qgis.Warning)
+                    return None
+                denom = float(sum_w)
+                try:
+                    row_sums = np.sum(w, axis=1, dtype=np.float64)
+                    col_sums = np.sum(w, axis=0, dtype=np.float64)
+                except Exception:
+                    log_message("GeoChem: center skipped (centroid accumulation failed)", level=Qgis.Warning)
+                    return None
+            else:
+                denom = float(pix_n)
+                if not math.isfinite(denom) or denom <= 0:
+                    log_message("GeoChem: center skipped (pix_n <= 0)", level=Qgis.Warning)
+                    return None
+                try:
+                    row_sums = np.sum(sel, axis=1, dtype=np.float64)
+                    col_sums = np.sum(sel, axis=0, dtype=np.float64)
+                except Exception:
+                    log_message("GeoChem: center skipped (centroid accumulation failed)", level=Qgis.Warning)
+                    return None
+
+            try:
+                rows = np.arange(v.shape[0], dtype=np.float64)
+                cols = np.arange(v.shape[1], dtype=np.float64)
+                mean_row = float(np.dot(row_sums, rows) / denom)
+                mean_col = float(np.dot(col_sums, cols) / denom)
+            except Exception:
+                log_message("GeoChem: center skipped (centroid accumulation failed)", level=Qgis.Warning)
+                return None
+
+        if mean_row is None or mean_col is None:
             return None
 
         # Convert pixel-space centroid to map coordinates (affine geotransform).
@@ -1525,7 +1600,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-        layer = QgsVectorLayer(uri, f"{preset.key}_가중중심_{run_id}", "memory")
+        layer = QgsVectorLayer(uri, f"{preset.key}_중심점_{run_id}", "memory")
         if not layer.isValid():
             return None
         try:
@@ -1539,6 +1614,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             [
                 QgsField("element", QVariant.String),
                 QgsField("unit", QVariant.String),
+                QgsField("c_method", QVariant.String),
                 QgsField("w_rule", QVariant.String),
                 QgsField("w_param", QVariant.Double),
                 QgsField("w_thr", QVariant.Double),
@@ -1548,16 +1624,11 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         )
         layer.updateFields()
 
-        pix_n = 0
-        try:
-            pix_n = int(np.count_nonzero(w))
-        except Exception:
-            pix_n = 0
-
         ft = QgsFeature(layer.fields())
         ft.setGeometry(QgsGeometry.fromPointXY(pt))
         ft["element"] = preset.label
         ft["unit"] = unit
+        ft["c_method"] = method
         ft["w_rule"] = rule
         ft["w_param"] = float(param)
         try:
@@ -1578,8 +1649,11 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             pass
 
         try:
+            extra = ""
+            if peak_val is not None:
+                extra = f" peak={peak_val:g}"
             log_message(
-                f"GeoChem: weighted center rule={rule} param={param:g} sum_w={sum_w:g} pix_n={pix_n:,}",
+                f"GeoChem: center method={method} rule={rule} param={param:g} sum_w={sum_w:g} pix_n={pix_n:,}{extra}",
                 level=Qgis.Info,
             )
         except Exception:
@@ -1935,7 +2009,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 pass
         if center_layer is not None:
             try:
-                center_layer.setName(f"{preset.key}_가중중심_{run_id}")
+                center_layer.setName(f"{preset.key}_중심점_{run_id}")
             except Exception:
                 pass
 
