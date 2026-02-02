@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from osgeo import gdal
+from osgeo import gdal, ogr
 
 import processing
 from qgis.PyQt import QtWidgets
@@ -47,6 +47,7 @@ from qgis.core import (
     QgsField,
     QgsGeometry,
     QgsMapLayerProxyModel,
+    QgsPointXY,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
@@ -102,7 +103,14 @@ def _points_to_breaks(points: Sequence[LegendPoint]) -> List[float]:
     return vals
 
 
-def _interp_rgb_to_value(*, r: np.ndarray, g: np.ndarray, b: np.ndarray, points: Sequence[LegendPoint]) -> np.ndarray:
+def _interp_rgb_to_value(
+    *,
+    r: np.ndarray,
+    g: np.ndarray,
+    b: np.ndarray,
+    points: Sequence[LegendPoint],
+    snap_last_t: Optional[float] = None,
+) -> np.ndarray:
     """Vectorized mapping: RGB -> scalar value by projecting to the nearest legend polyline segment in RGB space."""
     if r.shape != g.shape or r.shape != b.shape:
         raise ValueError("RGB bands must have the same shape")
@@ -117,31 +125,53 @@ def _interp_rgb_to_value(*, r: np.ndarray, g: np.ndarray, b: np.ndarray, points:
     min_dist = np.full(rr.shape, np.float32(np.inf), dtype=np.float32)
 
     pts = list(points)
+    last_seg_idx = len(pts) - 2
+    snap_last = None
+    if snap_last_t is not None:
+        try:
+            snap_last = float(snap_last_t)
+        except Exception:
+            snap_last = None
+    if snap_last is not None and not (0.0 <= snap_last <= 1.0):
+        snap_last = None
+
     for i in range(len(pts) - 1):
         v1 = float(pts[i].value)
         v2 = float(pts[i + 1].value)
         c1 = pts[i].rgb
         c2 = pts[i + 1].rgb
 
-        vr = float(c2[0] - c1[0])
-        vg = float(c2[1] - c1[1])
-        vb = float(c2[2] - c1[2])
-        v_len_sq = vr * vr + vg * vg + vb * vb
+        c1r = np.float32(c1[0])
+        c1g = np.float32(c1[1])
+        c1b = np.float32(c1[2])
+        vr = np.float32(c2[0] - c1[0])
+        vg = np.float32(c2[1] - c1[1])
+        vb = np.float32(c2[2] - c1[2])
+        v_len_sq = np.float32(vr * vr + vg * vg + vb * vb)
         if v_len_sq <= 0:
             continue
 
-        t = ((rr - float(c1[0])) * vr + (gg - float(c1[1])) * vg + (bb - float(c1[2])) * vb) / float(v_len_sq)
-        t = np.clip(t, 0.0, 1.0)
-        pr = float(c1[0]) + t * vr
-        pg = float(c1[1]) + t * vg
-        pb = float(c1[2]) + t * vb
+        t = ((rr - c1r) * vr + (gg - c1g) * vg + (bb - c1b) * vb) / v_len_sq
+        np.clip(t, np.float32(0.0), np.float32(1.0), out=t)
+        if snap_last is not None and i == last_seg_idx:
+            # Important: apply snap BEFORE distance comparison (affects which segment wins).
+            try:
+                t[t > np.float32(snap_last)] = np.float32(1.0)
+            except Exception:
+                pass
+        pr = c1r + t * vr
+        pg = c1g + t * vg
+        pb = c1b + t * vb
         dist_sq = (rr - pr) ** 2 + (gg - pg) ** 2 + (bb - pb) ** 2
 
         mask = dist_sq < min_dist
         if not np.any(mask):
             continue
-        out = np.where(mask, np.float32(v1 + t * (v2 - v1)), out)
-        min_dist = np.where(mask, dist_sq.astype(np.float32, copy=False), min_dist)
+
+        base = np.float32(v1)
+        delta = np.float32(v2 - v1)
+        out[mask] = base + t[mask].astype(np.float32, copy=False) * delta
+        min_dist[mask] = dist_sq[mask].astype(np.float32, copy=False)
 
     return out
 
@@ -158,6 +188,43 @@ def _mask_black_lines(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray
         & (np.abs(rr - gg) < 15)
         & (np.abs(gg - bb) < 15)
     )
+
+
+def _gdal_rasterize_wkt_mask(
+    *,
+    geom_wkt: str,
+    xsize: int,
+    ysize: int,
+    geotransform,
+    projection_wkt: str,
+) -> Optional[np.ndarray]:
+    """Rasterize a polygon WKT into a boolean mask (True inside)."""
+    if not geom_wkt:
+        return None
+    try:
+        geom = ogr.CreateGeometryFromWkt(str(geom_wkt))
+    except Exception:
+        geom = None
+    if geom is None:
+        return None
+
+    drv = gdal.GetDriverByName("MEM")
+    ds = drv.Create("", int(xsize), int(ysize), 1, gdal.GDT_Byte)
+    ds.SetGeoTransform(geotransform)
+    ds.SetProjection(projection_wkt)
+    band = ds.GetRasterBand(1)
+    band.Fill(0)
+    try:
+        gdal.RasterizeGeometries(ds, [1], [geom], burn_values=[1], options=["ALL_TOUCHED=TRUE"])
+    except Exception:
+        ds = None
+        return None
+    arr = band.ReadAsArray()
+    ds = None
+    try:
+        return arr.astype(np.uint8, copy=False) > 0
+    except Exception:
+        return None
 
 
 def _gdal_fill_nodata_nearestish(*, arr: np.ndarray, nodata: float, max_search_dist_px: int) -> np.ndarray:
@@ -188,7 +255,13 @@ def _gdal_fill_nodata_nearestish(*, arr: np.ndarray, nodata: float, max_search_d
     return filled
 
 
-def _classify_to_bins(*, values: np.ndarray, breaks: Sequence[float], nodata_class: int = 0) -> np.ndarray:
+def _classify_to_bins(
+    *,
+    values: np.ndarray,
+    breaks: Sequence[float],
+    nodata_class: int = 0,
+    nodata_value: Optional[float] = None,
+) -> np.ndarray:
     br = [float(x) for x in breaks]
     if len(br) < 2:
         raise ValueError("Need at least 2 breaks")
@@ -196,8 +269,14 @@ def _classify_to_bins(*, values: np.ndarray, breaks: Sequence[float], nodata_cla
     v = values.astype(np.float32, copy=False)
     cls = np.full(v.shape, int(nodata_class), dtype=np.int16)
 
-    finite = np.isfinite(v)
-    if not np.any(finite):
+    valid = np.isfinite(v)
+    if nodata_value is not None:
+        try:
+            valid &= v != np.float32(float(nodata_value))
+        except Exception:
+            pass
+
+    if not np.any(valid):
         return cls
 
     vmin = float(br[0])
@@ -206,7 +285,7 @@ def _classify_to_bins(*, values: np.ndarray, breaks: Sequence[float], nodata_cla
 
     bins = br[1:-1]  # internal thresholds
     idx = np.digitize(vv, bins=bins, right=False).astype(np.int16, copy=False)  # 0..n-1
-    cls[finite] = idx[finite] + 1  # 1..n_intervals
+    cls[valid] = idx[valid] + 1  # 1..n_intervals
     return cls
 
 
@@ -216,11 +295,40 @@ def _interval_label(v0: float, v1: float, unit: str) -> str:
     return f"{v0:g}-{v1:g}"
 
 
+def _rgb_for_value(*, points: Sequence[LegendPoint], value: float) -> Tuple[int, int, int]:
+    """Interpolate an RGB color for a scalar value using legend points (value-space interpolation)."""
+    pts = sorted(points, key=lambda p: float(p.value))
+    if not pts:
+        return (204, 204, 204)
+    v = float(value)
+
+    if v <= float(pts[0].value):
+        return pts[0].rgb
+    if v >= float(pts[-1].value):
+        return pts[-1].rgb
+
+    for i in range(len(pts) - 1):
+        v0 = float(pts[i].value)
+        v1 = float(pts[i + 1].value)
+        if v0 <= v <= v1:
+            if v1 <= v0:
+                return pts[i + 1].rgb
+            t = (v - v0) / (v1 - v0)
+            c0 = pts[i].rgb
+            c1 = pts[i + 1].rgb
+            r = int(round(float(c0[0]) + t * (float(c1[0]) - float(c0[0]))))
+            g = int(round(float(c0[1]) + t * (float(c1[1]) - float(c0[1]))))
+            b = int(round(float(c0[2]) + t * (float(c1[2]) - float(c0[2]))))
+            return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+
+    return pts[-1].rgb
+
+
 class GeoChemPolygonizeDialog(QtWidgets.QDialog):
     def __init__(self, iface, parent=None):
         super().__init__(parent)
         self.iface = iface
-        self.setWindowTitle("지구화학도 폴리곤화 (GeoChem WMS → Polygons) - ArchToolkit")
+        self.setWindowTitle("지구화학도 래스터 수치화 (GeoChem WMS → Raster) - ArchToolkit")
 
         try:
             plugin_dir = os.path.dirname(os.path.dirname(__file__))
@@ -241,18 +349,19 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
 
         desc = QtWidgets.QLabel(
-            "<b>지구화학도 폴리곤화</b><br>"
-            "WMS 등 RGB 래스터(이미지)를 범례 기반으로 <b>수치화</b>한 뒤,<br>"
-            "<b>구간별 폴리곤</b>으로 변환합니다. (WMS 원자료 수치가 아닌 ‘역추정’입니다.)"
+            "<b>지구화학도 래스터 수치화</b><br>"
+            "WMS 등 RGB 래스터(이미지)를 범례 기반으로 <b>값 래스터</b>로 복원하고,<br>"
+            "원하면 <b>구간(class) 래스터 / 폴리곤</b>까지 생성합니다. (원자료 수치가 아닌 ‘역추정’입니다.)"
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("background:#f0f0f0; padding:6px; border-radius:4px;")
         desc.setToolTip(
             "워크플로우:\n"
             "1) RGB 지구화학도(WMS/래스터)를 조사지역 경계(사각형)로 잘라 GeoTIFF로 저장\n"
-            "2) RGB → 값(%)으로 변환(범례 기반)\n"
-            "3) 값 → 구간(class)으로 분류\n"
-            "4) class 래스터를 폴리곤화하고(옵션) 구간별로 dissolve\n\n"
+            "2) RGB → 값(%) 래스터로 변환(범례 기반)\n"
+            "3) 값 → 구간(class) 래스터로 분류\n"
+            "4) (옵션) 구간 래스터 폴리곤 생성 + dissolve\n"
+            "5) (옵션) 가중 중심점(포인트) 생성\n\n"
             "팁:\n"
             "- 검은 경계선/텍스트가 지저분하면 '검은 경계선 제거(보간)'을 켜보세요.\n"
             "- 픽셀 크기를 작게 할수록 디테일은 좋아지지만 느려질 수 있습니다."
@@ -293,7 +402,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         h.addWidget(self.txtUnit)
         layout.addWidget(grp_preset)
 
-        grp_clip = QtWidgets.QGroupBox("3. 저장/처리 옵션")
+        grp_clip = QtWidgets.QGroupBox("3. 처리/보정 옵션")
         grid2 = QtWidgets.QGridLayout(grp_clip)
         self.spinPixelSize = QtWidgets.QDoubleSpinBox(grp_clip)
         self.spinPixelSize.setDecimals(2)
@@ -311,13 +420,31 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.spinExtentBuffer.setValue(0.0)
         self.spinExtentBuffer.setToolTip("조사지역 경계(사각형)의 바깥쪽으로 버퍼(m)를 줍니다. 0이면 버퍼 없음.")
 
-        self.chkDissolve = QtWidgets.QCheckBox("구간별로 합치기(dissolve)")
-        self.chkDissolve.setChecked(True)
-        self.chkDissolve.setToolTip("같은 구간(class)끼리 하나의 멀티폴리곤으로 합칩니다(도면/분석이 단순해짐).")
+        self.chkMaskAoi = QtWidgets.QCheckBox("AOI 마스크 적용(폴리곤 내부만)")
+        self.chkMaskAoi.setChecked(True)
+        self.chkMaskAoi.setToolTip("조사지역 폴리곤 내부만 유효값으로 두고 바깥은 NoData로 처리합니다. (분석/중심점 계산에 권장)")
+
+        self.chkLowAsNoData = QtWidgets.QCheckBox("0~최소값(회색) 구간을 NoData로 취급")
+        self.chkLowAsNoData.setChecked(True)
+        self.chkLowAsNoData.setToolTip(
+            "범례의 최저값(보통 회색)은 실제 데이터가 아닌 배경/무자료로 보고 NoData(-9999)로 처리합니다.\n"
+            "예: Fe2O3 프리셋은 0~3.1 구간을 NoData로 취급"
+        )
 
         self.chkFixMax = QtWidgets.QCheckBox("최댓값을 범례 최댓값으로 보정")
         self.chkFixMax.setChecked(False)
         self.chkFixMax.setToolTip("색상 매칭 결과의 최댓값이 범례 최댓값보다 낮게 나오면, 전체를 비례 스케일합니다.")
+
+        self.chkSnapMax = QtWidgets.QCheckBox("고농도 스냅(최댓값)")
+        self.chkSnapMax.setChecked(False)
+        self.chkSnapMax.setToolTip("마지막 구간(예: 12~51)에서 일정 이상이면 최댓값으로 강제합니다. (로컬 보정)")
+        self.spinSnapT = QtWidgets.QDoubleSpinBox(grp_clip)
+        self.spinSnapT.setDecimals(2)
+        self.spinSnapT.setMinimum(0.0)
+        self.spinSnapT.setMaximum(1.0)
+        self.spinSnapT.setSingleStep(0.05)
+        self.spinSnapT.setValue(0.7)
+        self.spinSnapT.setToolTip("마지막 구간에서 t(0~1)가 이 값보다 크면 최댓값으로 스냅합니다.")
 
         self.chkInpaint = QtWidgets.QCheckBox("검은 경계선 제거(보간)")
         self.chkInpaint.setChecked(True)
@@ -333,14 +460,97 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         grid2.addWidget(QtWidgets.QLabel("조사지역 경계(사각형) 버퍼(m)"), 0, 2)
         grid2.addWidget(self.spinExtentBuffer, 0, 3)
 
-        grid2.addWidget(self.chkDissolve, 1, 0, 1, 2)
+        grid2.addWidget(self.chkMaskAoi, 1, 0, 1, 2)
         grid2.addWidget(self.chkFixMax, 1, 2, 1, 2)
 
         grid2.addWidget(self.chkInpaint, 2, 0, 1, 2)
         grid2.addWidget(QtWidgets.QLabel("보간 거리(px)"), 2, 2)
         grid2.addWidget(self.spinFillDist, 2, 3)
 
+        grid2.addWidget(self.chkSnapMax, 3, 0, 1, 2)
+        grid2.addWidget(QtWidgets.QLabel("스냅 t(0~1)"), 3, 2)
+        grid2.addWidget(self.spinSnapT, 3, 3)
+
+        grid2.addWidget(self.chkLowAsNoData, 4, 0, 1, 4)
+
         layout.addWidget(grp_clip)
+
+        grp_out = QtWidgets.QGroupBox("4. 출력 옵션")
+        grid3 = QtWidgets.QGridLayout(grp_out)
+
+        self.chkSaveRasters = QtWidgets.QCheckBox("값/구간 래스터 저장")
+        self.chkSaveRasters.setChecked(True)
+        self.chkSaveRasters.setToolTip("값(value) 및 구간(class) 래스터를 프로젝트 홈(없으면 QGIS 프로필) 하위에 저장합니다.")
+
+        self.chkAddRasters = QtWidgets.QCheckBox("프로젝트에 래스터 레이어로 추가")
+        self.chkAddRasters.setChecked(True)
+        self.chkAddRasters.setToolTip("저장된 래스터 레이어를 ArchToolkit - GeoChem 그룹에 함께 추가합니다.")
+
+        self.chkMakePolygons = QtWidgets.QCheckBox("폴리곤 생성(구간별)")
+        self.chkMakePolygons.setChecked(False)
+        self.chkMakePolygons.setToolTip("구간(class) 래스터를 폴리곤으로 변환합니다(요약/도면용).")
+
+        self.chkDissolve = QtWidgets.QCheckBox("구간별로 합치기(dissolve)")
+        self.chkDissolve.setChecked(True)
+        self.chkDissolve.setEnabled(False)
+        self.chkDissolve.setToolTip("같은 구간(class)끼리 하나의 멀티폴리곤으로 합칩니다(도면/분석이 단순해짐).")
+
+        self.chkDropNoData = QtWidgets.QCheckBox("NoData(투명) 폴리곤 제외")
+        self.chkDropNoData.setChecked(True)
+        self.chkDropNoData.setEnabled(False)
+        self.chkDropNoData.setToolTip("class_id=0(투명/NoData) 폴리곤을 결과에서 제외합니다.")
+
+        grid3.addWidget(self.chkSaveRasters, 0, 0)
+        grid3.addWidget(self.chkAddRasters, 0, 1)
+        grid3.addWidget(self.chkMakePolygons, 1, 0)
+        grid3.addWidget(self.chkDissolve, 1, 1)
+        grid3.addWidget(self.chkDropNoData, 2, 0, 1, 2)
+        layout.addWidget(grp_out)
+
+        grp_center = QtWidgets.QGroupBox("5. 가중 중심점(포인트)")
+        grid4 = QtWidgets.QGridLayout(grp_center)
+        self.chkWeightedCenter = QtWidgets.QCheckBox("가중 중심점 생성")
+        self.chkWeightedCenter.setChecked(False)
+        self.chkWeightedCenter.setToolTip("값 래스터에서 가중 중심점을 계산해 포인트 레이어로 추가합니다.")
+
+        self.cmbWeightRule = QtWidgets.QComboBox(grp_center)
+        self.cmbWeightRule.addItem("값 그대로 (w = value)", "value")
+        self.cmbWeightRule.addItem("값 거듭제곱 (w = value^p)", "power")
+        self.cmbWeightRule.addItem("임계값 이상만 (w = value, value>=t)", "threshold")
+        self.cmbWeightRule.addItem("임계값 이상만 (w = 1, value>=t)", "binary")
+        self.cmbWeightRule.addItem("상위 %만 (w = value, top X%)", "top_pct")
+
+        self.spinWeightPower = QtWidgets.QSpinBox(grp_center)
+        self.spinWeightPower.setMinimum(1)
+        self.spinWeightPower.setMaximum(8)
+        self.spinWeightPower.setValue(2)
+        self.spinWeightPower.setToolTip("거듭제곱 지수 p (w = value^p)")
+
+        self.spinWeightThreshold = QtWidgets.QDoubleSpinBox(grp_center)
+        self.spinWeightThreshold.setDecimals(2)
+        self.spinWeightThreshold.setMinimum(0.0)
+        self.spinWeightThreshold.setMaximum(1_000_000.0)
+        self.spinWeightThreshold.setValue(12.0)
+        self.spinWeightThreshold.setToolTip("임계값 t (value>=t만 사용)")
+
+        self.spinWeightTopPct = QtWidgets.QDoubleSpinBox(grp_center)
+        self.spinWeightTopPct.setDecimals(1)
+        self.spinWeightTopPct.setMinimum(0.1)
+        self.spinWeightTopPct.setMaximum(100.0)
+        self.spinWeightTopPct.setSingleStep(1.0)
+        self.spinWeightTopPct.setValue(10.0)
+        self.spinWeightTopPct.setToolTip("상위 X%만 사용 (예: 10이면 상위 10%)")
+
+        grid4.addWidget(self.chkWeightedCenter, 0, 0, 1, 2)
+        grid4.addWidget(QtWidgets.QLabel("가중치 규칙"), 1, 0)
+        grid4.addWidget(self.cmbWeightRule, 1, 1)
+        grid4.addWidget(QtWidgets.QLabel("p"), 2, 0)
+        grid4.addWidget(self.spinWeightPower, 2, 1)
+        grid4.addWidget(QtWidgets.QLabel("t"), 3, 0)
+        grid4.addWidget(self.spinWeightThreshold, 3, 1)
+        grid4.addWidget(QtWidgets.QLabel("X(%)"), 4, 0)
+        grid4.addWidget(self.spinWeightTopPct, 4, 1)
+        layout.addWidget(grp_center)
 
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
@@ -353,6 +563,13 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.btnClose.clicked.connect(self.reject)
         self.btnRun.clicked.connect(self.run)
         self.cmbPreset.currentIndexChanged.connect(self._on_preset_changed)
+        self.chkMakePolygons.stateChanged.connect(self._update_polygon_ui)
+        self.chkAddRasters.stateChanged.connect(self._on_add_rasters_changed)
+        self.chkWeightedCenter.stateChanged.connect(self._update_weight_ui)
+        self.cmbWeightRule.currentIndexChanged.connect(self._update_weight_ui)
+
+        self._update_polygon_ui()
+        self._update_weight_ui()
 
         # Tooltips: keep the dialog short, show detailed guidance on hover.
         try:
@@ -398,6 +615,17 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 "전체를 비율로 스케일해서 0~최댓값 범위를 맞춥니다.\n"
                 "지도 일부만 잘랐을 때(고농도 구간이 포함되지 않을 때) 유용합니다."
             )
+            self.chkSnapMax.setToolTip(
+                "마지막 구간(예: 12~51)에서 고농도 영역이 잘 안 잡힐 때 사용하는 로컬 보정입니다.\n"
+                "- t는 마지막 구간의 색상 선분 위 위치(0~1)입니다.\n"
+                "- t가 스냅값보다 크면 최댓값(예: 51)으로 강제합니다.\n"
+                "※ 과하면 고농도 영역이 과대평가될 수 있습니다."
+            )
+            self.spinSnapT.setToolTip(
+                "고농도 스냅 임계값입니다.\n"
+                "- 0.7이면 마지막 구간 상위 30%를 최댓값으로 스냅합니다.\n"
+                "- 값이 작을수록 더 많은 픽셀이 최댓값으로 들어갑니다."
+            )
             self.chkInpaint.setToolTip(
                 "무채색(검정/짙은 회색) 경계선을 NoData로 만든 뒤 주변 값으로 메웁니다.\n"
                 "지괴 경계선/텍스트 등 '검은 선'이 결과를 깨뜨릴 때 켜세요.\n"
@@ -413,7 +641,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-        self.resize(640, 540)
+        self.resize(700, 650)
 
     def _on_preset_changed(self):
         try:
@@ -421,6 +649,32 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             p = PRESETS.get(key)
             if p:
                 self.txtUnit.setText(p.unit or "")
+        except Exception:
+            pass
+
+    def _on_add_rasters_changed(self):
+        try:
+            if self.chkAddRasters.isChecked():
+                self.chkSaveRasters.setChecked(True)
+        except Exception:
+            pass
+
+    def _update_polygon_ui(self):
+        try:
+            enabled = bool(self.chkMakePolygons.isChecked())
+            self.chkDissolve.setEnabled(enabled)
+            self.chkDropNoData.setEnabled(enabled)
+        except Exception:
+            pass
+
+    def _update_weight_ui(self):
+        try:
+            enabled = bool(self.chkWeightedCenter.isChecked())
+            self.cmbWeightRule.setEnabled(enabled)
+            rule = str(self.cmbWeightRule.currentData() or "")
+            self.spinWeightPower.setEnabled(enabled and rule == "power")
+            self.spinWeightThreshold.setEnabled(enabled and rule in ("threshold", "binary"))
+            self.spinWeightTopPct.setEnabled(enabled and rule == "top_pct")
         except Exception:
             pass
 
@@ -466,10 +720,25 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             return
 
         unit = (self.txtUnit.text() or "").strip()
-        do_dissolve = bool(self.chkDissolve.isChecked())
+        do_mask_aoi = bool(getattr(self, "chkMaskAoi", None) and self.chkMaskAoi.isChecked())
+        do_low_as_nodata = bool(getattr(self, "chkLowAsNoData", None) and self.chkLowAsNoData.isChecked())
+        do_make_polygons = bool(getattr(self, "chkMakePolygons", None) and self.chkMakePolygons.isChecked())
+        do_dissolve = bool(self.chkDissolve.isChecked()) and do_make_polygons
         do_fix_max = bool(self.chkFixMax.isChecked())
+        do_snap_max = bool(getattr(self, "chkSnapMax", None) and self.chkSnapMax.isChecked())
+        snap_t = float(getattr(self, "spinSnapT", None).value()) if getattr(self, "spinSnapT", None) else 0.0
         do_inpaint = bool(self.chkInpaint.isChecked())
         fill_dist = int(self.spinFillDist.value())
+        do_drop_nodata = bool(getattr(self, "chkDropNoData", None) and self.chkDropNoData.isChecked()) and do_make_polygons
+        do_save_rasters = bool(getattr(self, "chkSaveRasters", None) and self.chkSaveRasters.isChecked())
+        do_add_rasters = bool(getattr(self, "chkAddRasters", None) and self.chkAddRasters.isChecked())
+        do_weight_center = bool(getattr(self, "chkWeightedCenter", None) and self.chkWeightedCenter.isChecked())
+        weight_rule = str(getattr(self, "cmbWeightRule", None).currentData() or "value") if getattr(self, "cmbWeightRule", None) else "value"
+        weight_power = int(getattr(self, "spinWeightPower", None).value()) if getattr(self, "spinWeightPower", None) else 2
+        weight_threshold = float(getattr(self, "spinWeightThreshold", None).value()) if getattr(self, "spinWeightThreshold", None) else 0.0
+        weight_top_pct = float(getattr(self, "spinWeightTopPct", None).value()) if getattr(self, "spinWeightTopPct", None) else 10.0
+        if do_add_rasters:
+            do_save_rasters = True
 
         # Survey area extent (bounding rectangle), optionally buffered.
         try:
@@ -492,39 +761,90 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             restore_ui_focus(self)
             return
 
-        extent = aoi_geom.boundingBox()
+        extent_aoi = aoi_geom.boundingBox()
         buf = float(self.spinExtentBuffer.value() or 0.0)
         if buf > 0:
-            extent.grow(buf)
+            extent_aoi.grow(buf)
 
-        # Transform survey-area extent to raster CRS if needed.
+        # Keep a canvas-compatible extent for zooming (destination CRS).
+        extent_canvas = QgsRectangle(extent_aoi)
+        try:
+            dest_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+            if dest_crs and aoi.crs() != dest_crs:
+                ct_canvas = QgsCoordinateTransform(aoi.crs(), dest_crs, QgsProject.instance())
+                extent_canvas = ct_canvas.transformBoundingBox(extent_canvas)
+        except Exception:
+            pass
+
+        # Transform survey-area extent to raster CRS for export.
+        extent_export = QgsRectangle(extent_aoi)
+        aoi_geom_raster = QgsGeometry(aoi_geom)
         try:
             if aoi.crs() != raster.crs():
                 ct = QgsCoordinateTransform(aoi.crs(), raster.crs(), QgsProject.instance())
-                extent = ct.transformBoundingBox(extent)
+                extent_export = ct.transformBoundingBox(extent_export)
+                try:
+                    aoi_geom_raster.transform(ct)
+                except Exception:
+                    pass
         except Exception as e:
             log_message(f"GeoChem: extent transform failed: {e}", level=Qgis.Warning)
+            try:
+                aoi_geom_raster = QgsGeometry(aoi_geom)
+            except Exception:
+                aoi_geom_raster = None
 
-        if extent.isEmpty() or extent.width() <= 0 or extent.height() <= 0:
+        if extent_export.isEmpty() or extent_export.width() <= 0 or extent_export.height() <= 0:
             push_message(self.iface, "오류", "조사지역 경계(사각형)가 비어있습니다.", level=2, duration=7)
             restore_ui_focus(self)
             return
 
         # Choose pixel size: 0 = use current canvas resolution.
-        px = float(self.spinPixelSize.value() or 0.0)
+        px_input = float(self.spinPixelSize.value() or 0.0)
+        px = px_input
         if px <= 0:
             try:
-                px = float(self.iface.mapCanvas().mapUnitsPerPixel())
+                # mapUnitsPerPixel is in destination CRS units; only use it when raster CRS matches.
+                dest_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+                if dest_crs and dest_crs == raster.crs():
+                    px = float(self.iface.mapCanvas().mapUnitsPerPixel())
+                else:
+                    px = 0.0
             except Exception:
                 px = 0.0
         if px <= 0:
-            px = max(extent.width(), extent.height()) / 1024.0
+            px = max(extent_export.width(), extent_export.height()) / 1024.0
         px = max(px, 1e-9)
 
-        width = max(1, int(math.ceil(extent.width() / px)))
-        height = max(1, int(math.ceil(extent.height() / px)))
+        width = max(1, int(math.ceil(extent_export.width() / px)))
+        height = max(1, int(math.ceil(extent_export.height() / px)))
 
-        log_message(f"GeoChem: export extent {extent.toString()} px={px:g} => {width}x{height}", level=Qgis.Info)
+        # Guardrail: prevent accidental huge rasters (memory explosion during numpy processing).
+        MAX_PIXELS = 12_000_000
+        total_px = int(width) * int(height)
+        if total_px > MAX_PIXELS:
+            if px_input > 0:
+                push_message(
+                    self.iface,
+                    "오류",
+                    f"요청 해상도가 너무 큽니다: {width}x{height} ({total_px:,} px). 픽셀 크기를 키우거나 조사지역 범위를 줄여주세요.",
+                    level=2,
+                    duration=10,
+                )
+                restore_ui_focus(self)
+                return
+
+            scale = math.sqrt(float(total_px) / float(MAX_PIXELS))
+            px *= max(scale, 1.0)
+            width = max(1, int(math.ceil(extent_export.width() / px)))
+            height = max(1, int(math.ceil(extent_export.height() / px)))
+            total_px = int(width) * int(height)
+            log_message(
+                f"GeoChem: auto-adjusted px to {px:g} to cap size => {width}x{height} ({total_px:,} px)",
+                level=Qgis.Warning,
+            )
+
+        log_message(f"GeoChem: export extent {extent_export.toString()} px={px:g} => {width}x{height}", level=Qgis.Info)
 
         self._cleanup_tmp()
         self._tmp_dir = tempfile.mkdtemp(prefix="ArchToolkit_GeoChem_")
@@ -539,7 +859,9 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         try:
             # 1) Export WMS RGB to GeoTIFF within survey-area extent (rectangular).
-            ok = self._export_raster_to_geotiff(raster=raster, out_path=rgb_path, extent=extent, width=width, height=height)
+            ok = self._export_raster_to_geotiff(
+                raster=raster, out_path=rgb_path, extent=extent_export, width=width, height=height
+            )
             if not ok:
                 push_message(self.iface, "오류", "WMS 래스터를 GeoTIFF로 저장하지 못했습니다.", level=2, duration=9)
                 restore_ui_focus(self)
@@ -553,6 +875,14 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             band_count = int(ds.RasterCount or 0)
             if band_count < 3:
                 raise RuntimeError("RGB 래스터는 최소 3밴드(R,G,B)가 필요합니다.")
+            gt = None
+            proj_wkt = ""
+            try:
+                gt = ds.GetGeoTransform()
+                proj_wkt = str(ds.GetProjection() or "")
+            except Exception:
+                gt = None
+                proj_wkt = ""
             r = ds.GetRasterBand(1).ReadAsArray()
             g = ds.GetRasterBand(2).ReadAsArray()
             b = ds.GetRasterBand(3).ReadAsArray()
@@ -562,17 +892,65 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                     a = ds.GetRasterBand(4).ReadAsArray()
                 except Exception:
                     a = None
+            try:
+                log_message(
+                    f"GeoChem: exported bands={band_count} shape={getattr(r, 'shape', None)} dtype={getattr(r, 'dtype', None)}",
+                    level=Qgis.Info,
+                )
+            except Exception:
+                pass
 
             log_message("GeoChem: RGB -> value mapping…", level=Qgis.Info)
-            out = _interp_rgb_to_value(r=r, g=g, b=b, points=preset.points)
+            if do_snap_max:
+                log_message(f"GeoChem: high-end snap enabled (last segment t>{snap_t:g} -> max)", level=Qgis.Info)
+            out = _interp_rgb_to_value(
+                r=r,
+                g=g,
+                b=b,
+                points=preset.points,
+                snap_last_t=snap_t if do_snap_max else None,
+            )
             nodata_val = np.float32(-9999.0)
 
             # Transparent pixels (if alpha band exists) -> NoData
+            transparent = None
             if a is not None:
                 try:
-                    out = np.where(a.astype(np.int16, copy=False) <= 0, nodata_val, out)
+                    transparent = a.astype(np.int16, copy=False) <= 0
+                    out = out.astype(np.float32, copy=False)
+                    out[transparent] = nodata_val
+                    try:
+                        total = int(transparent.size)
+                        tr = int(np.count_nonzero(transparent))
+                        log_message(f"GeoChem: alpha transparent {tr:,}/{total:,} ({(tr/total*100.0):.2f}%)", level=Qgis.Info)
+                    except Exception:
+                        pass
                 except Exception:
-                    pass
+                    transparent = None
+
+            low_nodata_mask = None
+            if do_low_as_nodata:
+                try:
+                    br = _points_to_breaks(preset.points)
+                    min_valid = float(br[1]) if len(br) >= 2 else None
+                    if min_valid is not None:
+                        low_nodata_mask = np.isfinite(out) & (out != nodata_val) & (out < np.float32(min_valid))
+                        n_low = int(np.count_nonzero(low_nodata_mask))
+                        out = out.astype(np.float32, copy=False)
+                        out[low_nodata_mask] = nodata_val
+                        log_message(
+                            f"GeoChem: treat <{min_valid:g} as nodata {n_low:,} px (legend low-end)",
+                            level=Qgis.Info,
+                        )
+                except Exception:
+                    low_nodata_mask = None
+
+            try:
+                total = int(out.size)
+                nd = int(np.count_nonzero(out == nodata_val))
+                log_message(f"GeoChem: nodata pixels {nd:,}/{total:,} ({(nd/total*100.0):.2f}%)", level=Qgis.Info)
+            except Exception:
+                pass
 
             # Optional max correction (as in user's script)
             if do_fix_max:
@@ -593,12 +971,78 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 log_message("GeoChem: masking dark linework…", level=Qgis.Info)
                 try:
                     mask = _mask_black_lines(r, g, b)
+                    if transparent is not None:
+                        mask &= ~transparent
+                    try:
+                        m = int(np.count_nonzero(mask))
+                        t = int(mask.size)
+                        log_message(f"GeoChem: linework mask {m:,}/{t:,} ({(m/t*100.0):.2f}%)", level=Qgis.Info)
+                    except Exception:
+                        pass
                     out = out.astype(np.float32, copy=False)
                     out[mask] = np.nan
                 except Exception:
                     pass
                 log_message("GeoChem: filling masked pixels…", level=Qgis.Info)
                 out = _gdal_fill_nodata_nearestish(arr=out, nodata=float(nodata_val), max_search_dist_px=fill_dist)
+                if transparent is not None:
+                    try:
+                        out = out.astype(np.float32, copy=False)
+                        out[transparent] = nodata_val
+                    except Exception:
+                        pass
+                if low_nodata_mask is not None:
+                    try:
+                        out = out.astype(np.float32, copy=False)
+                        out[low_nodata_mask] = nodata_val
+                    except Exception:
+                        pass
+                try:
+                    total = int(out.size)
+                    nd = int(np.count_nonzero(out == nodata_val))
+                    log_message(
+                        f"GeoChem: nodata pixels after fill {nd:,}/{total:,} ({(nd/total*100.0):.2f}%)",
+                        level=Qgis.Info,
+                    )
+                except Exception:
+                    pass
+
+            # Optional AOI mask: keep only pixels inside the AOI polygon (outside -> NoData).
+            if do_mask_aoi:
+                try:
+                    if gt is not None and aoi_geom_raster is not None and not aoi_geom_raster.isEmpty():
+                        mask_aoi = _gdal_rasterize_wkt_mask(
+                            geom_wkt=aoi_geom_raster.asWkt(),
+                            xsize=int(ds.RasterXSize),
+                            ysize=int(ds.RasterYSize),
+                            geotransform=gt,
+                            projection_wkt=proj_wkt,
+                        )
+                    else:
+                        mask_aoi = None
+                    if mask_aoi is not None:
+                        out = out.astype(np.float32, copy=False)
+                        out[~mask_aoi] = nodata_val
+                        try:
+                            total = int(mask_aoi.size)
+                            inside = int(np.count_nonzero(mask_aoi))
+                            log_message(
+                                f"GeoChem: AOI mask inside {inside:,}/{total:,} ({(inside/total*100.0):.2f}%)",
+                                level=Qgis.Info,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            total2 = int(out.size)
+                            nd2 = int(np.count_nonzero(out == nodata_val))
+                            log_message(
+                                f"GeoChem: nodata pixels after AOI mask {nd2:,}/{total2:,} ({(nd2/total2*100.0):.2f}%)",
+                                level=Qgis.Info,
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
             # Ensure explicit nodata
             out = out.astype(np.float32, copy=False)
@@ -611,111 +1055,237 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             # 3) Class raster
             breaks = _points_to_breaks(preset.points)
             log_message(f"GeoChem: classify to {len(breaks)-1} bins…", level=Qgis.Info)
-            cls = _classify_to_bins(values=out, breaks=breaks, nodata_class=0)
+            cls = _classify_to_bins(values=out, breaks=breaks, nodata_class=0, nodata_value=float(nodata_val))
+            try:
+                valid = np.isfinite(out) & (out != nodata_val)
+                if np.any(valid):
+                    vmin = float(np.nanmin(out[valid]))
+                    vmax = float(np.nanmax(out[valid]))
+                    p99 = float(np.nanpercentile(out[valid], 99.0))
+                    log_message(f"GeoChem: value stats min={vmin:g} max={vmax:g} p99={p99:g}", level=Qgis.Info)
+                else:
+                    log_message("GeoChem: value stats (no valid pixels)", level=Qgis.Warning)
+            except Exception:
+                pass
+            try:
+                flat = cls.ravel()
+                counts = np.bincount(flat.astype(np.int64, copy=False), minlength=len(breaks))
+                parts = [f"class0={int(counts[0]):,}"]
+                for i in range(1, len(breaks)):
+                    v0 = float(breaks[i - 1])
+                    v1 = float(breaks[i])
+                    parts.append(f"class{i}({v0:g}-{v1:g})={int(counts[i]):,}")
+                log_message("GeoChem: class counts " + " | ".join(parts), level=Qgis.Info)
+
+                # Store counts so we can write per-class pixel stats into the polygon layer.
+                pix_counts = {}
+                try:
+                    for i in range(len(breaks)):  # 0..n_classes
+                        pix_counts[int(i)] = int(counts[i]) if i < len(counts) else 0
+                except Exception:
+                    pix_counts = {}
+                self._last_geochem_pix_counts = pix_counts
+            except Exception:
+                self._last_geochem_pix_counts = {}
+                pass
+
+            # Per-class mean value (useful as a representative numeric attribute on dissolved polygons).
+            try:
+                valid_mean = (cls > 0) & np.isfinite(out) & (out != nodata_val)
+                if np.any(valid_mean):
+                    flat_cls = cls[valid_mean].astype(np.int64, copy=False)
+                    flat_out = out[valid_mean].astype(np.float64, copy=False)
+                    sums = np.bincount(flat_cls, weights=flat_out, minlength=len(breaks))
+                    sums2 = np.bincount(flat_cls, weights=flat_out * flat_out, minlength=len(breaks))
+                    cnts = np.bincount(flat_cls, minlength=len(breaks))
+                    means = {}
+                    stds = {}
+                    for i in range(1, len(breaks)):
+                        if i < len(cnts) and cnts[i] > 0:
+                            mu = float(sums[i] / cnts[i])
+                            means[int(i)] = mu
+                            try:
+                                var = float(sums2[i] / cnts[i]) - (mu * mu)
+                                if var < 0 and var > -1e-12:
+                                    var = 0.0
+                                stds[int(i)] = float(math.sqrt(var)) if var > 0 else 0.0
+                            except Exception:
+                                stds[int(i)] = 0.0
+                    self._last_geochem_class_mean = means
+                    self._last_geochem_class_std = stds
+                    try:
+                        last_cid = len(breaks) - 1
+                        if int(last_cid) in means:
+                            log_message(f"GeoChem: class{last_cid} mean={means[int(last_cid)]:g}", level=Qgis.Info)
+                    except Exception:
+                        pass
+                else:
+                    self._last_geochem_class_mean = {}
+                    self._last_geochem_class_std = {}
+            except Exception:
+                self._last_geochem_class_mean = {}
+                self._last_geochem_class_std = {}
+
             self._write_single_band_geotiff(ds, out_path=cls_path, data=cls.astype(np.int16, copy=False), nodata=0, gdal_type=gdal.GDT_Int16)
             ds = None
 
-            # 4) Polygonize -> dissolve
-            log_message("GeoChem: polygonize…", level=Qgis.Info)
-            poly_path = os.path.join(self._tmp_dir, f"{preset.key}_poly_{run_id}.gpkg")
-            try:
-                if os.path.exists(poly_path):
-                    os.remove(poly_path)
-            except Exception:
-                pass
+            persist_val_path = None
+            persist_cls_path = None
+            if do_save_rasters:
+                try:
+                    persist_val_path, persist_cls_path = self._persist_geochem_rasters(
+                        preset=preset, run_id=run_id, val_path=val_path, cls_path=cls_path
+                    )
+                    log_message(
+                        f"GeoChem: saved rasters val={persist_val_path} cls={persist_cls_path}",
+                        level=Qgis.Info,
+                    )
+                except Exception as e:
+                    log_message(f"GeoChem: failed to save rasters: {e}", level=Qgis.Warning)
+                    persist_val_path = None
+                    persist_cls_path = None
 
-            poly_out = processing.run(
-                "gdal:polygonize",
-                {
-                    "INPUT": cls_path,
-                    "BAND": 1,
-                    "FIELD": "class_id",
-                    "EIGHT_CONNECTEDNESS": True,
-                    "OUTPUT": poly_path,
-                },
-            ).get("OUTPUT")
-
-            log_message(f"GeoChem: polygonize OUTPUT type={type(poly_out).__name__} value={poly_out}", level=Qgis.Info)
+            center_layer = None
+            if do_weight_center:
+                try:
+                    if not do_mask_aoi:
+                        log_message(
+                            "GeoChem: AOI 마스크가 꺼져 있어 가중 중심점이 경계 사각형(extent) 기준으로 계산됩니다.",
+                            level=Qgis.Warning,
+                        )
+                except Exception:
+                    pass
+                try:
+                    center_layer = self._make_weighted_center_layer(
+                        values=out,
+                        nodata_value=float(nodata_val),
+                        geotransform=gt,
+                        src_crs=raster.crs(),
+                        dest_crs=self.iface.mapCanvas().mapSettings().destinationCrs(),
+                        preset=preset,
+                        unit=unit,
+                        run_id=run_id,
+                        weight_rule=weight_rule,
+                        weight_power=weight_power,
+                        weight_threshold=weight_threshold,
+                        weight_top_pct=weight_top_pct,
+                    )
+                except Exception as e:
+                    log_message(f"GeoChem: weighted center failed: {e}", level=Qgis.Warning)
+                    center_layer = None
 
             poly: Optional[QgsVectorLayer] = None
-            if isinstance(poly_out, QgsVectorLayer):
-                poly = poly_out
-            else:
-                out_str = str(poly_out) if poly_out is not None else ""
-                out_path = (out_str.split("|", 1)[0] or "").strip()
-                if out_path:
-                    poly_path = out_path
-
+            if do_make_polygons:
+                # 4) Polygonize -> dissolve
+                log_message("GeoChem: polygonize…", level=Qgis.Info)
+                poly_path = os.path.join(self._tmp_dir, f"{preset.key}_poly_{run_id}.gpkg")
                 try:
-                    exists = os.path.exists(poly_path)
-                    size = os.path.getsize(poly_path) if exists else 0
-                    log_message(f"GeoChem: polygonize file exists={exists} size={size}", level=Qgis.Info)
+                    if os.path.exists(poly_path):
+                        os.remove(poly_path)
                 except Exception:
                     pass
 
-                # Try to discover the layer name from the GeoPackage and load it reliably.
-                layer_name = None
-                try:
-                    vds = gdal.OpenEx(poly_path, gdal.OF_VECTOR)
-                    if vds is not None:
-                        names = []
-                        try:
-                            n = int(vds.GetLayerCount() or 0)
-                        except Exception:
-                            n = 0
-                        for i in range(n):
-                            try:
-                                lyr = vds.GetLayerByIndex(i)
-                                if lyr is not None:
-                                    names.append(str(lyr.GetName()))
-                            except Exception:
-                                continue
-                        vds = None
-                        log_message(f"GeoChem: gpkg layers={names}", level=Qgis.Info)
-                        if names:
-                            layer_name = names[0]
-                except Exception:
-                    pass
+                poly_out = processing.run(
+                    "gdal:polygonize",
+                    {
+                        "INPUT": cls_path,
+                        "BAND": 1,
+                        "FIELD": "class_id",
+                        "EIGHT_CONNECTEDNESS": True,
+                        "OUTPUT": poly_path,
+                    },
+                ).get("OUTPUT")
 
-                uri_candidates = []
-                if layer_name:
-                    uri_candidates.append(f"{poly_path}|layername={layer_name}")
-                uri_candidates.append(poly_path)
+                log_message(f"GeoChem: polygonize OUTPUT type={type(poly_out).__name__} value={poly_out}", level=Qgis.Info)
 
-                for uri in uri_candidates:
+                if isinstance(poly_out, QgsVectorLayer):
+                    poly = poly_out
+                else:
+                    out_str = str(poly_out) if poly_out is not None else ""
+                    out_path = (out_str.split("|", 1)[0] or "").strip()
+                    if out_path:
+                        poly_path = out_path
+
                     try:
-                        cand = QgsVectorLayer(uri, f"{preset.label} polygons", "ogr")
-                        if cand.isValid():
-                            poly = cand
-                            break
+                        exists = os.path.exists(poly_path)
+                        size = os.path.getsize(poly_path) if exists else 0
+                        log_message(f"GeoChem: polygonize file exists={exists} size={size}", level=Qgis.Info)
                     except Exception:
-                        continue
+                        pass
 
-            if poly is None or not isinstance(poly, QgsVectorLayer) or not poly.isValid():
-                raise RuntimeError("Polygonize failed (no valid vector layer output)")
+                    # Try to discover the layer name from the GeoPackage and load it reliably.
+                    layer_name = None
+                    try:
+                        vds = gdal.OpenEx(poly_path, gdal.OF_VECTOR)
+                        if vds is not None:
+                            names = []
+                            try:
+                                n = int(vds.GetLayerCount() or 0)
+                            except Exception:
+                                n = 0
+                            for i in range(n):
+                                try:
+                                    lyr = vds.GetLayerByIndex(i)
+                                    if lyr is not None:
+                                        names.append(str(lyr.GetName()))
+                                except Exception:
+                                    continue
+                            vds = None
+                            log_message(f"GeoChem: gpkg layers={names}", level=Qgis.Info)
+                            if names:
+                                layer_name = names[0]
+                    except Exception:
+                        pass
 
-            # Drop nodata (class_id == 0)
-            try:
-                poly = processing.run(
-                    "native:extractbyexpression",
-                    {"INPUT": poly, "EXPRESSION": "\"class_id\" > 0", "OUTPUT": "memory:"},
-                )["OUTPUT"]
-            except Exception:
-                pass
+                    uri_candidates = []
+                    if layer_name:
+                        uri_candidates.append(f"{poly_path}|layername={layer_name}")
+                    uri_candidates.append(poly_path)
 
-            if do_dissolve:
-                log_message("GeoChem: dissolve by class…", level=Qgis.Info)
-                poly = processing.run(
-                    "native:dissolve",
-                    {"INPUT": poly, "FIELD": ["class_id"], "OUTPUT": "memory:"},
-                )["OUTPUT"]
+                    for uri in uri_candidates:
+                        try:
+                            cand = QgsVectorLayer(uri, f"{preset.label} polygons", "ogr")
+                            if cand.isValid():
+                                poly = cand
+                                break
+                        except Exception:
+                            continue
 
-            # Add descriptive fields
-            self._decorate_polygons(layer=poly, preset=preset, unit=unit)
+                if poly is None or not isinstance(poly, QgsVectorLayer) or not poly.isValid():
+                    raise RuntimeError("Polygonize failed (no valid vector layer output)")
 
-            # Add to project
-            self._add_to_project(layer=poly, preset=preset, run_id=run_id, extent=extent)
-            push_message(self.iface, "지구화학도 폴리곤화", "완료", level=0, duration=7)
+                # Drop nodata (class_id == 0)
+                if do_drop_nodata:
+                    try:
+                        poly = processing.run(
+                            "native:extractbyexpression",
+                            {"INPUT": poly, "EXPRESSION": "\"class_id\" > 0", "OUTPUT": "memory:"},
+                        )["OUTPUT"]
+                    except Exception:
+                        pass
+
+                if do_dissolve:
+                    log_message("GeoChem: dissolve by class…", level=Qgis.Info)
+                    poly = processing.run(
+                        "native:dissolve",
+                        {"INPUT": poly, "FIELD": ["class_id"], "OUTPUT": "memory:"},
+                    )["OUTPUT"]
+
+                # Add descriptive fields
+                self._decorate_polygons(layer=poly, preset=preset, unit=unit)
+
+            # Add to project (rasters / polygon / point)
+            self._add_to_project(
+                layer=poly,
+                center_layer=center_layer,
+                preset=preset,
+                unit=unit,
+                run_id=run_id,
+                extent=extent_canvas,
+                value_raster_path=persist_val_path if do_add_rasters else None,
+                class_raster_path=persist_cls_path if do_add_rasters else None,
+            )
+            push_message(self.iface, "지구화학도 래스터 수치화", "완료", level=0, duration=7)
         except Exception as e:
             log_exception("GeoChem error", e)
             try:
@@ -811,6 +1381,276 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         ds.FlushCache()
         ds = None
 
+    def _persist_geochem_rasters(self, *, preset: GeoChemPreset, run_id: str, val_path: str, cls_path: str) -> Tuple[str, str]:
+        """Persist generated rasters so they remain usable after the dialog closes."""
+        out_dir = ""
+        try:
+            base = (QgsProject.instance().homePath() or "").strip()
+            if base:
+                out_dir = os.path.join(base, "ArchToolkit_outputs", "geochem")
+            else:
+                from qgis.core import QgsApplication
+
+                out_dir = os.path.join(QgsApplication.qgisSettingsDirPath(), "ArchToolkit", "outputs", "geochem")
+        except Exception:
+            out_dir = ""
+
+        if not out_dir:
+            try:
+                from qgis.PyQt.QtCore import QStandardPaths
+
+                out_dir = os.path.join(
+                    QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation),
+                    "ArchToolkit_outputs",
+                    "geochem",
+                )
+            except Exception:
+                out_dir = os.path.join(os.path.expanduser("~"), "ArchToolkit_outputs", "geochem")
+
+        os.makedirs(out_dir, exist_ok=True)
+        val_dst = os.path.join(out_dir, os.path.basename(val_path))
+        cls_dst = os.path.join(out_dir, os.path.basename(cls_path))
+        shutil.copy2(val_path, val_dst)
+        shutil.copy2(cls_path, cls_dst)
+        return val_dst, cls_dst
+
+    def _make_weighted_center_layer(
+        self,
+        *,
+        values: np.ndarray,
+        nodata_value: float,
+        geotransform,
+        src_crs,
+        dest_crs,
+        preset: GeoChemPreset,
+        unit: str,
+        run_id: str,
+        weight_rule: str,
+        weight_power: int,
+        weight_threshold: float,
+        weight_top_pct: float,
+    ) -> Optional[QgsVectorLayer]:
+        """Compute weighted center from a value raster and return a point memory layer (or None)."""
+        if geotransform is None:
+            return None
+
+        gt = list(geotransform) if geotransform is not None else None
+        if not gt or len(gt) != 6:
+            return None
+
+        v = values.astype(np.float32, copy=False)
+        valid = np.isfinite(v)
+        try:
+            valid &= v != np.float32(float(nodata_value))
+        except Exception:
+            pass
+        if not np.any(valid):
+            log_message("GeoChem: weighted center skipped (no valid pixels)", level=Qgis.Warning)
+            return None
+
+        rule = (weight_rule or "value").strip()
+        thr_used = None
+
+        # Build weight array (float64) with zeros outside selection.
+        w = np.zeros(v.shape, dtype=np.float64)
+        try:
+            if rule == "power":
+                p = max(1, int(weight_power))
+                vv = np.maximum(v[valid].astype(np.float64, copy=False), 0.0)
+                w[valid] = np.power(vv, float(p))
+                param = float(p)
+            elif rule == "threshold":
+                t = float(weight_threshold)
+                sel = valid & (v >= np.float32(t))
+                w[sel] = v[sel].astype(np.float64, copy=False)
+                param = float(t)
+            elif rule == "binary":
+                t = float(weight_threshold)
+                sel = valid & (v >= np.float32(t))
+                w[sel] = 1.0
+                param = float(t)
+            elif rule == "top_pct":
+                pct = float(weight_top_pct)
+                pct = min(max(pct, 0.1), 100.0)
+                vv = v[valid].astype(np.float64, copy=False)
+                thr = float(np.nanpercentile(vv, 100.0 - pct))
+                thr_used = thr
+                sel = valid & (v >= np.float32(thr))
+                w[sel] = v[sel].astype(np.float64, copy=False)
+                param = float(pct)
+            else:
+                vv = np.maximum(v[valid].astype(np.float64, copy=False), 0.0)
+                w[valid] = vv
+                param = float(1.0)
+        except Exception:
+            log_message("GeoChem: weighted center skipped (weight computation failed)", level=Qgis.Warning)
+            return None
+
+        sum_w = float(np.sum(w))
+        if not math.isfinite(sum_w) or sum_w <= 0:
+            log_message("GeoChem: weighted center skipped (sum_w <= 0)", level=Qgis.Warning)
+            return None
+
+        try:
+            row_sums = np.sum(w, axis=1, dtype=np.float64)
+            col_sums = np.sum(w, axis=0, dtype=np.float64)
+            rows = np.arange(w.shape[0], dtype=np.float64)
+            cols = np.arange(w.shape[1], dtype=np.float64)
+            mean_row = float(np.dot(row_sums, rows) / sum_w)
+            mean_col = float(np.dot(col_sums, cols) / sum_w)
+        except Exception:
+            log_message("GeoChem: weighted center skipped (centroid accumulation failed)", level=Qgis.Warning)
+            return None
+
+        # Convert pixel-space centroid to map coordinates (affine geotransform).
+        x = float(gt[0] + (mean_col + 0.5) * gt[1] + (mean_row + 0.5) * gt[2])
+        y = float(gt[3] + (mean_col + 0.5) * gt[4] + (mean_row + 0.5) * gt[5])
+
+        # Transform to destination CRS for display.
+        pt = QgsPointXY(x, y)
+        try:
+            if dest_crs and src_crs and dest_crs != src_crs:
+                ct = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
+                pt = QgsPointXY(ct.transform(pt))
+        except Exception:
+            pass
+
+        # Create output point layer
+        crs = dest_crs if dest_crs else src_crs
+        uri = "Point?crs=EPSG:4326"
+        try:
+            auth = (crs.authid() or "").strip() if crs else ""
+            if auth:
+                uri = f"Point?crs={auth}"
+        except Exception:
+            pass
+
+        layer = QgsVectorLayer(uri, f"{preset.key}_가중중심_{run_id}", "memory")
+        if not layer.isValid():
+            return None
+        try:
+            if crs:
+                layer.setCrs(crs)
+        except Exception:
+            pass
+
+        pr = layer.dataProvider()
+        pr.addAttributes(
+            [
+                QgsField("element", QVariant.String),
+                QgsField("unit", QVariant.String),
+                QgsField("w_rule", QVariant.String),
+                QgsField("w_param", QVariant.Double),
+                QgsField("w_thr", QVariant.Double),
+                QgsField("w_sum", QVariant.Double),
+                QgsField("pix_n", QVariant.Int),
+            ]
+        )
+        layer.updateFields()
+
+        pix_n = 0
+        try:
+            pix_n = int(np.count_nonzero(w))
+        except Exception:
+            pix_n = 0
+
+        ft = QgsFeature(layer.fields())
+        ft.setGeometry(QgsGeometry.fromPointXY(pt))
+        ft["element"] = preset.label
+        ft["unit"] = unit
+        ft["w_rule"] = rule
+        ft["w_param"] = float(param)
+        try:
+            ft["w_thr"] = float(thr_used) if thr_used is not None else None
+        except Exception:
+            ft["w_thr"] = None
+        ft["w_sum"] = float(sum_w)
+        ft["pix_n"] = int(pix_n)
+        pr.addFeatures([ft])
+        layer.updateExtents()
+
+        try:
+            from qgis.core import QgsMarkerSymbol, QgsSingleSymbolRenderer
+
+            sym = QgsMarkerSymbol.createSimple({"name": "circle", "color": "230,0,0,255", "size": "4"})
+            layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        except Exception:
+            pass
+
+        try:
+            log_message(
+                f"GeoChem: weighted center rule={rule} param={param:g} sum_w={sum_w:g} pix_n={pix_n:,}",
+                level=Qgis.Info,
+            )
+        except Exception:
+            pass
+
+        return layer
+
+    def _style_value_raster(self, *, layer: QgsRasterLayer, preset: GeoChemPreset, unit: str):
+        """Apply legend-based pseudo-color styling to a value raster layer."""
+        try:
+            from qgis.core import QgsColorRampShader, QgsRasterShader, QgsSingleBandPseudoColorRenderer
+
+            shader = QgsRasterShader()
+            ramp = QgsColorRampShader()
+            ramp.setColorRampType(QgsColorRampShader.Interpolated)
+            items = []
+            for p in preset.points:
+                try:
+                    val = float(p.value)
+                    col = QColor(int(p.rgb[0]), int(p.rgb[1]), int(p.rgb[2]))
+                    items.append(QgsColorRampShader.ColorRampItem(val, col, f"{val:g}{unit}"))
+                except Exception:
+                    continue
+            if not items:
+                return
+            ramp.setColorRampItemList(items)
+            try:
+                ramp.setMinimumValue(float(items[0].value))
+                ramp.setMaximumValue(float(items[-1].value))
+            except Exception:
+                pass
+            shader.setRasterShaderFunction(ramp)
+            renderer = QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+            try:
+                renderer.setClassificationMin(float(items[0].value))
+                renderer.setClassificationMax(float(items[-1].value))
+            except Exception:
+                pass
+            layer.setRenderer(renderer)
+            layer.triggerRepaint()
+        except Exception:
+            pass
+
+    def _style_class_raster(self, *, layer: QgsRasterLayer, preset: GeoChemPreset, unit: str):
+        """Apply legend-based palette styling to a class raster layer."""
+        try:
+            from qgis.core import QgsPalettedRasterRenderer
+
+            breaks = _points_to_breaks(preset.points)
+            classes = []
+            try:
+                nd = preset.points[0].rgb if preset.points else (204, 204, 204)
+                classes.append(QgsPalettedRasterRenderer.Class(0, QColor(int(nd[0]), int(nd[1]), int(nd[2])), "NoData"))
+            except Exception:
+                pass
+            for i in range(1, len(breaks)):
+                v0 = float(breaks[i - 1])
+                v1 = float(breaks[i])
+                mid = (v0 + v1) / 2.0
+                col = _rgb_for_value(points=preset.points, value=mid)
+                classes.append(
+                    QgsPalettedRasterRenderer.Class(int(i), QColor(int(col[0]), int(col[1]), int(col[2])), _interval_label(v0, v1, unit))
+                )
+            if not classes:
+                return
+            renderer = QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes)
+            layer.setRenderer(renderer)
+            layer.triggerRepaint()
+        except Exception:
+            pass
+
     def _decorate_polygons(self, *, layer: QgsVectorLayer, preset: GeoChemPreset, unit: str):
         breaks = _points_to_breaks(preset.points)
         intervals = [(breaks[i], breaks[i + 1]) for i in range(len(breaks) - 1)]
@@ -822,7 +1662,15 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                 QgsField("unit", QVariant.String),
                 QgsField("v_min", QVariant.Double),
                 QgsField("v_max", QVariant.Double),
+                QgsField("v_mid", QVariant.Double),
+                QgsField("val_mean", QVariant.Double),
+                QgsField("val_std", QVariant.Double),
                 QgsField("label", QVariant.String),
+                QgsField("pix_n", QVariant.Int),
+                QgsField("pix_pct", QVariant.Double),
+                QgsField("area_m2", QVariant.Double),
+                QgsField("area_ha", QVariant.Double),
+                QgsField("area_pct", QVariant.Double),
             ]
         )
         layer.updateFields()
@@ -839,14 +1687,44 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             _alias("unit", "단위")
             _alias("v_min", "구간 최소값")
             _alias("v_max", "구간 최대값")
+            _alias("v_mid", "구간 대표값(중앙)")
+            _alias("val_mean", "구간 평균값")
             _alias("label", "구간 라벨")
+            _alias("pix_n", "픽셀 수")
+            _alias("pix_pct", "픽셀 비율(%)")
+            _alias("area_m2", "면적(m²)")
+            _alias("area_ha", "면적(ha)")
+            _alias("area_pct", "면적 비율(%)")
+        except Exception:
+            pass
+
+        try:
+            idx = layer.fields().indexFromName("val_std")
+            if idx >= 0:
+                layer.setFieldAlias(idx, "구간 표준편차")
         except Exception:
             pass
 
         # Apply attributes and style
         cats = []
+        try:
+            nd_col = preset.points[0].rgb if preset.points else (204, 204, 204)
+            nd_qcol = QColor(int(nd_col[0]), int(nd_col[1]), int(nd_col[2]), 120)
+            from qgis.core import QgsFillSymbol
+
+            nd_sym = QgsFillSymbol.createSimple(
+                {
+                    "color": f"{nd_qcol.red()},{nd_qcol.green()},{nd_qcol.blue()},{nd_qcol.alpha()}",
+                    "outline_color": "0,0,0,30",
+                    "outline_width": "0.1",
+                }
+            )
+            cats.append(QgsRendererCategory(int(0), nd_sym, "NoData"))
+        except Exception:
+            pass
         for i, (v0, v1) in enumerate(intervals, start=1):
-            col = preset.points[i].rgb if i < len(preset.points) else preset.points[-1].rgb
+            mid = (float(v0) + float(v1)) / 2.0
+            col = _rgb_for_value(points=preset.points, value=mid)
             qcol = QColor(int(col[0]), int(col[1]), int(col[2]), 140)
             try:
                 from qgis.core import QgsFillSymbol
@@ -869,36 +1747,228 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
+        # Compute per-feature geometry area (m²) for statistics fields.
+        # When dissolve is enabled, there is typically 1 feature per class_id.
+        area_by_fid = {}
+        features_per_class = {}
+        has_class0 = False
+        try:
+            from qgis.core import QgsDistanceArea, QgsProject
+
+            dist = QgsDistanceArea()
+            dist.setSourceCrs(layer.crs(), QgsProject.instance().transformContext())
+            try:
+                ell = (QgsProject.instance().ellipsoid() or "").strip()
+                if not ell or ell.upper() == "NONE":
+                    ell = "WGS84"
+                dist.setEllipsoid(ell)
+                dist.setEllipsoidalMode(True)
+            except Exception:
+                pass
+
+            for ft in layer.getFeatures():
+                try:
+                    try:
+                        cid = int(ft["class_id"]) if ft["class_id"] is not None else 0
+                        if cid == 0:
+                            has_class0 = True
+                            features_per_class[0] = int(features_per_class.get(0, 0)) + 1
+                        elif cid > 0:
+                            features_per_class[cid] = int(features_per_class.get(cid, 0)) + 1
+                    except Exception:
+                        pass
+                    geom = ft.geometry()
+                    if geom is None or geom.isEmpty():
+                        continue
+                    area_m2 = float(dist.measureArea(geom))
+                    if math.isfinite(area_m2) and area_m2 > 0:
+                        area_by_fid[int(ft.id())] = area_m2
+                except Exception:
+                    continue
+        except Exception:
+            area_by_fid = {}
+            features_per_class = {}
+            has_class0 = False
+
+        total_area_m2 = float(sum(area_by_fid.values())) if area_by_fid else 0.0
+        if not math.isfinite(total_area_m2) or total_area_m2 <= 0:
+            total_area_m2 = 0.0
+
+        # Pixel-count stats (if provided by run()).
+        pix_n_by_cid = {}
+        try:
+            pix_n_by_cid = getattr(self, "_last_geochem_pix_counts", {}) or {}
+        except Exception:
+            pix_n_by_cid = {}
+        mean_by_cid = {}
+        try:
+            mean_by_cid = getattr(self, "_last_geochem_class_mean", {}) or {}
+        except Exception:
+            mean_by_cid = {}
+        std_by_cid = {}
+        try:
+            std_by_cid = getattr(self, "_last_geochem_class_std", {}) or {}
+        except Exception:
+            std_by_cid = {}
+        is_one_feature_per_class = True
+        try:
+            is_one_feature_per_class = all(int(n) <= 1 for n in features_per_class.values())
+        except Exception:
+            is_one_feature_per_class = True
+        if not is_one_feature_per_class:
+            try:
+                log_message(
+                    "GeoChem: dissolve가 꺼져 있어 class_id별 픽셀 통계를 폴리곤 피처에 직접 기록하지 않습니다.",
+                    level=Qgis.Warning,
+                )
+            except Exception:
+                pass
+        total_pix = 0
+        try:
+            for cid, n in pix_n_by_cid.items():
+                if has_class0 and int(cid) >= 0:
+                    total_pix += int(n)
+                elif int(cid) > 0:
+                    total_pix += int(n)
+        except Exception:
+            total_pix = 0
+
         # Write per-feature attributes
         layer.startEditing()
         try:
             for ft in layer.getFeatures():
                 cid = int(ft["class_id"]) if ft["class_id"] is not None else 0
-                if cid <= 0 or cid > len(intervals):
-                    continue
-                v0, v1 = intervals[cid - 1]
                 ft["element"] = preset.label
                 ft["unit"] = unit
-                ft["v_min"] = float(v0)
-                ft["v_max"] = float(v1)
-                ft["label"] = _interval_label(v0, v1, unit)
+                if cid == 0:
+                    ft["v_min"] = None
+                    ft["v_max"] = None
+                    ft["v_mid"] = None
+                    ft["val_mean"] = None
+                    ft["val_std"] = None
+                    ft["label"] = "NoData"
+                    if is_one_feature_per_class:
+                        try:
+                            pix_n = int(pix_n_by_cid.get(0, 0) or 0)
+                        except Exception:
+                            pix_n = 0
+                        ft["pix_n"] = int(pix_n)
+                        if total_pix > 0:
+                            ft["pix_pct"] = float(pix_n) * 100.0 / float(total_pix)
+                        else:
+                            ft["pix_pct"] = 0.0
+                    else:
+                        ft["pix_n"] = None
+                        ft["pix_pct"] = None
+                else:
+                    if cid < 1 or cid > len(intervals):
+                        continue
+                    v0, v1 = intervals[cid - 1]
+                    ft["v_min"] = float(v0)
+                    ft["v_max"] = float(v1)
+                    v_mid = (float(v0) + float(v1)) / 2.0
+                    ft["label"] = _interval_label(v0, v1, unit)
+                    if is_one_feature_per_class:
+                        ft["v_mid"] = v_mid
+                        try:
+                            ft["val_mean"] = float(mean_by_cid.get(cid, v_mid))
+                        except Exception:
+                            ft["val_mean"] = v_mid
+                        try:
+                            ft["val_std"] = float(std_by_cid.get(cid, 0.0))
+                        except Exception:
+                            ft["val_std"] = 0.0
+                        try:
+                            pix_n = int(pix_n_by_cid.get(cid, 0) or 0)
+                        except Exception:
+                            pix_n = 0
+                        ft["pix_n"] = int(pix_n)
+                        if total_pix > 0:
+                            ft["pix_pct"] = float(pix_n) * 100.0 / float(total_pix)
+                        else:
+                            ft["pix_pct"] = 0.0
+                    else:
+                        # Avoid misleading duplicated values when there are multiple features per class.
+                        ft["v_mid"] = None
+                        ft["val_mean"] = None
+                        ft["val_std"] = None
+                        ft["pix_n"] = None
+                        ft["pix_pct"] = None
+
+                area_m2 = float(area_by_fid.get(int(ft.id()), 0.0) or 0.0)
+                if not math.isfinite(area_m2) or area_m2 < 0:
+                    area_m2 = 0.0
+                ft["area_m2"] = area_m2
+                ft["area_ha"] = area_m2 / 10000.0 if area_m2 > 0 else 0.0
+                if total_area_m2 > 0:
+                    ft["area_pct"] = area_m2 * 100.0 / total_area_m2
+                else:
+                    ft["area_pct"] = 0.0
                 layer.updateFeature(ft)
         finally:
             layer.commitChanges()
         layer.triggerRepaint()
 
-    def _add_to_project(self, *, layer: QgsVectorLayer, preset: GeoChemPreset, run_id: str, extent: QgsRectangle):
+    def _add_to_project(
+        self,
+        *,
+        layer: Optional[QgsVectorLayer],
+        center_layer: Optional[QgsVectorLayer] = None,
+        preset: GeoChemPreset,
+        unit: str,
+        run_id: str,
+        extent: QgsRectangle,
+        value_raster_path: Optional[str] = None,
+        class_raster_path: Optional[str] = None,
+    ):
         project = QgsProject.instance()
         root = project.layerTreeRoot()
         parent = root.findGroup(PARENT_GROUP_NAME)
         if parent is None:
             parent = root.insertGroup(0, PARENT_GROUP_NAME)
 
-        name = f"{preset.key}_구간폴리곤_{run_id}"
-        layer.setName(name)
+        if layer is not None:
+            try:
+                name = f"{preset.key}_구간폴리곤_{run_id}"
+                layer.setName(name)
+            except Exception:
+                pass
+        if center_layer is not None:
+            try:
+                center_layer.setName(f"{preset.key}_가중중심_{run_id}")
+            except Exception:
+                pass
 
-        project.addMapLayer(layer, False)
-        parent.insertLayer(0, layer)
+        layers_to_add = []
+        val_layer = None
+        cls_layer = None
+        if class_raster_path:
+            try:
+                cls_layer = QgsRasterLayer(class_raster_path, f"{preset.key}_class_{run_id}")
+                if cls_layer.isValid():
+                    self._style_class_raster(layer=cls_layer, preset=preset, unit=unit)
+            except Exception:
+                pass
+        if value_raster_path:
+            try:
+                val_layer = QgsRasterLayer(value_raster_path, f"{preset.key}_value_{run_id}")
+                if val_layer.isValid():
+                    self._style_value_raster(layer=val_layer, preset=preset, unit=unit)
+            except Exception:
+                pass
+
+        if val_layer is not None and val_layer.isValid():
+            layers_to_add.append(val_layer)
+        if cls_layer is not None and cls_layer.isValid():
+            layers_to_add.append(cls_layer)
+        if layer is not None and layer.isValid():
+            layers_to_add.append(layer)
+        if center_layer is not None and center_layer.isValid():
+            layers_to_add.append(center_layer)
+
+        for lyr in layers_to_add:
+            project.addMapLayer(lyr, False)
+            parent.insertLayer(0, lyr)
 
         try:
             parent.setExpanded(True)

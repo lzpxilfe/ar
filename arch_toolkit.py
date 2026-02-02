@@ -75,7 +75,7 @@ class ArchToolkit:
             self.terrain_action = QAction(QIcon(terrain_icon), u"지형 분석 (Terrain Analysis)", self.iface.mainWindow())
             self.terrain_action.triggered.connect(self.run_terrain_tool)
 
-            # GeoChem (WMS RGB -> class polygons)
+            # GeoChem (WMS RGB -> value/class rasters, optional polygons)
             geochem_icon = None
             for icon_path in (
                 os.path.join(plugin_dir, "tools", "geochem.png"),
@@ -87,7 +87,7 @@ class ArchToolkit:
                     break
             self.geochem_action = QAction(
                 QIcon(geochem_icon or ""),
-                u"지구화학도 폴리곤화 (GeoChem WMS → Polygons)",
+                u"지구화학도 래스터 수치화 (GeoChem WMS → Raster)",
                 self.iface.mainWindow(),
             )
             self.geochem_action.triggered.connect(self.run_geochem_tool)
