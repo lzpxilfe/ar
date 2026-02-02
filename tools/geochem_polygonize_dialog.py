@@ -138,11 +138,59 @@ ZN_POINTS: List[LegendPoint] = [
     LegendPoint(21100.0, (115, 12, 12)),  # 100%
 ]
 
+SR_POINTS: List[LegendPoint] = [
+    # Legend from percentile ramp (ppm): 5=57, 10=72, 15=83, 25=99, 50=135, 75=192, 90=275, 95=342, 99=496, 100=3645
+    LegendPoint(0.0, (204, 204, 204)),  # Absent data
+    LegendPoint(57.0, (0, 38, 115)),  # 5%
+    LegendPoint(72.0, (0, 112, 255)),  # 10%
+    LegendPoint(83.0, (0, 197, 255)),  # 15%
+    LegendPoint(99.0, (0, 255, 0)),  # 25%
+    LegendPoint(135.0, (85, 255, 0)),  # 50%
+    LegendPoint(192.0, (255, 255, 0)),  # 75%
+    LegendPoint(275.0, (255, 170, 0)),  # 90%
+    LegendPoint(342.0, (255, 85, 0)),  # 95%
+    LegendPoint(496.0, (230, 0, 0)),  # 99%
+    LegendPoint(3645.0, (115, 12, 12)),  # 100%
+]
+
+BA_POINTS: List[LegendPoint] = [
+    # Legend from percentile ramp (ppm): 5=734, 10=853, 15=935, 25=1050, 50=1268, 75=1507, 90=1752, 95=1920, 99=2362, 100=15840
+    LegendPoint(0.0, (204, 204, 204)),  # Absent data
+    LegendPoint(734.0, (0, 38, 115)),  # 5%
+    LegendPoint(853.0, (0, 112, 255)),  # 10%
+    LegendPoint(935.0, (0, 197, 255)),  # 15%
+    LegendPoint(1050.0, (0, 255, 0)),  # 25%
+    LegendPoint(1268.0, (85, 255, 0)),  # 50%
+    LegendPoint(1507.0, (255, 255, 0)),  # 75%
+    LegendPoint(1752.0, (255, 170, 0)),  # 90%
+    LegendPoint(1920.0, (255, 85, 0)),  # 95%
+    LegendPoint(2362.0, (230, 0, 0)),  # 99%
+    LegendPoint(15840.0, (115, 12, 12)),  # 100%
+]
+
+CAO_POINTS: List[LegendPoint] = [
+    # Legend from percentile ramp (%): 5=0.40, 10=0.50, 15=0.58, 25=0.73, 50=1.18, 75=1.90, 90=2.99, 95=4.05, 99=9.03, 100=53.07
+    LegendPoint(0.0, (204, 204, 204)),  # Absent data
+    LegendPoint(0.40, (0, 38, 115)),  # 5%
+    LegendPoint(0.50, (0, 112, 255)),  # 10%
+    LegendPoint(0.58, (0, 197, 255)),  # 15%
+    LegendPoint(0.73, (0, 255, 0)),  # 25%
+    LegendPoint(1.18, (85, 255, 0)),  # 50%
+    LegendPoint(1.90, (255, 255, 0)),  # 75%
+    LegendPoint(2.99, (255, 170, 0)),  # 90%
+    LegendPoint(4.05, (255, 85, 0)),  # 95%
+    LegendPoint(9.03, (230, 0, 0)),  # 99%
+    LegendPoint(53.07, (115, 12, 12)),  # 100%
+]
+
 PRESETS: Dict[str, GeoChemPreset] = {
     "fe2o3": GeoChemPreset(key="fe2o3", label="Fe2O3 (산화철)", unit="%", points=FE2O3_POINTS),
     "pb": GeoChemPreset(key="pb", label="Pb (납)", unit="ppm", points=PB_POINTS),
     "cu": GeoChemPreset(key="cu", label="Cu (구리)", unit="ppm", points=CU_POINTS),
     "zn": GeoChemPreset(key="zn", label="Zn (아연)", unit="ppm", points=ZN_POINTS),
+    "sr": GeoChemPreset(key="sr", label="Sr (스트론튬)", unit="ppm", points=SR_POINTS),
+    "ba": GeoChemPreset(key="ba", label="Ba (바륨)", unit="ppm", points=BA_POINTS),
+    "cao": GeoChemPreset(key="cao", label="CaO (칼슘)", unit="%", points=CAO_POINTS),
 }
 
 
