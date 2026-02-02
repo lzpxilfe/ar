@@ -123,10 +123,26 @@ CU_POINTS: List[LegendPoint] = [
     LegendPoint(2104.0, (115, 12, 12)),  # 100%
 ]
 
+ZN_POINTS: List[LegendPoint] = [
+    # Legend from percentile ramp (ppm): 5=45, 10=57, 15=66, 25=79, 50=107, 75=149, 90=212, 95=272, 99=542, 100=21100
+    LegendPoint(0.0, (204, 204, 204)),  # Absent data
+    LegendPoint(45.0, (0, 38, 115)),  # 5%
+    LegendPoint(57.0, (0, 112, 255)),  # 10%
+    LegendPoint(66.0, (0, 197, 255)),  # 15%
+    LegendPoint(79.0, (0, 255, 0)),  # 25%
+    LegendPoint(107.0, (85, 255, 0)),  # 50%
+    LegendPoint(149.0, (255, 255, 0)),  # 75%
+    LegendPoint(212.0, (255, 170, 0)),  # 90%
+    LegendPoint(272.0, (255, 85, 0)),  # 95%
+    LegendPoint(542.0, (230, 0, 0)),  # 99%
+    LegendPoint(21100.0, (115, 12, 12)),  # 100%
+]
+
 PRESETS: Dict[str, GeoChemPreset] = {
     "fe2o3": GeoChemPreset(key="fe2o3", label="Fe2O3 (산화철)", unit="%", points=FE2O3_POINTS),
     "pb": GeoChemPreset(key="pb", label="Pb (납)", unit="ppm", points=PB_POINTS),
     "cu": GeoChemPreset(key="cu", label="Cu (구리)", unit="ppm", points=CU_POINTS),
+    "zn": GeoChemPreset(key="zn", label="Zn (아연)", unit="ppm", points=ZN_POINTS),
 }
 
 
