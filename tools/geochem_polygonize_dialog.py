@@ -359,9 +359,9 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             "워크플로우:\n"
             "1) RGB 지구화학도(WMS/래스터)를 조사지역 경계(사각형)로 잘라 GeoTIFF로 저장\n"
             "2) RGB → 값(%) 래스터로 변환(범례 기반)\n"
-            "3) 값 → 구간(class) 래스터로 분류\n"
-            "4) (옵션) 구간 래스터 폴리곤 생성 + dissolve\n"
-            "5) (옵션) 가중 중심점(포인트) 생성\n\n"
+            "3) (옵션) 값 → 구간(class) 래스터 생성\n"
+            "4) (옵션) 구간 폴리곤 생성 + dissolve\n"
+            "5) (옵션) 중심점(포인트) 생성\n\n"
             "팁:\n"
             "- 검은 경계선/텍스트가 지저분하면 '검은 경계선 제거(보간)'을 켜보세요.\n"
             "- 픽셀 크기를 작게 할수록 디테일은 좋아지지만 느려질 수 있습니다."
@@ -478,17 +478,37 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         grp_out = QtWidgets.QGroupBox("4. 출력 옵션")
         grid3 = QtWidgets.QGridLayout(grp_out)
 
-        self.chkSaveRasters = QtWidgets.QCheckBox("값/구간 래스터 저장")
+        self.chkSaveRasters = QtWidgets.QCheckBox("값 래스터 저장(영구)")
         self.chkSaveRasters.setChecked(True)
-        self.chkSaveRasters.setToolTip("값(value) 및 구간(class) 래스터를 프로젝트 홈(없으면 QGIS 프로필) 하위에 저장합니다.")
+        self.chkSaveRasters.setToolTip(
+            "값(value) 래스터를 프로젝트 홈(없으면 QGIS 프로필) 하위에 저장합니다.\n"
+            "※ '구간(class) 래스터 생성'을 켠 경우, class 래스터도 함께 저장됩니다."
+        )
 
         self.chkAddRasters = QtWidgets.QCheckBox("프로젝트에 래스터 레이어로 추가")
         self.chkAddRasters.setChecked(True)
-        self.chkAddRasters.setToolTip("저장된 래스터 레이어를 ArchToolkit - GeoChem 그룹에 함께 추가합니다.")
+        self.chkAddRasters.setToolTip(
+            "저장된 래스터 레이어를 ArchToolkit - GeoChem 그룹에 함께 추가합니다.\n"
+            "- value: 항상 추가\n"
+            "- class: '구간(class) 래스터 생성'을 켠 경우에만 추가"
+        )
+
+        self.chkMakeClassRaster = QtWidgets.QCheckBox("구간(class) 래스터 생성(옵션)")
+        self.chkMakeClassRaster.setChecked(False)
+        self.chkMakeClassRaster.setToolTip(
+            "연속값(value)을 범례 구간대로 정수 class(1..N)로 재분류한 래스터를 만듭니다.\n"
+            "다음이 필요할 때만 켜세요:\n"
+            "- 구간형(범주형) 지도가 필요할 때\n"
+            "- '폴리곤 생성(구간별)'을 사용할 때(내부적으로 class가 필요함)\n\n"
+            "대부분의 분석(MaxEnt/통계/가중 중심점)은 value 래스터만으로 충분합니다."
+        )
 
         self.chkMakePolygons = QtWidgets.QCheckBox("폴리곤 생성(구간별)")
         self.chkMakePolygons.setChecked(False)
-        self.chkMakePolygons.setToolTip("구간(class) 래스터를 폴리곤으로 변환합니다(요약/도면용).")
+        self.chkMakePolygons.setToolTip(
+            "구간(class) 래스터를 폴리곤으로 변환합니다(요약/도면/편집/오버레이용).\n"
+            "예: '구간별 면적'을 벡터로 보고 싶거나, 다른 레이어와 교차/편집이 필요할 때."
+        )
 
         self.chkDissolve = QtWidgets.QCheckBox("구간별로 합치기(dissolve)")
         self.chkDissolve.setChecked(True)
@@ -502,9 +522,18 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         grid3.addWidget(self.chkSaveRasters, 0, 0)
         grid3.addWidget(self.chkAddRasters, 0, 1)
-        grid3.addWidget(self.chkMakePolygons, 1, 0)
-        grid3.addWidget(self.chkDissolve, 1, 1)
-        grid3.addWidget(self.chkDropNoData, 2, 0, 1, 2)
+        grid3.addWidget(self.chkMakeClassRaster, 1, 0, 1, 2)
+        grid3.addWidget(self.chkMakePolygons, 2, 0)
+        grid3.addWidget(self.chkDissolve, 2, 1)
+        grid3.addWidget(self.chkDropNoData, 3, 0, 1, 2)
+
+        self.lblOutHelp = QtWidgets.QLabel(
+            "TIP: value 래스터는 WMS 색상을 그대로 수치화한 ‘원본 데이터’입니다.\n"
+            "- class 래스터/폴리곤은 ‘구간별(범주형) 결과’가 필요할 때만 켜세요."
+        )
+        self.lblOutHelp.setWordWrap(True)
+        self.lblOutHelp.setStyleSheet("color: #555;")
+        grid3.addWidget(self.lblOutHelp, 4, 0, 1, 2)
         layout.addWidget(grp_out)
 
         grp_center = QtWidgets.QGroupBox("5. 중심점(포인트)")
@@ -738,6 +767,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         do_mask_aoi = bool(getattr(self, "chkMaskAoi", None) and self.chkMaskAoi.isChecked())
         do_low_as_nodata = bool(getattr(self, "chkLowAsNoData", None) and self.chkLowAsNoData.isChecked())
         do_make_polygons = bool(getattr(self, "chkMakePolygons", None) and self.chkMakePolygons.isChecked())
+        do_make_class_raster = bool(getattr(self, "chkMakeClassRaster", None) and self.chkMakeClassRaster.isChecked())
         do_dissolve = bool(self.chkDissolve.isChecked()) and do_make_polygons
         do_fix_max = bool(self.chkFixMax.isChecked())
         do_snap_max = bool(getattr(self, "chkSnapMax", None) and self.chkSnapMax.isChecked())
@@ -1072,10 +1102,6 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             log_message("GeoChem: writing value raster…", level=Qgis.Info)
             self._write_single_band_geotiff(ds, out_path=val_path, data=out, nodata=float(nodata_val))
 
-            # 3) Class raster
-            breaks = _points_to_breaks(preset.points)
-            log_message(f"GeoChem: classify to {len(breaks)-1} bins…", level=Qgis.Info)
-            cls = _classify_to_bins(values=out, breaks=breaks, nodata_class=0, nodata_value=float(nodata_val))
             try:
                 valid = np.isfinite(out) & (out != nodata_val)
                 if np.any(valid):
@@ -1087,66 +1113,82 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                     log_message("GeoChem: value stats (no valid pixels)", level=Qgis.Warning)
             except Exception:
                 pass
-            try:
-                flat = cls.ravel()
-                counts = np.bincount(flat.astype(np.int64, copy=False), minlength=len(breaks))
-                parts = [f"class0={int(counts[0]):,}"]
-                for i in range(1, len(breaks)):
-                    v0 = float(breaks[i - 1])
-                    v1 = float(breaks[i])
-                    parts.append(f"class{i}({v0:g}-{v1:g})={int(counts[i]):,}")
-                log_message("GeoChem: class counts " + " | ".join(parts), level=Qgis.Info)
-
-                # Store counts so we can write per-class pixel stats into the polygon layer.
-                pix_counts = {}
+            need_class = bool(do_make_polygons or do_make_class_raster)
+            if need_class:
+                # 3) Class raster (optional output, required internally for polygonize)
+                breaks = _points_to_breaks(preset.points)
+                log_message(f"GeoChem: classify to {len(breaks)-1} bins…", level=Qgis.Info)
+                cls = _classify_to_bins(values=out, breaks=breaks, nodata_class=0, nodata_value=float(nodata_val))
                 try:
-                    for i in range(len(breaks)):  # 0..n_classes
-                        pix_counts[int(i)] = int(counts[i]) if i < len(counts) else 0
-                except Exception:
-                    pix_counts = {}
-                self._last_geochem_pix_counts = pix_counts
-            except Exception:
-                self._last_geochem_pix_counts = {}
-                pass
-
-            # Per-class mean value (useful as a representative numeric attribute on dissolved polygons).
-            try:
-                valid_mean = (cls > 0) & np.isfinite(out) & (out != nodata_val)
-                if np.any(valid_mean):
-                    flat_cls = cls[valid_mean].astype(np.int64, copy=False)
-                    flat_out = out[valid_mean].astype(np.float64, copy=False)
-                    sums = np.bincount(flat_cls, weights=flat_out, minlength=len(breaks))
-                    sums2 = np.bincount(flat_cls, weights=flat_out * flat_out, minlength=len(breaks))
-                    cnts = np.bincount(flat_cls, minlength=len(breaks))
-                    means = {}
-                    stds = {}
+                    flat = cls.ravel()
+                    counts = np.bincount(flat.astype(np.int64, copy=False), minlength=len(breaks))
+                    parts = [f"class0={int(counts[0]):,}"]
                     for i in range(1, len(breaks)):
-                        if i < len(cnts) and cnts[i] > 0:
-                            mu = float(sums[i] / cnts[i])
-                            means[int(i)] = mu
-                            try:
-                                var = float(sums2[i] / cnts[i]) - (mu * mu)
-                                if var < 0 and var > -1e-12:
-                                    var = 0.0
-                                stds[int(i)] = float(math.sqrt(var)) if var > 0 else 0.0
-                            except Exception:
-                                stds[int(i)] = 0.0
-                    self._last_geochem_class_mean = means
-                    self._last_geochem_class_std = stds
+                        v0 = float(breaks[i - 1])
+                        v1 = float(breaks[i])
+                        parts.append(f"class{i}({v0:g}-{v1:g})={int(counts[i]):,}")
+                    log_message("GeoChem: class counts " + " | ".join(parts), level=Qgis.Info)
+
+                    # Store counts so we can write per-class pixel stats into the polygon layer.
+                    pix_counts = {}
                     try:
-                        last_cid = len(breaks) - 1
-                        if int(last_cid) in means:
-                            log_message(f"GeoChem: class{last_cid} mean={means[int(last_cid)]:g}", level=Qgis.Info)
+                        for i in range(len(breaks)):  # 0..n_classes
+                            pix_counts[int(i)] = int(counts[i]) if i < len(counts) else 0
                     except Exception:
-                        pass
-                else:
+                        pix_counts = {}
+                    self._last_geochem_pix_counts = pix_counts
+                except Exception:
+                    self._last_geochem_pix_counts = {}
+                    pass
+
+                # Per-class mean value (useful as a representative numeric attribute on dissolved polygons).
+                try:
+                    valid_mean = (cls > 0) & np.isfinite(out) & (out != nodata_val)
+                    if np.any(valid_mean):
+                        flat_cls = cls[valid_mean].astype(np.int64, copy=False)
+                        flat_out = out[valid_mean].astype(np.float64, copy=False)
+                        sums = np.bincount(flat_cls, weights=flat_out, minlength=len(breaks))
+                        sums2 = np.bincount(flat_cls, weights=flat_out * flat_out, minlength=len(breaks))
+                        cnts = np.bincount(flat_cls, minlength=len(breaks))
+                        means = {}
+                        stds = {}
+                        for i in range(1, len(breaks)):
+                            if i < len(cnts) and cnts[i] > 0:
+                                mu = float(sums[i] / cnts[i])
+                                means[int(i)] = mu
+                                try:
+                                    var = float(sums2[i] / cnts[i]) - (mu * mu)
+                                    if var < 0 and var > -1e-12:
+                                        var = 0.0
+                                    stds[int(i)] = float(math.sqrt(var)) if var > 0 else 0.0
+                                except Exception:
+                                    stds[int(i)] = 0.0
+                        self._last_geochem_class_mean = means
+                        self._last_geochem_class_std = stds
+                        try:
+                            last_cid = len(breaks) - 1
+                            if int(last_cid) in means:
+                                log_message(f"GeoChem: class{last_cid} mean={means[int(last_cid)]:g}", level=Qgis.Info)
+                        except Exception:
+                            pass
+                    else:
+                        self._last_geochem_class_mean = {}
+                        self._last_geochem_class_std = {}
+                except Exception:
                     self._last_geochem_class_mean = {}
                     self._last_geochem_class_std = {}
-            except Exception:
+
+                self._write_single_band_geotiff(
+                    ds,
+                    out_path=cls_path,
+                    data=cls.astype(np.int16, copy=False),
+                    nodata=0,
+                    gdal_type=gdal.GDT_Int16,
+                )
+            else:
+                self._last_geochem_pix_counts = {}
                 self._last_geochem_class_mean = {}
                 self._last_geochem_class_std = {}
-
-            self._write_single_band_geotiff(ds, out_path=cls_path, data=cls.astype(np.int16, copy=False), nodata=0, gdal_type=gdal.GDT_Int16)
             ds = None
 
             persist_val_path = None
@@ -1154,7 +1196,10 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             if do_save_rasters:
                 try:
                     persist_val_path, persist_cls_path = self._persist_geochem_rasters(
-                        preset=preset, run_id=run_id, val_path=val_path, cls_path=cls_path
+                        preset=preset,
+                        run_id=run_id,
+                        val_path=val_path,
+                        cls_path=cls_path if do_make_class_raster else None,
                     )
                     log_message(
                         f"GeoChem: saved rasters val={persist_val_path} cls={persist_cls_path}",
@@ -1402,7 +1447,14 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         ds.FlushCache()
         ds = None
 
-    def _persist_geochem_rasters(self, *, preset: GeoChemPreset, run_id: str, val_path: str, cls_path: str) -> Tuple[str, str]:
+    def _persist_geochem_rasters(
+        self,
+        *,
+        preset: GeoChemPreset,
+        run_id: str,
+        val_path: str,
+        cls_path: Optional[str] = None,
+    ) -> Tuple[str, Optional[str]]:
         """Persist generated rasters so they remain usable after the dialog closes."""
         out_dir = ""
         try:
@@ -1430,9 +1482,15 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         os.makedirs(out_dir, exist_ok=True)
         val_dst = os.path.join(out_dir, os.path.basename(val_path))
-        cls_dst = os.path.join(out_dir, os.path.basename(cls_path))
         shutil.copy2(val_path, val_dst)
-        shutil.copy2(cls_path, cls_dst)
+        cls_dst = None
+        if cls_path:
+            try:
+                if os.path.exists(cls_path):
+                    cls_dst = os.path.join(out_dir, os.path.basename(cls_path))
+                    shutil.copy2(cls_path, cls_dst)
+            except Exception:
+                cls_dst = None
         return val_dst, cls_dst
 
     def _make_weighted_center_layer(
