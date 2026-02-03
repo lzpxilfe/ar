@@ -114,6 +114,15 @@ class ProfileChartWidget(QWidget):
         self.highlight_ranges: List[Tuple[float, float]] = []
         self.highlight_label: str = ""
         self.highlight_color = QColor(255, 193, 7, 40)  # amber with alpha
+
+        # Overlay (optional): show another layer along the profile.
+        # - Polygon layers: ranges (background shading)
+        # - Point/line layers: markers (vertical lines + points on the profile)
+        self.overlay_ranges: List[Tuple[float, float]] = []
+        self.overlay_label: str = ""
+        self.overlay_color = QColor(76, 175, 80, 40)  # green with alpha
+        self.overlay_markers: List[Tuple[float, str]] = []  # (distance_m, label)
+        self.overlay_marker_color = QColor(76, 175, 80, 180)
         
         # Margins
         self.margin_left = 60
@@ -127,6 +136,9 @@ class ProfileChartWidget(QWidget):
         self.pan_offset = 0
         self.highlight_ranges = []
         self.highlight_label = ""
+        self.overlay_ranges = []
+        self.overlay_label = ""
+        self.overlay_markers = []
         
         if not data:
             self.smooth_data = []
@@ -241,7 +253,7 @@ class ProfileChartWidget(QWidget):
                 self.setToolTip(tooltip_text)
                 
                 # Notify map to show position
-                if self.on_hover_callback and self.hover_x and self.hover_y:
+                if self.on_hover_callback and self.hover_x is not None and self.hover_y is not None:
                     self.on_hover_callback(self.hover_x, self.hover_y)
             else:
                 self.hover_distance = None
@@ -302,6 +314,62 @@ class ProfileChartWidget(QWidget):
         cleaned.sort(key=lambda t: t[0])
         self.highlight_ranges = cleaned
         self.highlight_label = str(label or "")
+        self.update()
+
+    def set_overlay_ranges(
+        self,
+        ranges: Sequence[Tuple[float, float]],
+        *,
+        label: str = "",
+        color: Optional[QColor] = None,
+    ):
+        cleaned: List[Tuple[float, float]] = []
+        try:
+            for a, b in ranges or []:
+                try:
+                    a = float(a)
+                    b = float(b)
+                except Exception:
+                    continue
+                if not math.isfinite(a) or not math.isfinite(b):
+                    continue
+                if b < a:
+                    a, b = b, a
+                if b <= a:
+                    continue
+                cleaned.append((a, b))
+        except Exception:
+            cleaned = []
+        cleaned.sort(key=lambda t: t[0])
+        self.overlay_ranges = cleaned
+        self.overlay_label = str(label or "")
+        if color is not None:
+            try:
+                self.overlay_color = QColor(color)
+            except Exception:
+                pass
+        self.update()
+
+    def set_overlay_markers(self, markers: Sequence[Tuple[float, str]], *, color: Optional[QColor] = None):
+        cleaned: List[Tuple[float, str]] = []
+        try:
+            for d, lbl in markers or []:
+                try:
+                    d = float(d)
+                except Exception:
+                    continue
+                if not math.isfinite(d):
+                    continue
+                cleaned.append((d, str(lbl or "")))
+        except Exception:
+            cleaned = []
+        cleaned.sort(key=lambda t: t[0])
+        self.overlay_markers = cleaned
+        if color is not None:
+            try:
+                self.overlay_marker_color = QColor(color)
+            except Exception:
+                pass
         self.update()
 
     def draw_chart(self, painter, width, height):
@@ -371,6 +439,33 @@ class ProfileChartWidget(QWidget):
                 except Exception:
                     pass
 
+        # Overlay ranges (behind the profile line, below hover/markers)
+        if self.overlay_ranges:
+            try:
+                painter.save()
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(self.overlay_color))
+                for d0, d1 in self.overlay_ranges:
+                    if d1 <= view_start or d0 >= view_end:
+                        continue
+                    a = max(float(d0), float(view_start))
+                    b = min(float(d1), float(view_end))
+                    if b <= a:
+                        continue
+                    x0 = left + ((a - view_start) / visible_range) * w
+                    x1 = left + ((b - view_start) / visible_range) * w
+                    painter.drawRect(QRectF(x0, top, max(0.0, x1 - x0), h))
+                if self.overlay_label:
+                    painter.setPen(QPen(QColor(60, 120, 60)))
+                    # Avoid overlapping with AOI label (which is drawn at top+18)
+                    painter.drawText(left + 6, top + 34, self.overlay_label)
+                painter.restore()
+            except Exception:
+                try:
+                    painter.restore()
+                except Exception:
+                    pass
+
         # Draw Profile Line using QPainterPath for smoothness
         path = QPainterPath()
         first_point = True
@@ -413,7 +508,49 @@ class ProfileChartWidget(QWidget):
                 painter.drawPath(fill_path)
         
         painter.setOpacity(1.0)
-        
+
+        # Overlay markers (on top of profile line)
+        if self.overlay_markers:
+            try:
+                show_labels = len(self.overlay_markers) <= 12
+                painter.save()
+                if self.overlay_label and not self.overlay_ranges:
+                    try:
+                        painter.setPen(QPen(QColor(60, 120, 60)))
+                        painter.drawText(left + 6, top + 34, self.overlay_label)
+                    except Exception:
+                        pass
+                painter.setPen(QPen(self.overlay_marker_color, 1, Qt.DashLine))
+                for dist, lbl in self.overlay_markers:
+                    if dist < view_start or dist > view_end:
+                        continue
+                    x = left + ((dist - view_start) / visible_range) * w
+
+                    # Vertical reference line
+                    painter.drawLine(int(x), top, int(x), top + h)
+
+                    # Marker on profile (nearest smoothed point)
+                    try:
+                        closest = min(self.smooth_data, key=lambda p: abs(float(p["distance"]) - float(dist)))
+                        elev = float(closest.get("elevation"))
+                        if math.isfinite(elev):
+                            y = top + h - ((elev - self.min_e) / (self.max_e - self.min_e)) * h
+                            painter.setPen(QPen(self.overlay_marker_color, 2))
+                            painter.setBrush(QBrush(QColor(255, 255, 255)))
+                            painter.drawEllipse(QPointF(x, y), 4, 4)
+                    except Exception:
+                        pass
+
+                    if show_labels and lbl:
+                        painter.setPen(QPen(QColor(30, 30, 30)))
+                        painter.drawText(int(x) + 4, top + 14, lbl)
+                painter.restore()
+            except Exception:
+                try:
+                    painter.restore()
+                except Exception:
+                    pass
+         
         # Draw hover indicator
         if self.hover_distance is not None and view_start <= self.hover_distance <= view_end:
             hover_x = left + ((self.hover_distance - view_start) / visible_range) * w
@@ -487,6 +624,10 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self._ignore_current_layer_changed = False
         self._layer_tree_view = None
         self._single_layers_enabled = True
+
+        # Optional: overlay another vector layer on the profile chart.
+        self._overlay_layer = None
+        self._overlay_selection_handler = None
 
         # Setup
         self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.RasterLayer)
@@ -571,6 +712,58 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnUseLastLength = None
             self.cmbAoiLayer = None
             self.chkShowAoiOnProfile = None
+
+        # Optional: show a selected vector layer on the profile chart (intersection/inside).
+        try:
+            self.grpOverlay = QtWidgets.QGroupBox("단면 오버레이 (레이어 표시)", self)
+            grid_ov = QtWidgets.QGridLayout(self.grpOverlay)
+
+            self.chkShowOverlayOnProfile = QtWidgets.QCheckBox("단면 그래프에 레이어 표시", self.grpOverlay)
+            self.chkShowOverlayOnProfile.setChecked(False)
+            self.chkShowOverlayOnProfile.setToolTip(
+                "선택한 벡터 레이어를 단면 그래프에 표시합니다.\n"
+                "- 면(폴리곤): 단면선이 내부를 지나는 구간을 배경(음영)으로 표시\n"
+                "- 점/선: 단면선과 교차(또는 근접)하는 지점을 마커로 표시"
+            )
+
+            self.cmbOverlayLayer = QgsMapLayerComboBox(self.grpOverlay)
+            self.cmbOverlayLayer.setFilters(QgsMapLayerProxyModel.VectorLayer)
+            self.cmbOverlayLayer.setToolTip("단면에 표시할 벡터 레이어를 선택하세요.")
+
+            self.chkOverlaySelectedOnly = QtWidgets.QCheckBox("선택 피처만 사용", self.grpOverlay)
+            self.chkOverlaySelectedOnly.setChecked(False)
+            self.chkOverlaySelectedOnly.setToolTip("레이어에서 선택한 피처만 단면 표시 대상으로 사용합니다.")
+
+            help_lbl_ov = QtWidgets.QLabel(
+                "TIP: 점/선 레이어는 교차지점 마커로, 폴리곤 레이어는 내부 구간 음영으로 표시됩니다.",
+                self.grpOverlay,
+            )
+            help_lbl_ov.setWordWrap(True)
+            help_lbl_ov.setStyleSheet("color:#555;")
+
+            grid_ov.addWidget(self.chkShowOverlayOnProfile, 0, 0, 1, 3)
+            grid_ov.addWidget(QtWidgets.QLabel("레이어"), 1, 0)
+            grid_ov.addWidget(self.cmbOverlayLayer, 1, 1, 1, 2)
+            grid_ov.addWidget(self.chkOverlaySelectedOnly, 2, 0, 1, 3)
+            grid_ov.addWidget(help_lbl_ov, 3, 0, 1, 3)
+
+            try:
+                idx = int(self.verticalLayout.indexOf(self.groupProfile))
+                if idx >= 0:
+                    self.verticalLayout.insertWidget(idx, self.grpOverlay)
+                else:
+                    self.verticalLayout.insertWidget(3, self.grpOverlay)
+            except Exception:
+                self.verticalLayout.insertWidget(3, self.grpOverlay)
+
+            self.chkShowOverlayOnProfile.toggled.connect(self._refresh_overlay)
+            self.chkOverlaySelectedOnly.toggled.connect(self._refresh_overlay)
+            self.cmbOverlayLayer.layerChanged.connect(self._on_overlay_layer_changed)
+        except Exception:
+            self.grpOverlay = None
+            self.chkShowOverlayOnProfile = None
+            self.cmbOverlayLayer = None
+            self.chkOverlaySelectedOnly = None
         
         # Connect signals
         self.btnDrawLine.clicked.connect(self.start_drawing)
@@ -659,9 +852,43 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         """Show hover position on map"""
         if x is None or y is None:
             self.hover_marker.reset(QgsWkbTypes.PointGeometry)
+            try:
+                self.hover_marker.hide()
+            except Exception:
+                pass
         else:
             self.hover_marker.reset(QgsWkbTypes.PointGeometry)
             self.hover_marker.addPoint(QgsPointXY(x, y))
+            try:
+                self.hover_marker.show()
+            except Exception:
+                pass
+
+    def _show_profile_line_on_map(self, *, start: QgsPointXY, end: QgsPointXY, color: Optional[QColor] = None):
+        """Show the current profile line as a rubber band so users can see where it was drawn."""
+        if start is None or end is None:
+            return
+        try:
+            self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+        except Exception:
+            self.rubber_band.reset()
+        try:
+            self.rubber_band.addPoint(QgsPointXY(start))
+            self.rubber_band.addPoint(QgsPointXY(end))
+        except Exception:
+            return
+        try:
+            self.rubber_band.setColor(QColor(color) if color is not None else QColor(255, 0, 0))
+        except Exception:
+            pass
+        try:
+            self.rubber_band.setWidth(3)
+        except Exception:
+            pass
+        try:
+            self.rubber_band.show()
+        except Exception:
+            pass
 
     def _update_fixed_length_ui(self):
         enabled = False
@@ -932,6 +1159,406 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 pass
         except Exception:
             pass
+
+    def _on_overlay_layer_changed(self, layer):
+        """Reconnect selectionChanged handler for the overlay layer and refresh overlay."""
+        # Disconnect previous handler
+        try:
+            if self._overlay_layer is not None and self._overlay_selection_handler is not None:
+                self._overlay_layer.selectionChanged.disconnect(self._overlay_selection_handler)
+        except Exception:
+            pass
+
+        self._overlay_layer = layer if isinstance(layer, QgsVectorLayer) else None
+        self._overlay_selection_handler = None
+
+        if self._overlay_layer is not None:
+            try:
+                handler = lambda *_args: self._refresh_overlay()
+                self._overlay_selection_handler = handler
+                self._overlay_layer.selectionChanged.connect(handler)
+            except Exception:
+                self._overlay_selection_handler = None
+
+        self._refresh_overlay()
+
+    def _refresh_overlay(self, *_args):
+        """Recompute overlay (ranges/markers) for the current profile and update the chart."""
+        try:
+            if not hasattr(self, "chart") or self.chart is None:
+                return
+
+            # Clear overlay if disabled or no profile
+            try:
+                enabled = bool(self.chkShowOverlayOnProfile is not None and self.chkShowOverlayOnProfile.isChecked())
+            except Exception:
+                enabled = False
+
+            if (not enabled) or (not self.profile_data):
+                try:
+                    self.chart.set_overlay_ranges([], label="")
+                except Exception:
+                    pass
+                try:
+                    self.chart.set_overlay_markers([])
+                except Exception:
+                    pass
+                return
+
+            layer = None
+            try:
+                layer = self.cmbOverlayLayer.currentLayer() if self.cmbOverlayLayer is not None else None
+            except Exception:
+                layer = None
+            if layer is None or not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+                try:
+                    self.chart.set_overlay_ranges([], label="")
+                except Exception:
+                    pass
+                try:
+                    self.chart.set_overlay_markers([])
+                except Exception:
+                    pass
+                return
+
+            # Profile endpoints (canvas CRS)
+            start_canvas = None
+            end_canvas = None
+            try:
+                if len(self.points) >= 2:
+                    start_canvas = QgsPointXY(self.points[0])
+                    end_canvas = QgsPointXY(self.points[1])
+            except Exception:
+                start_canvas = None
+                end_canvas = None
+
+            if start_canvas is None or end_canvas is None:
+                try:
+                    start_canvas = QgsPointXY(float(self.profile_data[0]["x"]), float(self.profile_data[0]["y"]))
+                    end_canvas = QgsPointXY(float(self.profile_data[-1]["x"]), float(self.profile_data[-1]["y"]))
+                except Exception:
+                    start_canvas = None
+                    end_canvas = None
+
+            if start_canvas is None or end_canvas is None:
+                try:
+                    self.chart.set_overlay_ranges([], label="")
+                except Exception:
+                    pass
+                try:
+                    self.chart.set_overlay_markers([])
+                except Exception:
+                    pass
+                return
+
+            # Total distance (meters) consistent with profile chart.
+            total_distance_m = None
+            try:
+                if self._last_profile_length_m is not None and math.isfinite(self._last_profile_length_m):
+                    total_distance_m = float(self._last_profile_length_m)
+            except Exception:
+                total_distance_m = None
+            if total_distance_m is None or not math.isfinite(total_distance_m) or total_distance_m <= 0:
+                try:
+                    total_distance_m = float(self._distance_area_canvas().measureLine(start_canvas, end_canvas))
+                except Exception:
+                    total_distance_m = None
+            if total_distance_m is None or not math.isfinite(total_distance_m) or total_distance_m <= 0:
+                return
+
+            vx = float(end_canvas.x() - start_canvas.x())
+            vy = float(end_canvas.y() - start_canvas.y())
+            vv = float(vx * vx + vy * vy)
+            if vv <= 0:
+                return
+
+            def _fraction_for_xy(x: float, y: float) -> float:
+                try:
+                    t = ((float(x) - float(start_canvas.x())) * vx + (float(y) - float(start_canvas.y())) * vy) / vv
+                except Exception:
+                    t = 0.0
+                if t < 0.0:
+                    return 0.0
+                if t > 1.0:
+                    return 1.0
+                return float(t)
+
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+            layer_crs = None
+            try:
+                layer_crs = layer.crs()
+            except Exception:
+                layer_crs = canvas_crs
+
+            ct = None
+            ct_inv = None
+            try:
+                if layer_crs != canvas_crs:
+                    ct = QgsCoordinateTransform(layer_crs, canvas_crs, QgsProject.instance())
+                    ct_inv = QgsCoordinateTransform(canvas_crs, layer_crs, QgsProject.instance())
+            except Exception:
+                ct = None
+                ct_inv = None
+
+            line_geom = QgsGeometry.fromPolylineXY([start_canvas, end_canvas])
+
+            # Pixel-based tolerance (map units) for near-misses (mostly for point layers).
+            tol_mu = 0.0
+            try:
+                tol_mu = float(self.canvas.mapUnitsPerPixel()) * 8.0
+            except Exception:
+                tol_mu = 0.0
+            if not math.isfinite(tol_mu) or tol_mu < 0:
+                tol_mu = 0.0
+
+            selected_only = False
+            try:
+                selected_only = bool(self.chkOverlaySelectedOnly is not None and self.chkOverlaySelectedOnly.isChecked())
+            except Exception:
+                selected_only = False
+
+            # Iterate candidate features (best-effort bbox filter when not using selected features).
+            feats_iter = None
+            if selected_only:
+                try:
+                    feats_iter = layer.selectedFeatures()
+                except Exception:
+                    feats_iter = []
+            else:
+                try:
+                    rect = line_geom.boundingBox()
+                    if tol_mu > 0:
+                        rect.grow(tol_mu * 2.0)
+                    if ct_inv is not None:
+                        rect = ct_inv.transformBoundingBox(rect)
+                    feats_iter = layer.getFeatures(QgsFeatureRequest().setFilterRect(rect))
+                except Exception:
+                    feats_iter = layer.getFeatures()
+
+            # Best-effort feature label
+            def _feature_label(ft: QgsFeature) -> str:
+                try:
+                    for name in ("name", "label", "title", "id"):
+                        idx = layer.fields().indexFromName(name)
+                        if idx >= 0:
+                            v = ft.attribute(name)
+                            if v is not None and str(v).strip():
+                                return str(v).strip()
+                except Exception:
+                    pass
+                try:
+                    for fld in layer.fields():
+                        if fld.type() == QVariant.String:
+                            v = ft.attribute(fld.name())
+                            if v is not None and str(v).strip():
+                                return str(v).strip()
+                except Exception:
+                    pass
+                try:
+                    return str(int(ft.id()))
+                except Exception:
+                    return ""
+
+            markers: List[Tuple[float, str]] = []
+            ranges: List[Tuple[float, float]] = []
+
+            geom_type = None
+            try:
+                geom_type = int(layer.geometryType())
+            except Exception:
+                geom_type = None
+
+            for ft in feats_iter:
+                try:
+                    g = ft.geometry()
+                except Exception:
+                    g = None
+                if g is None or g.isEmpty():
+                    continue
+
+                try:
+                    g2 = QgsGeometry(g)
+                    if ct is not None:
+                        g2.transform(ct)
+                except Exception:
+                    continue
+
+                # Polygon: inside-segments on the profile line
+                if geom_type == QgsWkbTypes.PolygonGeometry:
+                    try:
+                        inter = g2.intersection(line_geom)
+                    except Exception:
+                        inter = None
+                    if inter is None or inter.isEmpty():
+                        continue
+
+                    # Segment ranges (line geometry)
+                    try:
+                        if inter.type() == QgsWkbTypes.LineGeometry:
+                            segs = []
+                            if inter.isMultipart():
+                                segs = inter.asMultiPolyline() or []
+                            else:
+                                seg = inter.asPolyline() or []
+                                if seg:
+                                    segs = [seg]
+                            for seg in segs:
+                                if not seg or len(seg) < 2:
+                                    continue
+                                t_vals = []
+                                for p in (seg[0], seg[-1]):
+                                    try:
+                                        t_vals.append(_fraction_for_xy(float(p.x()), float(p.y())))
+                                    except Exception:
+                                        continue
+                                if len(t_vals) < 2:
+                                    continue
+                                a = min(t_vals) * total_distance_m
+                                b = max(t_vals) * total_distance_m
+                                if math.isfinite(a) and math.isfinite(b) and b > a:
+                                    ranges.append((a, b))
+                        elif inter.type() == QgsWkbTypes.PointGeometry:
+                            pts = []
+                            if inter.isMultipart():
+                                pts = inter.asMultiPoint() or []
+                            else:
+                                pts = [inter.asPoint()]
+                            for p in pts:
+                                try:
+                                    t = _fraction_for_xy(float(p.x()), float(p.y()))
+                                    d = t * total_distance_m
+                                    if math.isfinite(d):
+                                        markers.append((d, _feature_label(ft)))
+                                except Exception:
+                                    continue
+                    except Exception:
+                        continue
+                    continue
+
+                # Lines: intersection points (or overlap segments)
+                if geom_type == QgsWkbTypes.LineGeometry:
+                    try:
+                        inter = g2.intersection(line_geom)
+                    except Exception:
+                        inter = None
+                    if inter is None or inter.isEmpty():
+                        continue
+                    lbl = _feature_label(ft)
+                    try:
+                        if inter.type() == QgsWkbTypes.PointGeometry:
+                            pts = []
+                            if inter.isMultipart():
+                                pts = inter.asMultiPoint() or []
+                            else:
+                                pts = [inter.asPoint()]
+                            for p in pts:
+                                try:
+                                    t = _fraction_for_xy(float(p.x()), float(p.y()))
+                                    d = t * total_distance_m
+                                    if math.isfinite(d):
+                                        markers.append((d, lbl))
+                                except Exception:
+                                    continue
+                        elif inter.type() == QgsWkbTypes.LineGeometry:
+                            segs = []
+                            if inter.isMultipart():
+                                segs = inter.asMultiPolyline() or []
+                            else:
+                                seg = inter.asPolyline() or []
+                                if seg:
+                                    segs = [seg]
+                            for seg in segs:
+                                if not seg or len(seg) < 2:
+                                    continue
+                                try:
+                                    t0 = _fraction_for_xy(float(seg[0].x()), float(seg[0].y()))
+                                    t1 = _fraction_for_xy(float(seg[-1].x()), float(seg[-1].y()))
+                                    d0 = min(t0, t1) * total_distance_m
+                                    d1 = max(t0, t1) * total_distance_m
+                                    if math.isfinite(d0) and math.isfinite(d1) and d1 > d0:
+                                        markers.append((d0, lbl))
+                                        markers.append((d1, lbl))
+                                except Exception:
+                                    continue
+                    except Exception:
+                        continue
+                    continue
+
+                # Points: near the profile line (tolerance)
+                if geom_type == QgsWkbTypes.PointGeometry:
+                    lbl = _feature_label(ft)
+                    try:
+                        pts = []
+                        if g2.isMultipart():
+                            pts = g2.asMultiPoint() or []
+                        else:
+                            pts = [g2.asPoint()]
+                        for p in pts:
+                            try:
+                                pg = QgsGeometry.fromPointXY(QgsPointXY(p))
+                                if tol_mu > 0:
+                                    if float(line_geom.distance(pg)) > float(tol_mu):
+                                        continue
+                                else:
+                                    if float(line_geom.distance(pg)) > 0.0:
+                                        continue
+                                t = _fraction_for_xy(float(p.x()), float(p.y()))
+                                d = t * total_distance_m
+                                if math.isfinite(d):
+                                    markers.append((d, lbl))
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+
+            # Merge overlapping ranges
+            merged_ranges: List[Tuple[float, float]] = []
+            try:
+                ranges.sort(key=lambda t: t[0])
+                for a, b in ranges:
+                    if not merged_ranges:
+                        merged_ranges.append((a, b))
+                        continue
+                    pa, pb = merged_ranges[-1]
+                    if a <= pb + 0.5:
+                        merged_ranges[-1] = (pa, max(pb, b))
+                    else:
+                        merged_ranges.append((a, b))
+            except Exception:
+                merged_ranges = ranges
+
+            # Merge close markers
+            merged_markers: List[Tuple[float, str]] = []
+            try:
+                markers.sort(key=lambda t: t[0])
+                for d, lbl in markers:
+                    if not merged_markers:
+                        merged_markers.append((d, lbl))
+                        continue
+                    pd, pl = merged_markers[-1]
+                    if abs(float(d) - float(pd)) <= 0.5:
+                        # Keep the first label; avoid exploding labels.
+                        continue
+                    merged_markers.append((d, lbl))
+            except Exception:
+                merged_markers = markers
+
+            layer_label = ""
+            try:
+                layer_label = f"레이어: {layer.name()}"
+            except Exception:
+                layer_label = "레이어"
+
+            try:
+                self.chart.set_overlay_ranges(merged_ranges, label=layer_label)
+            except Exception:
+                pass
+            try:
+                self.chart.set_overlay_markers(merged_markers)
+            except Exception:
+                pass
+        except Exception:
+            pass
     
     def start_drawing(self):
         """Start drawing profile line on map"""
@@ -942,6 +1569,12 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             return
         self.points = []
         self.rubber_band.reset()
+        try:
+            # Always start drawing with a clear, visible preview style.
+            self.rubber_band.setColor(QColor(255, 0, 0))
+            self.rubber_band.setWidth(2)
+        except Exception:
+            pass
         
         # Save original tool and set our tool
         self.original_tool = self.canvas.mapTool()
@@ -1085,13 +1718,13 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
 
                 self.chart.set_data(self.profile_data)
                 self._refresh_aoi_highlight()
+                self._refresh_overlay()
                 self.btnExportCsv.setEnabled(True)
                 self.btnExportImage.setEnabled(True)
-                
-                # Clear rubber band completely - line is now in vector layer
-                self.rubber_band.reset(QgsWkbTypes.LineGeometry)
-                self.rubber_band.hide()
-                self.canvas.refresh()
+                try:
+                    self._show_profile_line_on_map(start=start_canvas, end=end_canvas, color=profile_color)
+                except Exception:
+                    pass
                 
                 push_message(self.iface, "단면 완료", f"{valid_samples}개 유효 샘플 추출 완료!", level=0)
             else:
@@ -1247,6 +1880,11 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         end_canvas = transform_point(end_line, line_crs, canvas_crs)
 
         self.points = [start_canvas, end_canvas]
+        try:
+            # Keep an on-top visual cue even when the line already exists in a layer.
+            self._show_profile_line_on_map(start=start_canvas, end=end_canvas)
+        except Exception:
+            pass
         self._compute_profile_for_points(dem_layer=dem_layer, start_canvas=start_canvas, end_canvas=end_canvas, num_samples=num_samples)
         restore_ui_focus(self)
 
@@ -1318,8 +1956,13 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.profile_data:
             self.chart.set_data(self.profile_data)
             self._refresh_aoi_highlight()
+            self._refresh_overlay()
             self.btnExportCsv.setEnabled(True)
             self.btnExportImage.setEnabled(True)
+            try:
+                self._show_profile_line_on_map(start=start_canvas, end=end_canvas)
+            except Exception:
+                pass
             push_message(self.iface, "단면 완료", f"{valid_samples}개 유효 샘플 추출 완료!", level=0)
         else:
             push_message(self.iface, "경고", "유효한 고도 데이터를 추출하지 못했습니다. DEM 범위를 확인하세요.", level=1)
@@ -1720,7 +2363,15 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self.profile_data = []
         self._last_aoi_inside_m = None
         self.rubber_band.reset()
+        try:
+            self.rubber_band.hide()
+        except Exception:
+            pass
         self.hover_marker.reset(QgsWkbTypes.PointGeometry)
+        try:
+            self.hover_marker.hide()
+        except Exception:
+            pass
         self.chart.set_data([])
         try:
             self.chart.set_profile_color(QColor(0, 100, 255))
@@ -1757,7 +2408,14 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._layer_tree_view.currentLayerChanged.disconnect(self._on_current_layer_changed)
         except Exception:
             pass
+        try:
+            if self._overlay_layer is not None and self._overlay_selection_handler is not None:
+                self._overlay_layer.selectionChanged.disconnect(self._overlay_selection_handler)
+        except Exception:
+            pass
         self._profile_layer = None
+        self._overlay_layer = None
+        self._overlay_selection_handler = None
         self._profile_layer_id = None
         self._layer_tree_view = None
         self._cleanup()
