@@ -819,12 +819,77 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-    def _cleanup_tmp(self):
-        if self._tmp_dir and os.path.isdir(self._tmp_dir):
+    def _tmp_dir_in_use(self, tmp_dir: str) -> bool:
+        """Return True if any current project layer source points into tmp_dir."""
+        if not tmp_dir:
+            return False
+
+        try:
+            tmp_abs = os.path.abspath(tmp_dir)
+        except Exception:
+            tmp_abs = str(tmp_dir)
+
+        try:
+            tmp_norm = os.path.normcase(tmp_abs).replace("\\", "/")
+            if not tmp_norm.endswith("/"):
+                tmp_norm += "/"
+        except Exception:
+            tmp_norm = str(tmp_abs).replace("\\", "/")
+            if tmp_norm and not tmp_norm.endswith("/"):
+                tmp_norm += "/"
+
+        try:
+            project = QgsProject.instance()
+            layers = list(project.mapLayers().values())
+        except Exception:
+            return False
+
+        for layer in layers:
             try:
-                shutil.rmtree(self._tmp_dir, ignore_errors=True)
+                src = str(layer.source() or "")
+            except Exception:
+                continue
+            if not src:
+                continue
+
+            # Some providers use complex URIs; substring matching is the most robust check.
+            try:
+                src_norm = os.path.normcase(src).replace("\\", "/")
+                if tmp_norm and tmp_norm in src_norm:
+                    return True
             except Exception:
                 pass
+
+            # Typical "path|layername=..." sources.
+            try:
+                path = (src.split("|", 1)[0] or "").strip()
+                if not path:
+                    continue
+                path_norm = os.path.normcase(os.path.abspath(path)).replace("\\", "/")
+                if tmp_norm and path_norm.startswith(tmp_norm):
+                    return True
+            except Exception:
+                continue
+
+        return False
+
+    def _cleanup_tmp(self):
+        tmp_dir = self._tmp_dir
+        if not tmp_dir or not os.path.isdir(tmp_dir):
+            self._tmp_dir = None
+            return
+
+        try:
+            if self._tmp_dir_in_use(tmp_dir):
+                log_message(f"GeoChem: tmp dir still in use, skip cleanup: {tmp_dir}", level=Qgis.Warning)
+                return
+        except Exception:
+            pass
+
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
         self._tmp_dir = None
 
     def reject(self):
@@ -836,7 +901,10 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         event.accept()
 
     def run(self):
-        ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
+        try:
+            ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
+        except Exception:
+            pass
 
         raster = self.cmbRaster.currentLayer()
         aoi = self.cmbAoi.currentLayer()
