@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 지형/경관 분석 툴킷 (Viewshed/LOS/Cost Surface/DEM/프로파일/지형지수)
-version=1.6.121
+version=1.6.122
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3

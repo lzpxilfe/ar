@@ -22,7 +22,8 @@ Draw a line on DEM and display elevation profile with graphical chart
 import os
 import csv
 import datetime
-from typing import List, Optional
+import math
+from typing import List, Optional, Sequence, Tuple
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt, QPointF, QRectF, QVariant
@@ -31,9 +32,9 @@ from qgis.PyQt.QtGui import QColor, QPainter, QPen, QBrush, QPalette, QPainterPa
 from qgis.core import (
     QgsProject, QgsMapLayerProxyModel, QgsPointXY, QgsRaster,
     QgsVectorLayer, QgsField, QgsFeature, QgsFeatureRequest, QgsGeometry, QgsWkbTypes,
-    QgsLineSymbol, QgsSingleSymbolRenderer, QgsSymbolLayer, QgsProperty, Qgis, QgsDistanceArea
+    QgsLineSymbol, QgsSingleSymbolRenderer, QgsSymbolLayer, QgsProperty, Qgis, QgsDistanceArea, QgsCoordinateTransform
 )
-from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand
+from qgis.gui import QgsMapLayerComboBox, QgsMapToolEmitPoint, QgsRubberBand
 from .utils import log_message, push_message, restore_ui_focus, transform_point
 from .live_log_dialog import ensure_live_log_dialog
 
@@ -108,6 +109,11 @@ class ProfileChartWidget(QWidget):
 
         # Profile line color (can be varied per saved profile)
         self.profile_color = QColor(0, 100, 255)
+
+        # Highlight ranges on distance axis (e.g., AOI intersection)
+        self.highlight_ranges: List[Tuple[float, float]] = []
+        self.highlight_label: str = ""
+        self.highlight_color = QColor(255, 193, 7, 40)  # amber with alpha
         
         # Margins
         self.margin_left = 60
@@ -119,6 +125,8 @@ class ProfileChartWidget(QWidget):
         self.data = data
         self.zoom_level = 1.0
         self.pan_offset = 0
+        self.highlight_ranges = []
+        self.highlight_label = ""
         
         if not data:
             self.smooth_data = []
@@ -273,6 +281,29 @@ class ProfileChartWidget(QWidget):
             self.profile_color = QColor(0, 100, 255)
         self.update()
 
+    def set_highlight_ranges(self, ranges: Sequence[Tuple[float, float]], *, label: str = ""):
+        cleaned: List[Tuple[float, float]] = []
+        try:
+            for a, b in ranges or []:
+                try:
+                    a = float(a)
+                    b = float(b)
+                except Exception:
+                    continue
+                if not math.isfinite(a) or not math.isfinite(b):
+                    continue
+                if b < a:
+                    a, b = b, a
+                if b <= a:
+                    continue
+                cleaned.append((a, b))
+        except Exception:
+            cleaned = []
+        cleaned.sort(key=lambda t: t[0])
+        self.highlight_ranges = cleaned
+        self.highlight_label = str(label or "")
+        self.update()
+
     def draw_chart(self, painter, width, height):
         if not self.data:
             painter.drawText(QRectF(0, 0, width, height), Qt.AlignCenter, "데이터가 없습니다.")
@@ -314,6 +345,32 @@ class ProfileChartWidget(QWidget):
         painter.drawLine(left, top, left, top + h)            # Y axis
         painter.drawLine(left, top + h, left + w, top + h)    # X axis
         
+        # Highlight ranges (behind the profile line)
+        if self.highlight_ranges:
+            try:
+                painter.save()
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(self.highlight_color))
+                for d0, d1 in self.highlight_ranges:
+                    if d1 <= view_start or d0 >= view_end:
+                        continue
+                    a = max(float(d0), float(view_start))
+                    b = min(float(d1), float(view_end))
+                    if b <= a:
+                        continue
+                    x0 = left + ((a - view_start) / visible_range) * w
+                    x1 = left + ((b - view_start) / visible_range) * w
+                    painter.drawRect(QRectF(x0, top, max(0.0, x1 - x0), h))
+                if self.highlight_label:
+                    painter.setPen(QPen(QColor(80, 80, 80)))
+                    painter.drawText(left + 6, top + 18, self.highlight_label)
+                painter.restore()
+            except Exception:
+                try:
+                    painter.restore()
+                except Exception:
+                    pass
+
         # Draw Profile Line using QPainterPath for smoothness
         path = QPainterPath()
         first_point = True
@@ -433,6 +490,87 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # Setup
         self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.RasterLayer)
+
+        # Extra options: fixed-length profile line + AOI highlight on chart
+        self._last_profile_length_m: Optional[float] = None
+        self._last_aoi_inside_m: Optional[float] = None
+        try:
+            self.grpExtra = QtWidgets.QGroupBox("추가 옵션 (길이/AOI)", self)
+            grid_extra = QtWidgets.QGridLayout(self.grpExtra)
+
+            self.chkFixedLength = QtWidgets.QCheckBox("같은 길이로 단면선(고정 길이)", self.grpExtra)
+            self.chkFixedLength.setChecked(False)
+            self.chkFixedLength.setToolTip(
+                "첫 점 이후 두 번째 클릭은 '방향'만 결정하고, 길이는 고정 길이(m)로 맞춥니다.\n"
+                "비교 단면(같은 길이/같은 샘플 수)을 여러 개 만들 때 유용합니다."
+            )
+
+            self.spinFixedLength = QtWidgets.QDoubleSpinBox(self.grpExtra)
+            self.spinFixedLength.setDecimals(1)
+            self.spinFixedLength.setMinimum(0.0)
+            self.spinFixedLength.setMaximum(10_000_000.0)
+            self.spinFixedLength.setSingleStep(100.0)
+            self.spinFixedLength.setValue(0.0)
+            self.spinFixedLength.setSuffix(" m")
+            self.spinFixedLength.setEnabled(False)
+            self.spinFixedLength.setToolTip("고정 길이(m). 0이면 적용되지 않습니다.")
+
+            self.btnUseLastLength = QtWidgets.QPushButton("최근 길이", self.grpExtra)
+            self.btnUseLastLength.setEnabled(False)
+            self.btnUseLastLength.setToolTip("가장 최근에 만든 단면선 길이를 고정 길이에 적용합니다.")
+
+            self.cmbAoiLayer = QgsMapLayerComboBox(self.grpExtra)
+            self.cmbAoiLayer.setFilters(QgsMapLayerProxyModel.VectorLayer)
+            self.cmbAoiLayer.setToolTip(
+                "조사대상지(AOI) 폴리곤 레이어를 선택하세요.\n"
+                "- 선택 피처가 있으면 선택 피처만 사용합니다.\n"
+                "- 단면 그래프에 AOI 내부 구간을 음영으로 표시할 수 있습니다."
+            )
+
+            self.chkShowAoiOnProfile = QtWidgets.QCheckBox("단면 그래프에 조사대상지(AOI) 구간 표시", self.grpExtra)
+            self.chkShowAoiOnProfile.setChecked(True)
+            self.chkShowAoiOnProfile.setToolTip(
+                "단면선이 AOI 내부를 지나는 구간을 그래프 배경(음영)으로 표시합니다.\n"
+                "표시는 샘플링 점 기준으로 계산됩니다(샘플 수가 높을수록 경계가 정밀)."
+            )
+
+            grid_extra.addWidget(self.chkFixedLength, 0, 0, 1, 3)
+            grid_extra.addWidget(QtWidgets.QLabel("고정 길이"), 1, 0)
+            grid_extra.addWidget(self.spinFixedLength, 1, 1)
+            grid_extra.addWidget(self.btnUseLastLength, 1, 2)
+            grid_extra.addWidget(QtWidgets.QLabel("조사대상지(AOI)"), 2, 0)
+            grid_extra.addWidget(self.cmbAoiLayer, 2, 1, 1, 2)
+            grid_extra.addWidget(self.chkShowAoiOnProfile, 3, 0, 1, 3)
+
+            help_lbl = QtWidgets.QLabel(
+                "TIP: value 비교용으로 같은 길이 단면을 만들거나,\n"
+                "AOI 단면이라면 그래프에서 AOI 구간(배경 음영)을 확인할 수 있습니다.",
+                self.grpExtra,
+            )
+            help_lbl.setWordWrap(True)
+            help_lbl.setStyleSheet("color:#555;")
+            grid_extra.addWidget(help_lbl, 4, 0, 1, 3)
+
+            try:
+                idx = int(self.verticalLayout.indexOf(self.groupProfile))
+                if idx >= 0:
+                    self.verticalLayout.insertWidget(idx, self.grpExtra)
+                else:
+                    self.verticalLayout.insertWidget(3, self.grpExtra)
+            except Exception:
+                self.verticalLayout.insertWidget(3, self.grpExtra)
+
+            self.chkFixedLength.toggled.connect(self._update_fixed_length_ui)
+            self.btnUseLastLength.clicked.connect(self._use_last_length)
+            self.chkShowAoiOnProfile.toggled.connect(self._refresh_aoi_highlight)
+            self.cmbAoiLayer.layerChanged.connect(self._refresh_aoi_highlight)
+        except Exception:
+            self.grpExtra = None
+            self.chkFixedLength = None
+            self.spinFixedLength = None
+            self.btnUseLastLength = None
+            self.cmbAoiLayer = None
+            self.chkShowAoiOnProfile = None
         
         # Connect signals
         self.btnDrawLine.clicked.connect(self.start_drawing)
@@ -524,6 +662,276 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         else:
             self.hover_marker.reset(QgsWkbTypes.PointGeometry)
             self.hover_marker.addPoint(QgsPointXY(x, y))
+
+    def _update_fixed_length_ui(self):
+        enabled = False
+        try:
+            enabled = bool(self.chkFixedLength is not None and self.chkFixedLength.isChecked())
+        except Exception:
+            enabled = False
+
+        try:
+            if self.spinFixedLength is not None:
+                self.spinFixedLength.setEnabled(enabled)
+        except Exception:
+            pass
+
+        try:
+            if enabled and self.spinFixedLength is not None:
+                cur = float(self.spinFixedLength.value())
+                if cur <= 0 and self._last_profile_length_m is not None and math.isfinite(self._last_profile_length_m):
+                    self.spinFixedLength.setValue(float(self._last_profile_length_m))
+        except Exception:
+            pass
+
+        try:
+            if self.btnUseLastLength is not None:
+                can_use = (
+                    enabled
+                    and self._last_profile_length_m is not None
+                    and math.isfinite(self._last_profile_length_m)
+                    and self._last_profile_length_m > 0
+                )
+                self.btnUseLastLength.setEnabled(bool(can_use))
+        except Exception:
+            pass
+
+    def _use_last_length(self):
+        try:
+            if self._last_profile_length_m is None or not math.isfinite(self._last_profile_length_m):
+                return
+            if self.spinFixedLength is not None:
+                self.spinFixedLength.setValue(float(self._last_profile_length_m))
+            if self.chkFixedLength is not None:
+                self.chkFixedLength.setChecked(True)
+        except Exception:
+            pass
+
+    def _fixed_length_m(self) -> Optional[float]:
+        try:
+            if self.chkFixedLength is None or not self.chkFixedLength.isChecked():
+                return None
+            if self.spinFixedLength is None:
+                return None
+            v = float(self.spinFixedLength.value())
+            if math.isfinite(v) and v > 0:
+                return v
+        except Exception:
+            pass
+        return None
+
+    def _distance_area_canvas(self) -> QgsDistanceArea:
+        canvas_crs = self.canvas.mapSettings().destinationCrs()
+        distance_area = QgsDistanceArea()
+        distance_area.setSourceCrs(canvas_crs, QgsProject.instance().transformContext())
+        distance_area.setEllipsoid(QgsProject.instance().ellipsoid() or "WGS84")
+        try:
+            distance_area.setEllipsoidalMode(True)
+        except AttributeError:
+            pass
+        return distance_area
+
+    def _end_point_fixed_length(self, *, start: QgsPointXY, direction_point: QgsPointXY, length_m: float) -> QgsPointXY:
+        dx = float(direction_point.x() - start.x())
+        dy = float(direction_point.y() - start.y())
+        if dx == 0.0 and dy == 0.0:
+            return QgsPointXY(direction_point)
+
+        try:
+            distance_area = self._distance_area_canvas()
+            cur = float(distance_area.measureLine(start, direction_point))
+        except Exception:
+            cur = 0.0
+
+        if not math.isfinite(cur) or cur <= 0:
+            # Fallback to planar scaling (best effort)
+            norm = math.sqrt(dx * dx + dy * dy)
+            if norm <= 0:
+                return QgsPointXY(direction_point)
+            scale = float(length_m) / norm
+            return QgsPointXY(start.x() + dx * scale, start.y() + dy * scale)
+
+        scale_total = float(length_m) / cur
+        end = QgsPointXY(start.x() + dx * scale_total, start.y() + dy * scale_total)
+        # Refine a couple of times (useful in geographic CRS where degrees->meters is nonlinear)
+        for _ in range(2):
+            try:
+                cur2 = float(distance_area.measureLine(start, end))
+            except Exception:
+                break
+            if not math.isfinite(cur2) or cur2 <= 0:
+                break
+            scale_total *= float(length_m) / cur2
+            end = QgsPointXY(start.x() + dx * scale_total, start.y() + dy * scale_total)
+        return end
+
+    def update_preview(self, point: QgsPointXY):
+        """Update temporary rubber band preview while drawing the profile line."""
+        try:
+            if len(self.points) != 1:
+                return
+            start = self.points[0]
+            end = QgsPointXY(point)
+            fixed = self._fixed_length_m()
+            if fixed is not None:
+                end = self._end_point_fixed_length(start=start, direction_point=end, length_m=fixed)
+            self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+            self.rubber_band.addPoint(start)
+            self.rubber_band.addPoint(end)
+            self.rubber_band.show()
+        except Exception:
+            pass
+
+    def _compute_aoi_highlight_ranges(self) -> List[Tuple[float, float]]:
+        """Return AOI intersection ranges along distance axis using current profile_data (sample-based)."""
+        self._last_aoi_inside_m = None
+        if not self.profile_data:
+            return []
+        try:
+            if self.chkShowAoiOnProfile is None or not self.chkShowAoiOnProfile.isChecked():
+                return []
+        except Exception:
+            return []
+
+        aoi_layer = None
+        try:
+            aoi_layer = self.cmbAoiLayer.currentLayer() if self.cmbAoiLayer is not None else None
+        except Exception:
+            aoi_layer = None
+        if aoi_layer is None or not isinstance(aoi_layer, QgsVectorLayer):
+            return []
+        try:
+            if aoi_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+                return []
+        except Exception:
+            return []
+
+        feats = []
+        try:
+            feats = aoi_layer.selectedFeatures()
+        except Exception:
+            feats = []
+        if not feats:
+            try:
+                feats = list(aoi_layer.getFeatures())
+            except Exception:
+                feats = []
+        if not feats:
+            return []
+
+        geoms = []
+        for ft in feats:
+            try:
+                g = ft.geometry()
+                if g is None or g.isEmpty():
+                    continue
+                geoms.append(g)
+            except Exception:
+                continue
+        if not geoms:
+            return []
+
+        aoi_geom = None
+        try:
+            aoi_geom = QgsGeometry.unaryUnion(geoms)
+        except Exception:
+            aoi_geom = None
+        if aoi_geom is None or aoi_geom.isEmpty():
+            try:
+                g0 = None
+                for g in geoms:
+                    g0 = g if g0 is None else g0.combine(g)
+                aoi_geom = g0
+            except Exception:
+                aoi_geom = None
+        if aoi_geom is None or aoi_geom.isEmpty():
+            return []
+
+        # Transform AOI geometry to canvas CRS once.
+        try:
+            canvas_crs = self.canvas.mapSettings().destinationCrs()
+            aoi_crs = aoi_layer.crs()
+            if aoi_crs != canvas_crs:
+                ct = QgsCoordinateTransform(aoi_crs, canvas_crs, QgsProject.instance())
+                aoi_geom = QgsGeometry(aoi_geom)  # copy
+                aoi_geom.transform(ct)
+        except Exception:
+            return []
+
+        ranges: List[Tuple[float, float]] = []
+        run_start = None
+        last_inside = None
+
+        for p in self.profile_data:
+            try:
+                dist = float(p.get("distance", 0.0))
+            except Exception:
+                dist = 0.0
+            inside = False
+            try:
+                x = float(p.get("x"))
+                y = float(p.get("y"))
+                pt_geom = QgsGeometry.fromPointXY(QgsPointXY(x, y))
+                inside = bool(aoi_geom.intersects(pt_geom))
+            except Exception:
+                inside = False
+
+            if inside:
+                if run_start is None:
+                    run_start = dist
+                last_inside = dist
+            else:
+                if run_start is not None:
+                    end = last_inside if last_inside is not None else dist
+                    if end > run_start:
+                        ranges.append((run_start, end))
+                    run_start = None
+                    last_inside = None
+
+        if run_start is not None:
+            end = last_inside if last_inside is not None else run_start
+            if end > run_start:
+                ranges.append((run_start, end))
+
+        inside_len = 0.0
+        try:
+            inside_len = float(sum((b - a) for a, b in ranges if b > a))
+        except Exception:
+            inside_len = 0.0
+        if math.isfinite(inside_len) and inside_len > 0:
+            self._last_aoi_inside_m = inside_len
+
+        return ranges
+
+    def _refresh_aoi_highlight(self, *_args):
+        """Recompute AOI highlight ranges for the current profile (if any)."""
+        try:
+            if not self.profile_data:
+                self._last_aoi_inside_m = None
+                try:
+                    self.chart.set_highlight_ranges([], label="")
+                except Exception:
+                    pass
+                return
+
+            ranges = self._compute_aoi_highlight_ranges()
+            label = ""
+            if ranges:
+                try:
+                    lyr = self.cmbAoiLayer.currentLayer() if self.cmbAoiLayer is not None else None
+                    label = f"AOI: {lyr.name()}" if lyr is not None else "AOI"
+                except Exception:
+                    label = "AOI"
+            try:
+                self.chart.set_highlight_ranges(ranges, label=label)
+            except Exception:
+                pass
+            try:
+                self.update_stats()
+            except Exception:
+                pass
+        except Exception:
+            pass
     
     def start_drawing(self):
         """Start drawing profile line on map"""
@@ -539,17 +947,49 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self.original_tool = self.canvas.mapTool()
         self.map_tool = ProfileLineTool(self.canvas, self)
         self.canvas.setMapTool(self.map_tool)
-        
-        push_message(self.iface, "지형 단면", "지도에서 시작점과 끝점을 클릭하세요 (2번)", level=0)
+
+        fixed = self._fixed_length_m()
+        if fixed is not None:
+            push_message(
+                self.iface,
+                "지형 단면",
+                f"고정 길이 {fixed:.0f}m: 시작점을 클릭한 뒤, 방향만 클릭하세요 (2번)",
+                level=0,
+            )
+        else:
+            push_message(self.iface, "지형 단면", "지도에서 시작점과 끝점을 클릭하세요 (2번)", level=0)
         self.hide()
     
     def add_point(self, point):
         """Add point to profile line"""
-        self.points.append(point)
-        self.rubber_band.addPoint(point)
-        
-        if len(self.points) == 2:
-            self.calculate_profile()
+        if point is None:
+            return
+        if len(self.points) >= 2:
+            return
+
+        if len(self.points) == 0:
+            self.points.append(QgsPointXY(point))
+            try:
+                self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+            except Exception:
+                self.rubber_band.reset()
+            self.rubber_band.addPoint(self.points[0])
+            self.rubber_band.show()
+            return
+
+        # Second click: apply fixed length (direction-only click) if enabled.
+        start = self.points[0]
+        end = QgsPointXY(point)
+        fixed = self._fixed_length_m()
+        if fixed is not None:
+            end = self._end_point_fixed_length(start=start, direction_point=end, length_m=fixed)
+
+        self.points = [start, end]
+        self.rubber_band.reset(QgsWkbTypes.LineGeometry)
+        self.rubber_band.addPoint(start)
+        self.rubber_band.addPoint(end)
+        self.rubber_band.show()
+        self.calculate_profile()
     
     def calculate_profile(self):
         dem_layer = self.cmbDemLayer.currentLayer()
@@ -583,6 +1023,11 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             except AttributeError:
                 pass
             total_distance_m = float(distance_area.measureLine(start_canvas, end_canvas))
+            try:
+                self._last_profile_length_m = float(total_distance_m)
+                self._update_fixed_length_ui()
+            except Exception:
+                pass
             
             push_message(
                 self.iface,
@@ -639,7 +1084,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                         pass
 
                 self.chart.set_data(self.profile_data)
-                self.update_stats()
+                self._refresh_aoi_highlight()
                 self.btnExportCsv.setEnabled(True)
                 self.btnExportImage.setEnabled(True)
                 
@@ -827,6 +1272,11 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             pass
 
         total_distance_m = float(distance_area.measureLine(start_canvas, end_canvas))
+        try:
+            self._last_profile_length_m = float(total_distance_m)
+            self._update_fixed_length_ui()
+        except Exception:
+            pass
 
         push_message(
             self.iface,
@@ -867,7 +1317,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
 
         if self.profile_data:
             self.chart.set_data(self.profile_data)
-            self.update_stats()
+            self._refresh_aoi_highlight()
             self.btnExportCsv.setEnabled(True)
             self.btnExportImage.setEnabled(True)
             push_message(self.iface, "단면 완료", f"{valid_samples}개 유효 샘플 추출 완료!", level=0)
@@ -1217,6 +1667,12 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         
         stats = (f"총 거리: {total_d:.1f}m | 고도 범위: {min_e:.1f}m ~ {max_e:.1f}m "
                  f"(차: {max_e-min_e:.1f}m)")
+        try:
+            inside = float(self._last_aoi_inside_m) if self._last_aoi_inside_m is not None else None
+            if inside is not None and math.isfinite(inside) and inside > 0:
+                stats += f" | AOI 구간: {inside:.1f}m"
+        except Exception:
+            pass
         self.lblStats.setText(stats)
 
     def export_csv(self):
@@ -1262,6 +1718,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
     def clear_profile(self):
         self.points = []
         self.profile_data = []
+        self._last_aoi_inside_m = None
         self.rubber_band.reset()
         self.hover_marker.reset(QgsWkbTypes.PointGeometry)
         self.chart.set_data([])
@@ -1353,3 +1810,10 @@ class ProfileLineTool(QgsMapToolEmitPoint):
     def canvasReleaseEvent(self, event):
         point = self.toMapCoordinates(event.pos())
         self.dialog.add_point(point)
+
+    def canvasMoveEvent(self, event):
+        try:
+            point = self.toMapCoordinates(event.pos())
+            self.dialog.update_preview(point)
+        except Exception:
+            pass
