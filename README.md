@@ -41,6 +41,26 @@ ArchToolkit은 한국의 고고학 연구 환경에 최적화된 다양한 분�
 3. 반경(m) 설정 → **AI 요약 생성**
 4. 필요 시 `저장…`으로 Markdown/Text 파일로 내보내기
 
+## Gemini API 키 발급(받는 법)
+
+ArchToolkit의 “AI 조사요약(Gemini)” 기능은 **Google Gemini API 키**가 있어야 동작합니다.
+
+1. Google AI Studio에 로그인합니다.
+   - `https://aistudio.google.com/`
+2. **API Keys** 페이지로 이동해 `Create API key`를 눌러 키를 생성합니다.
+   - `https://aistudio.google.com/app/apikey`
+3. 생성된 키를 복사한 뒤, QGIS에서 `AI 조사요약 (Gemini AOI Report)` 창의 **API 키 설정/변경…** 버튼으로 입력합니다.
+
+### 주의(보안/과금)
+
+- API 키는 비밀번호처럼 취급하세요. **깃(Git)이나 문서에 키를 그대로 남기지 마세요.**
+- 사용량/요금/제한(쿼터)은 Google AI Studio의 **Usage / Limits**에서 확인할 수 있습니다. (프로젝트/계정 상태에 따라 과금이 발생할 수 있습니다.)
+
+### 키 삭제/변경
+
+- 키 변경: `AI 조사요약` 창에서 **API 키 설정/변경…**
+- 키 완전 삭제(권장): QGIS `설정 → 옵션 → 인증(Authentication)`에서 `ArchToolkit Gemini` 항목을 찾아 삭제
+
 ## 설치 방법
 
 ### 요구 사항
