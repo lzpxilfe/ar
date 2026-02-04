@@ -14,7 +14,7 @@ ArchToolkit은 한국의 고고학 연구 환경에 최적화된 다양한 분�
 - **지형 분석 (Terrain Analysis)**: 경사/사면방향/TRI/TPI/Roughness/Slope Position 분석 + 분류/스타일 적용.
 - **경사도/사면방향 도면화 (Slope/Aspect Drafting)**: AOI 기준 인쇄용 경사 래스터 + 사면방향(방위각) 화살표 포인트 생성.
 - **지형 단면 (Terrain Profile)**: 단면선 그리기/저장, 다중 프로파일, 지도-차트 연동(hover), AOI/벡터 오버레이 지원.
-- **가시권/가시선 (Viewshed / LOS)**: 단일/누적/역방향/선형 가시권, 가시선(LOS) + 프로파일, 히구치 거리대, 곡률·굴절 옵션.
+- **가시권/가시선 (Viewshed / LOS)**: 단일/누적/역방향/선형 가시권, 가시선(LOS) + 프로파일, 히구치 거리대, 곡률·굴절 옵션 + (옵션) AOI 가시 통계(가시면적/가시비율) + 가중 누적/표준화(0–100%).
 - **비용표면/최소비용경로 (Cost Surface / LCP)**: DEM 경사 기반 이동 시간/에너지 모델링 + LCP + Least-cost corridor(회랑) + 추가 마찰(래스터/벡터) + 등시간선/등에너지선(옵션).
 - **최소비용 네트워크 (Least-cost Network)**: 유적 간 LCP 기반 MST/k-NN/Hub 네트워크 생성 + (옵션) 중심성 지표(SNA).
 - **근접/가시성 네트워크 (PPA / Visibility)**: 근접성(PPA) 그래프 + DEM 기반 상호가시성(Visibility) 그래프 생성.

@@ -30,7 +30,7 @@ from qgis.core import (
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer,
     QgsLineSymbol, QgsRendererCategory,
     QgsCategorizedSymbolRenderer, QgsSingleSymbolRenderer, QgsPointLocator,
-    QgsMarkerSymbol, QgsPalLayerSettings, QgsTextFormat, QgsVectorLayerSimpleLabeling,
+    QgsMarkerSymbol, QgsFillSymbol, QgsPalLayerSettings, QgsTextFormat, QgsTextBufferSettings, QgsVectorLayerSimpleLabeling,
     QgsTextAnnotation, Qgis, QgsUnitTypes
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator, QgsMapCanvasAnnotationItem
@@ -56,6 +56,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.observer_point = None
         self.target_point = None  # For Line of Sight
         self.observer_points = []  # For multi-point viewshed
+        self.observer_weights = []  # For weighted cumulative viewshed (parallel to observer_points)
         self.point_labels = []  # Text annotations for point numbers
         self.multi_point_mode = False
         self.los_mode = False
@@ -81,11 +82,23 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # Setup layer combos
         self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.Filter.RasterLayer)
         self.cmbObserverLayer.setFilters(QgsMapLayerProxyModel.Filter.VectorLayer)
+        try:
+            if hasattr(self, "cmbAoiStatsLayer"):
+                self.cmbAoiStatsLayer.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
+        except Exception:
+            pass
         
         # Connect signals
         self.btnRun.clicked.connect(self.run_analysis)
         self.btnClose.clicked.connect(self.close)
         self.btnSelectPoint.clicked.connect(self.start_point_selection)
+        try:
+            if hasattr(self, "chkAoiStats"):
+                self.chkAoiStats.toggled.connect(self._on_aoi_stats_toggled)
+            if hasattr(self, "chkWeightedCumulative"):
+                self.chkWeightedCumulative.toggled.connect(self._on_weighted_cumulative_toggled)
+        except Exception:
+            pass
         
         # Auto-sync source radio when layer is selected
         self.cmbObserverLayer.layerChanged.connect(self.on_layer_selection_changed)
@@ -116,6 +129,15 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Default to Map Click as requested
         self.radioClickMap.setChecked(True)
+
+        # Ensure initial enabled states for optional widgets
+        try:
+            if hasattr(self, "chkAoiStats"):
+                self._on_aoi_stats_toggled(bool(self.chkAoiStats.isChecked()))
+            if hasattr(self, "chkWeightedCumulative"):
+                self._on_weighted_cumulative_toggled(bool(self.chkWeightedCumulative.isChecked()))
+        except Exception:
+            pass
         
         # Map tool for point selection
         self.map_tool = None
@@ -455,6 +477,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.observer_point = None
         self.target_point = None
         self.observer_points = []
+        self.observer_weights = []
         self._reverse_target_geom = None
         self._reverse_target_crs = None
         self._reverse_target_layer_name = None
@@ -567,6 +590,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if not (is_line_mode or is_multi_mode):
                 self.chkCountOnly.setChecked(False)
 
+        # Show/Hide weighted cumulative options - relevant for Line and Multi-point
+        if hasattr(self, "chkWeightedCumulative"):
+            self.chkWeightedCumulative.setVisible(is_line_mode or is_multi_mode)
+            if not (is_line_mode or is_multi_mode):
+                self.chkWeightedCumulative.setChecked(False)
+        if hasattr(self, "chkNormalizeWeighted"):
+            self.chkNormalizeWeighted.setVisible(is_line_mode or is_multi_mode)
+
         # Show/Hide Visual Imbalance checkbox - reverse viewshed only
         if hasattr(self, "chkVisualImbalance"):
             self.chkVisualImbalance.setVisible(is_reverse_mode)
@@ -670,6 +701,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         # Trigger source change handler to update dependent UI
         self.on_source_changed()
+
+        # Keep dependent UI in sync (weight widget, normalization enable/disable)
+        try:
+            if hasattr(self, "chkWeightedCumulative"):
+                self._on_weighted_cumulative_toggled(bool(self.chkWeightedCumulative.isChecked()))
+        except Exception:
+            pass
     
     def on_source_changed(self):
         """Toggle between map click and layer selection
@@ -736,6 +774,35 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if layer:
             self.radioFromLayer.setChecked(True)
         self._update_cutout_input_polygon_ui()
+
+    def _on_aoi_stats_toggled(self, checked: bool):
+        try:
+            if hasattr(self, "cmbAoiStatsLayer"):
+                self.cmbAoiStatsLayer.setEnabled(bool(checked))
+            if hasattr(self, "chkAoiStatsSelectedOnly"):
+                self.chkAoiStatsSelectedOnly.setEnabled(bool(checked))
+        except Exception:
+            pass
+
+    def _on_weighted_cumulative_toggled(self, checked: bool):
+        try:
+            if hasattr(self, "chkNormalizeWeighted"):
+                self.chkNormalizeWeighted.setEnabled(bool(checked))
+            if hasattr(self, "chkCountOnly"):
+                # Count-only and weighted are mutually exclusive output modes.
+                if checked:
+                    self.chkCountOnly.setChecked(False)
+                self.chkCountOnly.setEnabled(not bool(checked))
+        except Exception:
+            pass
+
+        try:
+            # Update weight widget visibility if present.
+            is_multi = bool(self.radioMultiPoint.isChecked())
+            if hasattr(self, "widgetPointWeight"):
+                self.widgetPointWeight.setVisible(bool(checked) and is_multi)
+        except Exception:
+            pass
 
     def _update_cutout_input_polygon_ui(self):
         """Show/enable cut-out option only when it applies (Multi + From Layer + Polygon)."""
@@ -948,6 +1015,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if self.multi_point_mode:
             # Multi-point mode: add to list
             self.observer_points.append(point)
+            try:
+                w = float(self.spinPointWeight.value()) if hasattr(self, "spinPointWeight") else 1.0
+            except Exception:
+                w = 1.0
+            self.observer_weights.append(w)
             self.point_marker.addPoint(point)
             
             count = len(self.observer_points)
@@ -1340,7 +1412,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         self.accept()
     
-    def create_observer_layer(self, name, points_info):
+    def create_observer_layer(self, name, points_info, weights=None):
         """Create a persistent memory layer for manual observer points"""
         crs = self.canvas.mapSettings().destinationCrs().authid()
         
@@ -1357,7 +1429,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         pr = layer.dataProvider()
         
         # Add fields
-        pr.addAttributes([QgsField("no", QVariant.Int)])
+        has_weights = bool((weights is not None) and (not is_line))
+        fields = [QgsField("no", QVariant.Int)]
+        if has_weights:
+            fields.append(QgsField("weight", QVariant.Double))
+        pr.addAttributes(fields)
         layer.updateFields()
         
         # Add features
@@ -1371,7 +1447,13 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             for i, (pt, _) in enumerate(points_info):
                 feat = QgsFeature(layer.fields())
                 feat.setGeometry(QgsGeometry.fromPointXY(pt))
-                feat.setAttributes([i + 1])
+                attrs = [i + 1]
+                if has_weights:
+                    try:
+                        attrs.append(float(weights[i]) if i < len(weights) else None)
+                    except Exception:
+                        attrs.append(None)
+                feat.setAttributes(attrs)
                 features.append(feat)
         
         pr.addFeatures(features)
@@ -1417,6 +1499,292 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         QgsProject.instance().addMapLayers([layer])
         return layer
+
+    def _split_qgis_source_path(self, source: str) -> str:
+        try:
+            s = str(source or "").strip()
+        except Exception:
+            return ""
+        if not s:
+            return ""
+        return (s.split("|", 1)[0] or "").strip()
+
+    def _inv_geotransform(self, gt):
+        inv = gdal.InvGeoTransform(gt)
+        if isinstance(inv, (list, tuple)) and len(inv) == 2:
+            ok, inv_gt = inv
+            if not ok:
+                raise Exception("geotransform inverse failed")
+            return inv_gt
+        if isinstance(inv, (list, tuple)) and len(inv) == 6:
+            return inv
+        raise Exception("geotransform inverse failed")
+
+    def _rasterize_geom_mask(self, geom_dem: QgsGeometry, *, win_gt, proj_wkt: str, cols: int, rows: int):
+        """Rasterize a polygon geometry into a boolean mask aligned to the given raster window."""
+        try:
+            ogr_geom = ogr.CreateGeometryFromWkb(bytes(geom_dem.asWkb()))
+        except Exception:
+            ogr_geom = None
+        if ogr_geom is None:
+            return None
+
+        try:
+            rdrv = gdal.GetDriverByName("MEM")
+            rds = rdrv.Create("", int(cols), int(rows), 1, gdal.GDT_Byte)
+            if rds is None:
+                return None
+            rds.SetGeoTransform(win_gt)
+            rds.SetProjection(str(proj_wkt or ""))
+            band = rds.GetRasterBand(1)
+            band.Fill(0)
+            band.SetNoDataValue(0)
+
+            vdrv = ogr.GetDriverByName("Memory")
+            vds = vdrv.CreateDataSource("")
+            vlyr = vds.CreateLayer("mask", None, ogr.wkbUnknown)
+            feat_defn = vlyr.GetLayerDefn()
+            feat = ogr.Feature(feat_defn)
+            feat.SetGeometry(ogr_geom)
+            vlyr.CreateFeature(feat)
+
+            gdal.RasterizeLayer(rds, [1], vlyr, burn_values=[1], options=["ALL_TOUCHED=TRUE"])
+
+            mask = band.ReadAsArray()
+            if mask is None:
+                return None
+            return mask != 0
+        except Exception:
+            return None
+
+    def _compute_aoi_visibility_stats_layer(
+        self,
+        *,
+        raster_path: str,
+        dem_layer: QgsRasterLayer,
+        aoi_layer: QgsVectorLayer,
+        selected_only: bool,
+        visible_threshold: float = 0.5,
+    ):
+        if not raster_path or not os.path.exists(raster_path):
+            return None, None
+        if not aoi_layer or aoi_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+            return None, None
+
+        ds = gdal.Open(raster_path, gdal.GA_ReadOnly)
+        if ds is None:
+            return None, None
+        band = ds.GetRasterBand(1)
+        if band is None:
+            return None, None
+
+        gt = ds.GetGeoTransform()
+        proj = ds.GetProjection() or ""
+        nodata = band.GetNoDataValue()
+        xsize = ds.RasterXSize
+        ysize = ds.RasterYSize
+        if xsize <= 0 or ysize <= 0:
+            return None, None
+
+        try:
+            px_area = abs(float(gt[1]) * float(gt[5]))
+        except Exception:
+            px_area = 0.0
+        if not math.isfinite(px_area) or px_area <= 0:
+            px_area = 0.0
+
+        try:
+            inv_gt = self._inv_geotransform(gt)
+        except Exception:
+            return None, None
+
+        out_name = f"AOI_가시통계_{uuid.uuid4().hex[:6]}"
+        out = QgsVectorLayer(f"Polygon?crs={dem_layer.crs().authid()}", out_name, "memory")
+        pr = out.dataProvider()
+        pr.addAttributes(
+            [
+                QgsField("src_id", QVariant.Int),
+                QgsField("tot_px", QVariant.Int),
+                QgsField("vis_px", QVariant.Int),
+                QgsField("tot_m2", QVariant.Double),
+                QgsField("vis_m2", QVariant.Double),
+                QgsField("vis_pct", QVariant.Double),
+            ]
+        )
+        out.updateFields()
+
+        try:
+            tr = QgsCoordinateTransform(aoi_layer.crs(), dem_layer.crs(), QgsProject.instance())
+        except Exception:
+            tr = None
+
+        feats = []
+        total_tot_m2 = 0.0
+        total_vis_m2 = 0.0
+
+        src_iter = aoi_layer.selectedFeatures() if selected_only else aoi_layer.getFeatures()
+        for f in src_iter:
+            try:
+                geom = f.geometry()
+            except Exception:
+                continue
+            if not geom or geom.isEmpty():
+                continue
+
+            geom_dem = QgsGeometry(geom)
+            try:
+                if tr is not None:
+                    geom_dem.transform(tr)
+            except Exception:
+                pass
+            if geom_dem.isEmpty():
+                continue
+
+            bbox = geom_dem.boundingBox()
+            try:
+                px0, py0 = gdal.ApplyGeoTransform(inv_gt, bbox.xMinimum(), bbox.yMaximum())
+                px1, py1 = gdal.ApplyGeoTransform(inv_gt, bbox.xMaximum(), bbox.yMinimum())
+            except Exception:
+                continue
+
+            x0 = int(math.floor(min(px0, px1)))
+            x1 = int(math.ceil(max(px0, px1)))
+            y0 = int(math.floor(min(py0, py1)))
+            y1 = int(math.ceil(max(py0, py1)))
+
+            x0 = max(0, min(xsize - 1, x0))
+            y0 = max(0, min(ysize - 1, y0))
+            x1 = max(0, min(xsize, x1))
+            y1 = max(0, min(ysize, y1))
+
+            w = int(max(1, x1 - x0))
+            h = int(max(1, y1 - y0))
+            if w <= 0 or h <= 0:
+                continue
+
+            arr = band.ReadAsArray(x0, y0, w, h)
+            if arr is None:
+                continue
+            arr = arr.astype(np.float32, copy=False)
+
+            valid = np.isfinite(arr)
+            if nodata is not None:
+                try:
+                    valid &= (arr != float(nodata))
+                except Exception:
+                    pass
+
+            win_gt = (
+                gt[0] + x0 * gt[1] + y0 * gt[2],
+                gt[1],
+                gt[2],
+                gt[3] + x0 * gt[4] + y0 * gt[5],
+                gt[4],
+                gt[5],
+            )
+            mask = self._rasterize_geom_mask(geom_dem, win_gt=win_gt, proj_wkt=proj, cols=w, rows=h)
+            if mask is None:
+                continue
+
+            in_zone = mask & valid
+            tot_px = int(np.count_nonzero(in_zone))
+            if tot_px <= 0:
+                vis_px = 0
+            else:
+                vis_px = int(np.count_nonzero(in_zone & (arr > float(visible_threshold))))
+
+            tot_m2 = float(tot_px) * float(px_area)
+            vis_m2 = float(vis_px) * float(px_area)
+            vis_pct = (vis_m2 / tot_m2 * 100.0) if tot_m2 > 0 else 0.0
+
+            total_tot_m2 += tot_m2
+            total_vis_m2 += vis_m2
+
+            out_feat = QgsFeature(out.fields())
+            out_feat.setGeometry(geom_dem)
+            out_feat.setAttributes([int(f.id()), tot_px, vis_px, tot_m2, vis_m2, float(vis_pct)])
+            feats.append(out_feat)
+
+        pr.addFeatures(feats)
+        out.updateExtents()
+
+        # Simple styling + labeling for reporting
+        try:
+            symbol = QgsFillSymbol.createSimple(
+                {"color": "0,0,0,0", "outline_color": "50,50,50,200", "outline_width": "0.6"}
+            )
+            out.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+            pal = QgsPalLayerSettings()
+            pal.isExpression = True
+            pal.fieldName = "round(\"vis_pct\", 1) || '%'"
+            pal.placement = QgsPalLayerSettings.OverPoint
+
+            fmt = QgsTextFormat()
+            fmt.setSize(10.0)
+            fmt.setColor(QColor(20, 20, 20))
+
+            buf = QgsTextBufferSettings()
+            buf.setEnabled(True)
+            buf.setColor(QColor(255, 255, 255, 220))
+            buf.setSize(1.2)
+            fmt.setBuffer(buf)
+            pal.setFormat(fmt)
+
+            out.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+            out.setLabelsEnabled(True)
+        except Exception:
+            pass
+
+        summary = None
+        if total_tot_m2 > 0:
+            summary = {
+                "tot_m2": float(total_tot_m2),
+                "vis_m2": float(total_vis_m2),
+                "vis_pct": float(total_vis_m2 / total_tot_m2 * 100.0),
+                "feat_n": int(len(feats)),
+            }
+        return out, summary
+
+    def _add_aoi_stats_layer_for_raster(self, raster_layer: QgsRasterLayer, dem_layer: QgsRasterLayer):
+        if not hasattr(self, "chkAoiStats") or not self.chkAoiStats.isChecked():
+            return
+        aoi_layer = self.cmbAoiStatsLayer.currentLayer() if hasattr(self, "cmbAoiStatsLayer") else None
+        if not aoi_layer or not isinstance(aoi_layer, QgsVectorLayer):
+            push_message(self.iface, "AOI 통계", "AOI 폴리곤 레이어를 선택하세요.", level=1, duration=6)
+            return
+        if aoi_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+            push_message(self.iface, "AOI 통계", "AOI 레이어는 폴리곤이어야 합니다.", level=1, duration=6)
+            return
+
+        selected_only = bool(
+            hasattr(self, "chkAoiStatsSelectedOnly") and self.chkAoiStatsSelectedOnly.isChecked()
+        )
+        raster_path = self._split_qgis_source_path(raster_layer.source())
+        stats_layer, summary = self._compute_aoi_visibility_stats_layer(
+            raster_path=raster_path,
+            dem_layer=dem_layer,
+            aoi_layer=aoi_layer,
+            selected_only=selected_only,
+        )
+        if stats_layer is None or not stats_layer.isValid():
+            push_message(self.iface, "AOI 통계", "AOI 통계 레이어 생성 실패", level=1, duration=6)
+            return
+
+        QgsProject.instance().addMapLayer(stats_layer)
+        try:
+            self.result_aux_layer_map.setdefault(raster_layer.id(), []).append(stats_layer.id())
+        except Exception:
+            pass
+
+        if summary:
+            push_message(
+                self.iface,
+                "AOI 통계",
+                f"가시비율 {summary['vis_pct']:.1f}% | 가시면적 {summary['vis_m2']:.0f} m² / {summary['tot_m2']:.0f} m² (n={summary['feat_n']})",
+                level=0,
+                duration=7,
+            )
 
     def run_single_viewshed(self, dem_layer, obs_height, tgt_height, max_dist, curvature, refraction, refraction_coeff=0.13):
         """Run single point viewshed analysis with circular masking"""
@@ -1514,6 +1882,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         self.apply_viewshed_style(viewshed_layer)
                     
                     QgsProject.instance().addMapLayers([viewshed_layer])
+                    try:
+                        self._add_aoi_stats_layer_for_raster(viewshed_layer, dem_layer)
+                    except Exception:
+                        pass
                     if use_higuchi:
                         # Add rings after raster so they draw on top.
                         self.create_higuchi_rings(point, src_crs, max_dist, dem_layer)
@@ -2098,6 +2470,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.apply_viewshed_style(viewshed_layer)
             QgsProject.instance().addMapLayer(viewshed_layer)
             self.last_result_layer_id = viewshed_layer.id()
+            try:
+                self._add_aoi_stats_layer_for_raster(viewshed_layer, dem_layer)
+            except Exception:
+                pass
 
             # Link marker(s) for cleanup when the raster is removed
             if marker_points_with_crs:
@@ -2937,7 +3313,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception as e:
             log_message(f"Profiler error: {e}", level=Qgis.Warning)
     
-    def combine_viewsheds_numpy(self, dem_layer, viewshed_files, output_path, observer_points, max_dist, is_count_mode, grid_info, union_mode=False):
+    def combine_viewsheds_numpy(
+        self,
+        dem_layer,
+        viewshed_files,
+        output_path,
+        observer_points,
+        max_dist,
+        is_count_mode,
+        grid_info,
+        union_mode=False,
+        weights=None,
+        weighted_mode=False,
+        normalize_weighted=False,
+    ):
         """Highly optimized cumulative viewshed merging with unified grid alignment.
         """
         try:
@@ -2956,6 +3345,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             # 2. Initialize Arrays
             cumulative = np.zeros((target_height, target_width), dtype=np.float32)
             circular_mask = np.zeros((target_height, target_width), dtype=np.bool_)
+            used_weight_sum = 0.0
             
             # Universal meshgrid for clipping
             r_full, c_full = np.ogrid[:target_height, :target_width]
@@ -2977,7 +3367,19 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 
                 # Define val_to_add for cumulative mode
                 if not union_mode:
-                    val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
+                    if weighted_mode:
+                        w = 1.0
+                        try:
+                            if weights is not None and int(pt_idx) < len(weights):
+                                w = float(weights[int(pt_idx)])
+                        except Exception:
+                            w = 1.0
+                        if not math.isfinite(w) or w < 0:
+                            w = 0.0
+                        val_to_add = float(w)
+                        used_weight_sum += float(w)
+                    else:
+                        val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
                 # [v1.6.14] Always calculate circular_mask for buffer-shape boundary
                 pt, pt_crs = observer_points[pt_idx]
@@ -3004,7 +3406,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     
                 vs_ds = None
             
-            # 4. Final NoData masking
+            # 4. Optional normalization for weighted mode (0-100%)
+            if weighted_mode and normalize_weighted and used_weight_sum > 0:
+                try:
+                    cumulative = (cumulative / float(used_weight_sum)) * 100.0
+                except Exception:
+                    pass
+
+            # 5. Final NoData masking
             # [v1.6.14] Apply circular buffer masking for ALL modes
             nodata_value = -9999
             cumulative[~circular_mask] = nodata_value
@@ -3037,7 +3446,8 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         Creates a raster where cell values indicate how many observer points
         can see that location. Color-coded from red (1 point) to green (all points).
         """
-        points = [] # Start empty, we'll collect from all sources as (pt, crs)
+        points = []  # Start empty, we'll collect from all sources as (pt, crs)
+        weights = []  # Parallel to points (for weighted cumulative)
         mask_geometries_dem = []
         want_cutout_input_polygon = bool(
             hasattr(self, "chkCutoutInputPolygon") and self.chkCutoutInputPolygon.isChecked()
@@ -3046,10 +3456,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         canvas_crs = self.canvas.mapSettings().destinationCrs()
 
         # 1. Add manual clicks
-        for p in self.observer_points:
+        for idx, p in enumerate(self.observer_points):
             points.append((p, canvas_crs))
-        if self.observer_point: # Also check the single selection if any
+            try:
+                w = float(self.observer_weights[idx]) if idx < len(self.observer_weights) else 1.0
+            except Exception:
+                w = 1.0
+            weights.append(w)
+
+        if self.observer_point:  # Also check the single selection if any
             points.append((self.observer_point, canvas_crs))
+            weights.append(1.0)
         
         # [v1.6.16] Handle manually drawn lines (from Line Viewshed tool)
         if hasattr(self, 'drawn_line_points') and self.drawn_line_points and len(self.drawn_line_points) >= 2:
@@ -3067,6 +3484,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     pt = line_geom.interpolate(frac * length)
                     if pt and not pt.isEmpty():
                         points.append((pt.asPoint(), canvas_crs))
+                        weights.append(1.0)
         
         # 2. Add points from layer if selected
         if self.radioFromLayer.isChecked():
@@ -3099,8 +3517,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         if geom.isMultipart():
                             for pt in geom.asMultiPoint():
                                 points.append((pt, obs_layer.crs()))
+                                weights.append(1.0)
                         else:
                             points.append((geom.asPoint(), obs_layer.crs()))
+                            weights.append(1.0)
                     
                     elif geom.type() == QgsWkbTypes.LineGeometry:
                         length = geom.length()
@@ -3109,6 +3529,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                             frac = i / num_pts if num_pts > 0 else 0
                             pt = geom.interpolate(frac * length).asPoint()
                             points.append((pt, obs_layer.crs()))
+                            weights.append(1.0)
                     
                     elif geom.type() == QgsWkbTypes.PolygonGeometry:
                         if want_cutout_input_polygon:
@@ -3137,6 +3558,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                                     frac = i / num_pts if num_pts > 0 else 0
                                     pt = ring_geom.interpolate(frac * length).asPoint()
                                     points.append((pt, obs_layer.crs()))
+                                    weights.append(1.0)
         
         if not points or len(points) < 1:
             push_message(self.iface, "오류", "관측점이 최소 1개 이상 필요합니다", level=2)
@@ -3173,6 +3595,11 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             elif res_msg == QMessageBox.Yes:
                 step = len(points) // MAX_POINTS
                 points = points[::step][:MAX_POINTS]
+                try:
+                    if weights and len(weights) == total_needed:
+                        weights = weights[::step][:MAX_POINTS]
+                except Exception:
+                    pass
                 self.iface.messageBar().pushMessage("알림", f"관측점이 {len(points)}개로 샘플링되었습니다.", level=1)
             else:
                 self.iface.messageBar().pushMessage("경고", f"{total_needed}개 전체 점에 대해 분석을 시작합니다. 처리 중 QGIS가 응답하지 않을 수 있습니다.", level=1)
@@ -3294,10 +3721,24 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             # - Safety: for Line mode or too many points, fall back to Union unless count-only is requested
             is_line_mode = self.radioLineViewshed.isChecked()
             is_count_mode = hasattr(self, "chkCountOnly") and self.chkCountOnly.isChecked()
-            is_union_mode = (not is_count_mode) and (is_line_mode or len(points) > 20)
+            weighted_mode = bool(
+                hasattr(self, "chkWeightedCumulative") and self.chkWeightedCumulative.isChecked()
+            )
+            normalize_weighted = bool(
+                weighted_mode
+                and hasattr(self, "chkNormalizeWeighted")
+                and self.chkNormalizeWeighted.isChecked()
+            )
+            if weighted_mode:
+                is_count_mode = False
+            is_union_mode = (not is_count_mode) and (not weighted_mode) and (is_line_mode or len(points) > 20)
             
             if is_union_mode:
                 mode_str = "합집합(Union)"
+            elif weighted_mode and normalize_weighted:
+                mode_str = "가중 비율(0–100%)"
+            elif weighted_mode:
+                mode_str = "가중 누적(Weight)"
             elif is_count_mode:
                 mode_str = "누적 개수(Count)"
             else:
@@ -3313,7 +3754,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 max_dist=max_dist,
                 is_count_mode=is_count_mode,
                 grid_info=grid_info,
-                union_mode=is_union_mode
+                union_mode=is_union_mode,
+                weights=(weights if weighted_mode and weights and len(weights) == len(points) else None),
+                weighted_mode=weighted_mode,
+                normalize_weighted=normalize_weighted,
             )
             
             if not success or not os.path.exists(final_output):
@@ -3336,12 +3780,27 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             
             
             # Add result to map
-            layer_name = f"가시권_누적_{len(points)}개점"
+            if weighted_mode and normalize_weighted:
+                layer_name = f"가시권_가중비율_{len(points)}개점"
+            elif weighted_mode:
+                layer_name = f"가시권_가중누적_{len(points)}개점"
+            else:
+                layer_name = f"가시권_누적_{len(points)}개점"
             viewshed_layer = QgsRasterLayer(final_output, layer_name)
             
             if viewshed_layer.isValid():
                 # Apply result style
-                if is_union_mode:
+                if weighted_mode:
+                    try:
+                        max_w = float(sum(float(w) for w in (weights or []) if math.isfinite(float(w))))
+                    except Exception:
+                        max_w = float(len(points))
+                    self.apply_weighted_style(
+                        viewshed_layer,
+                        (100.0 if normalize_weighted else max_w),
+                        is_percent=normalize_weighted,
+                    )
+                elif is_union_mode:
                     self.apply_viewshed_style(viewshed_layer)
                 elif is_count_mode:
                     self.apply_count_style(viewshed_layer, len(points))
@@ -3350,10 +3809,20 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 
                 # [v1.5.80] Always create a numbered observer layer for cumulative analysis.
                 # This ensures Point 1, 2, 3... are clearly visible and match the legend V(1,2).
-                observer_layer = self.create_observer_layer("누적가시권_관측점", points)
+                observer_layer = self.create_observer_layer(
+                    "누적가시권_관측점",
+                    points,
+                    weights=(weights if weighted_mode and weights and len(weights) == len(points) else None),
+                )
                 
                 QgsProject.instance().addMapLayer(viewshed_layer)
                 self.last_result_layer_id = viewshed_layer.id()
+
+                # Optional AOI stats layer linked to this raster
+                try:
+                    self._add_aoi_stats_layer_for_raster(viewshed_layer, dem_layer)
+                except Exception:
+                    pass
                 
                 # [v1.6.18] Link observer layer for cleanup when viewshed layer is deleted
                 if observer_layer:
@@ -3470,6 +3939,72 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         layer.setRenderer(renderer)
         layer.setOpacity(0.7)
         layer.triggerRepaint()
+
+    def apply_weighted_style(self, layer, max_value, is_percent=False):
+        """Apply styling for weighted cumulative viewshed (sum or normalized percent)."""
+        try:
+            nodata_value = -9999
+            layer.dataProvider().setNoDataValue(1, nodata_value)
+
+            try:
+                vmax = float(max_value)
+            except Exception:
+                vmax = 1.0
+            if not math.isfinite(vmax) or vmax <= 0:
+                vmax = 1.0
+
+            not_visible_color = self.btnNotVisibleColor.color()
+            if not_visible_color.alpha() == 255:
+                not_visible_color.setAlpha(0)
+
+            shader = QgsRasterShader()
+            color_ramp = QgsColorRampShader()
+            color_ramp.setColorRampType(QgsColorRampShader.Interpolated)
+
+            def _lbl(v):
+                if is_percent:
+                    return f"{v:.0f}%"
+                if vmax >= 50:
+                    return f"{v:.0f}"
+                return f"{v:.2f}"
+
+            ticks = [0.0, vmax * 0.25, vmax * 0.5, vmax * 0.75, vmax]
+            uniq = []
+            for t in ticks:
+                t = float(t)
+                if not uniq or t > uniq[-1] + 1e-9:
+                    uniq.append(t)
+            ticks = uniq if len(uniq) >= 2 else [0.0, vmax]
+
+            colors = [
+                QgsColorRampShader.ColorRampItem(nodata_value, QColor(0, 0, 0, 0), "NoData"),
+                QgsColorRampShader.ColorRampItem(0.0, not_visible_color, "보이지 않음 (0)"),
+            ]
+            ramp_colors = [
+                QColor(255, 0, 0, 180),
+                QColor(255, 255, 0, 180),
+                QColor(0, 255, 255, 180),
+                QColor(0, 200, 0, 180),
+            ]
+            # Map colors across ticks (skip 0 which is already set)
+            for i, t in enumerate(ticks[1:], start=0):
+                c = ramp_colors[min(i, len(ramp_colors) - 1)]
+                colors.append(QgsColorRampShader.ColorRampItem(float(t), c, _lbl(t)))
+
+            color_ramp.setColorRampItemList(colors)
+            shader.setRasterShaderFunction(color_ramp)
+
+            renderer = QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+            try:
+                renderer.setClassificationMin(0.0)
+                renderer.setClassificationMax(float(vmax))
+            except Exception:
+                pass
+            layer.setRenderer(renderer)
+            layer.setOpacity(0.8)
+            layer.triggerRepaint()
+        except Exception as e:
+            log_message(f"Weighted style error: {e}", level=Qgis.Warning)
 
     def apply_visual_imbalance_style(self, layer):
         """Apply styling for visual imbalance raster (forward vs reverse mismatch)."""

@@ -169,6 +169,54 @@
         </item>
        </layout>
       </item>
+      <item>
+       <widget class="QWidget" name="widgetPointWeight">
+        <property name="visible">
+         <bool>false</bool>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_PointWeight">
+         <item>
+          <widget class="QLabel" name="lblPointWeight">
+           <property name="text">
+            <string>가중치:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QDoubleSpinBox" name="spinPointWeight">
+           <property name="decimals">
+            <number>2</number>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>0.100000000000000</double>
+           </property>
+           <property name="value">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="toolTip">
+            <string>다중 클릭 시, 이번에 추가하는 관측점에 적용되는 가중치입니다.</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="lblPointWeightHint">
+           <property name="text">
+            <string>(다중 선택에서만 사용)</string>
+           </property>
+           <property name="styleSheet">
+            <string>color: #666;</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
@@ -436,7 +484,7 @@
       </widget>
      </item>
      <item row="3" column="0" colspan="2">
-      <widget class="QCheckBox" name="chkCutoutInputPolygon">
+     <widget class="QCheckBox" name="chkCutoutInputPolygon">
        <property name="text">
         <string>입력 폴리곤 내부 비우기(NoData)</string>
        </property>
@@ -445,6 +493,41 @@
 체크 해제 시 폴리곤 내부도 누적 결과에 포함됩니다.</string>
        </property>
        <property name="checked">
+        <bool>false</bool>
+       </property>
+       <property name="visible">
+        <bool>false</bool>
+       </property>
+     </widget>
+     </item>
+     <item row="4" column="0" colspan="2">
+      <widget class="QCheckBox" name="chkWeightedCumulative">
+       <property name="text">
+        <string>가중 누적(Weight) 사용</string>
+       </property>
+       <property name="toolTip">
+        <string>관측점별 가중치를 합산하여 누적 가시권을 계산합니다. (기본=1.0)</string>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+       <property name="visible">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="0" colspan="2">
+      <widget class="QCheckBox" name="chkNormalizeWeighted">
+       <property name="text">
+        <string>가중치 표준화(0–100%)</string>
+       </property>
+       <property name="toolTip">
+        <string>누적값을 전체 가중치 합으로 나눠 백분율(0–100)로 표준화합니다.</string>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
+       </property>
+       <property name="enabled">
         <bool>false</bool>
        </property>
        <property name="visible">
@@ -469,6 +552,66 @@
      <property name="visible">
       <bool>false</bool>
      </property>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="QGroupBox" name="groupAoiStats">
+     <property name="title">
+      <string>6. AOI 통계 (선택)</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_AoiStats">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkAoiStats">
+        <property name="text">
+         <string>AOI 기준 가시 면적/비율 통계 생성</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="lblAoiStatsLayer">
+        <property name="text">
+         <string>AOI 폴리곤:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QgsMapLayerComboBox" name="cmbAoiStatsLayer">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="chkAoiStatsSelectedOnly">
+        <property name="text">
+         <string>선택 피처만</string>
+        </property>
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QLabel" name="lblAoiStatsHint">
+        <property name="text">
+         <string>※ 결과는 ‘AOI_가시통계’ 레이어로 추가됩니다.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+        <property name="styleSheet">
+         <string>color: #666; font-style: italic;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
 
