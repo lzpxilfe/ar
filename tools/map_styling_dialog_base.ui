@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>600</width>
-    <height>750</height>
+    <height>860</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -148,7 +148,7 @@
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="groupDemStyle">
+   <widget class="QGroupBox" name="groupDemStyle">
      <property name="title">
       <string>3. 배경 지형 (DEM) 시각화</string>
      </property>
@@ -163,6 +163,78 @@
       <item>
        <widget class="QgsMapLayerComboBox" name="cmbDemLayer">
         <property name="enabled">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupPresetExport">
+     <property name="title">
+      <string>4. 프리셋/내보내기</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_PresetExport">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_CodeConfig">
+        <item>
+         <widget class="QLabel" name="label_CodeConfig">
+          <property name="text">
+           <string>DXF 코드 매핑(JSON):</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lblCodeConfigPath">
+          <property name="text">
+           <string>(자동)</string>
+          </property>
+          <property name="textInteractionFlags">
+           <set>Qt::TextSelectableByKeyboard|Qt::TextSelectableByMouse</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_CodeButtons">
+        <item>
+         <widget class="QPushButton" name="btnOpenCodeConfig">
+          <property name="text">
+           <string>매핑 파일 열기</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnReloadCodeConfig">
+          <property name="text">
+           <string>다시 불러오기</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_4">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnExportPreset">
+        <property name="text">
+         <string>📦 QML/프리셋 내보내기...</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="lblPresetHint">
+        <property name="text">
+         <string>선택한 스타일(도로/하천/건물) QML과 현재 DXF 코드 매핑 JSON을 폴더로 저장합니다. (DEM 스타일은 DEM 선택+체크 시 함께 저장)</string>
+        </property>
+        <property name="wordWrap">
          <bool>true</bool>
         </property>
        </widget>

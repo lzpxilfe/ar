@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "roads": {
+    "name": "Style: 도로",
+    "color": "#ff9501",
+    "rules": [
+      { "code": "A0023211", "width_mm": 1.2, "label": "고속국도" },
+      { "code": "A0023212", "width_mm": 1.0, "label": "일반국도" },
+      { "code": "A0023213", "width_mm": 0.8, "label": "지방도" },
+      { "code": "A0023214", "width_mm": 0.7, "label": "시/군도" },
+      { "code": "A0023215", "width_mm": 0.5, "label": "면도" },
+      { "code": "A0023216", "width_mm": 0.4, "label": "소로" },
+      { "code": "A0023217", "width_mm": 0.3, "label": "도보/길" },
+      { "code": "A0023210", "width_mm": 0.4, "label": "기타도로" }
+    ]
+  },
+  "rivers": {
+    "name": "Style: 하천",
+    "color": "#1ea1ff",
+    "rules": [
+      { "code": "E0022110", "width_mm": 1.0, "label": "하천" },
+      { "code": "E0022115", "width_mm": 0.4, "label": "수로" },
+      { "code": "E0022112", "width_mm": 0.7, "label": "소하천" },
+      { "code": "E0022113", "width_mm": 0.3, "label": "세천" }
+    ]
+  },
+  "buildings": {
+    "name": "Style: 건물",
+    "codes": ["B0014110", "B0014111", "B0014112", "B0014113", "B0014115"],
+    "fill_color": "#ffffff",
+    "outline_color": "#666666",
+    "outline_width_mm": 0.1,
+    "shadow_alpha": 100
+  }
+}

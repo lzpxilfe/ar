@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 분석 툴킷 (Viewshed/LOS/Cost/LCP/Network/DEM/Contours/Profile/Terrain/Styling/GeoChem)
-version=1.6.127
+version=1.6.128
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -30,7 +30,7 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
     <li><b>비용표면/최소비용경로</b>: DEM 경사 기반 이동 시간/에너지 모델 + LCP + 회랑(Least-cost corridor) + 마찰 레이어(래스터/벡터) + 등시간선/등에너지선(옵션)
     <li><b>최소비용 네트워크</b>: 유적 간 LCP 기반 MST/k-NN/Hub 네트워크 + (옵션) 중심성 지표
     <li><b>근접/가시성 네트워크</b>: 근접성(PPA) 그래프 + DEM 기반 상호가시성(Visibility) 그래프
-    <li><b>도면 시각화</b>: 한국 수치지형도(DXF) 레이어 분류/집계 + 카토그래피 스타일 + DEM 배경(옵션)
+    <li><b>도면 시각화</b>: 한국 수치지형도(DXF) 레이어 분류/집계 + 카토그래피 스타일 + QML/프리셋 내보내기 + 코드 매핑(JSON) 커스터마이즈 + DEM 배경(옵션)
     <li><b>지구화학도 수치화</b>: WMS RGB → 범례 기반 value/class 래스터 + (옵션) 구간 폴리곤/중심점
   </ul>
   대부분의 도구는 실행 중 <b>실시간 작업 로그</b> 창을 통해 진행 상황을 확인할 수 있습니다.
@@ -48,7 +48,8 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.6.127 - Terrain profile: 경사/누적상승/구간 통계 + CSV/이미지(PNG) export 강화
+changelog=1.6.128 - Map styling: QML/프리셋 내보내기 + DXF 코드 매핑 JSON 외부화
+  1.6.127 - Terrain profile: 경사/누적상승/구간 통계 + CSV/이미지(PNG) export 강화
   1.6.126 - Viewshed: AOI 가시 통계(가시면적/가시비율) + 가중 누적/표준화(0–100%) 추가
   1.6.125 - Cost/LCP: Least-cost corridor(회랑) + 추가 마찰 입력(래스터/벡터) 추가
   1.6.124 - GeoChem: 사용자 프리셋(CSV/이미지 샘플링) + 구역 통계(Zonal stats) 추가
