@@ -7,6 +7,19 @@
 - QGIS 실행 후 `플러그인 관리`에서 ArchToolkit **활성화**
 - 도구 아이콘/메뉴가 정상 표시되는지 확인
 
+## 0.5) 복귀 포인트: `viridian-city` (두 번째 고향)
+
+큰 변경을 하다 “뻑났다/회귀 같다” 싶으면, 일단 `viridian-city`로 돌아가서 기준점이 정상인지부터 확인합니다.
+
+```bash
+# 안전(권장): 복귀 브랜치를 새로 만들고 들어가기
+git switch -c restore/viridian-city viridian-city
+
+# 강제(주의): 현재 작업을 버리고 완전 복귀
+git reset --hard viridian-city
+git clean -fd
+```
+
 ## 1) 로딩/해제(가장 중요)
 
 - 플러그인 아이콘 메뉴가 **사라지지 않고** 정상 표시
