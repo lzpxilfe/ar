@@ -61,6 +61,25 @@ ArchToolkit은 한국의 고고학 연구 환경에 최적화된 다양한 분�
 - 개발 원칙(외부 의존성 최소화): `DEVELOPMENT.md`
 - 안정성/스모크 테스트: `STABILITY.md`, `SMOKE_TEST.md`
 
+## 개발자용: Git/GitHub 연동 팁
+
+- 이 저장소는 안정 브랜치(`main`)와 작업 브랜치(`work/*`)를 분리해서 운영하는 것을 권장합니다. (자세한 내용: `STABILITY.md`)
+- GitHub에서 “변경이 안 보인다”면 **브랜치가 `main`인지 `work/*`인지** 먼저 확인하세요.
+- 내 GitHub 계정의 `ar` 저장소로 푸시하려면, 원격(remote)이 내 저장소를 가리키도록 설정해야 합니다. 예:
+  - 포크/업스트림 방식(권장): `origin`=내 저장소, `upstream`=원본 저장소
+  - 단순 추가 방식: `my` 같은 이름으로 내 저장소 remote를 추가하고 해당 remote로 `git push`
+
+```bash
+# 현재 연결/브랜치 확인
+git remote -v
+git branch -vv
+
+# (예시) 내 저장소로 푸시하기: my remote 추가
+git remote add my https://github.com/<YOUR_GITHUB_ID>/ar.git
+git push -u my work/geochem
+git push my --tags
+```
+
 ## 라이선스
 
 이 프로젝트는 **GNU GPL v3** 라이선스를 따릅니다. 
