@@ -595,6 +595,9 @@ class ProfileChartWidget(QWidget):
         self.zoom_level = old_zoom
         self.pan_offset = old_pan
         
+        ext = os.path.splitext(str(path or ""))[1].lower()
+        if ext == ".png":
+            return image.save(path, "PNG")
         return image.save(path, "JPG", 95)
 
 
@@ -683,6 +686,32 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             grid_extra.addWidget(self.cmbAoiLayer, 2, 1, 1, 2)
             grid_extra.addWidget(self.chkShowAoiOnProfile, 3, 0, 1, 3)
 
+            self.chkSegmentStats = QtWidgets.QCheckBox("구간 통계(경사/누적상승) 계산", self.grpExtra)
+            self.chkSegmentStats.setChecked(True)
+            self.chkSegmentStats.setToolTip(
+                "단면 프로파일에서 다음 통계를 계산합니다.\n"
+                "- 구간별 평균 경사(예: 0–200m)\n"
+                "- 누적 상승/하강\n"
+                "CSV 저장 시 구간 요약표도 함께 저장됩니다."
+            )
+
+            self.spinSegmentLength = QtWidgets.QDoubleSpinBox(self.grpExtra)
+            self.spinSegmentLength.setDecimals(0)
+            self.spinSegmentLength.setMinimum(0.0)
+            self.spinSegmentLength.setMaximum(1_000_000.0)
+            self.spinSegmentLength.setSingleStep(50.0)
+            self.spinSegmentLength.setValue(200.0)
+            self.spinSegmentLength.setSuffix(" m")
+            self.spinSegmentLength.setToolTip(
+                "구간 통계에 사용할 거리 간격(m).\n"
+                "예: 200m -> 0–200m, 200–400m ... 구간별 평균 경사.\n"
+                "0이면 구간 통계를 계산하지 않습니다."
+            )
+
+            grid_extra.addWidget(QtWidgets.QLabel("구간 길이"), 4, 0)
+            grid_extra.addWidget(self.spinSegmentLength, 4, 1)
+            grid_extra.addWidget(self.chkSegmentStats, 4, 2)
+
             help_lbl = QtWidgets.QLabel(
                 "TIP: value 비교용으로 같은 길이 단면을 만들거나,\n"
                 "AOI 단면이라면 그래프에서 AOI 구간(배경 음영)을 확인할 수 있습니다.",
@@ -690,7 +719,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             )
             help_lbl.setWordWrap(True)
             help_lbl.setStyleSheet("color:#555;")
-            grid_extra.addWidget(help_lbl, 4, 0, 1, 3)
+            grid_extra.addWidget(help_lbl, 5, 0, 1, 3)
 
             try:
                 idx = int(self.verticalLayout.indexOf(self.groupProfile))
@@ -705,6 +734,11 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnUseLastLength.clicked.connect(self._use_last_length)
             self.chkShowAoiOnProfile.toggled.connect(self._refresh_aoi_highlight)
             self.cmbAoiLayer.layerChanged.connect(self._refresh_aoi_highlight)
+            try:
+                self.chkSegmentStats.toggled.connect(self.update_stats)
+                self.spinSegmentLength.valueChanged.connect(self.update_stats)
+            except Exception:
+                pass
         except Exception:
             self.grpExtra = None
             self.chkFixedLength = None
@@ -712,6 +746,8 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnUseLastLength = None
             self.cmbAoiLayer = None
             self.chkShowAoiOnProfile = None
+            self.chkSegmentStats = None
+            self.spinSegmentLength = None
 
         # Optional: show a selected vector layer on the profile chart (intersection/inside).
         try:
@@ -2303,13 +2339,72 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
     def update_stats(self):
         if not self.profile_data: return
         
-        elevs = [p['elevation'] for p in self.profile_data]
-        total_d = self.profile_data[-1]['distance']
+        elevs = [float(p['elevation']) for p in self.profile_data]
+        dists = [float(p['distance']) for p in self.profile_data]
+        total_d = float(dists[-1]) if dists else 0.0
         min_e = min(elevs)
         max_e = max(elevs)
-        
-        stats = (f"총 거리: {total_d:.1f}m | 고도 범위: {min_e:.1f}m ~ {max_e:.1f}m "
-                 f"(차: {max_e-min_e:.1f}m)")
+
+        # Derived metrics: slope (%), cumulative ascent/descent
+        ascent = 0.0
+        descent = 0.0
+        max_abs_slope = 0.0
+        for i in range(1, len(dists)):
+            dd = float(dists[i]) - float(dists[i - 1])
+            dz = float(elevs[i]) - float(elevs[i - 1])
+            if dz > 0:
+                ascent += dz
+            else:
+                descent += -dz
+            if dd > 1e-9:
+                s = abs(dz / dd) * 100.0
+                if s > max_abs_slope:
+                    max_abs_slope = s
+
+        mean_abs_slope = ((ascent + descent) / total_d * 100.0) if total_d > 1e-9 else 0.0
+
+        stats = (
+            f"총 거리: {total_d:.1f}m | 고도 범위: {min_e:.1f}m ~ {max_e:.1f}m (차: {max_e-min_e:.1f}m)"
+            f" | 누적상승: {ascent:.1f}m | 누적하강: {descent:.1f}m"
+            f" | 평균경사(|%|): {mean_abs_slope:.1f}% | 최대경사(|%|): {max_abs_slope:.1f}%"
+        )
+
+        # Segment stats (example: 0–200m 평균경사)
+        try:
+            seg_len = float(self.spinSegmentLength.value()) if getattr(self, "spinSegmentLength", None) is not None else 0.0
+            seg_enabled = bool(self.chkSegmentStats is not None and self.chkSegmentStats.isChecked())
+        except Exception:
+            seg_len = 0.0
+            seg_enabled = False
+
+        if seg_enabled and seg_len > 0 and total_d > 0 and len(dists) >= 2:
+            try:
+                seg0_end = min(total_d, seg_len)
+                # Distance-weighted mean absolute slope for the first segment
+                abs_dz_sum = 0.0
+                run_sum = 0.0
+                for i in range(1, len(dists)):
+                    a = float(dists[i - 1])
+                    b = float(dists[i])
+                    if b <= 0 or a >= seg0_end:
+                        continue
+                    overlap_start = max(0.0, a)
+                    overlap_end = min(seg0_end, b)
+                    overlap = overlap_end - overlap_start
+                    if overlap <= 0:
+                        continue
+                    dd = b - a
+                    if dd <= 1e-9:
+                        continue
+                    dz = float(elevs[i]) - float(elevs[i - 1])
+                    frac = overlap / dd
+                    abs_dz_sum += abs(dz * frac)
+                    run_sum += overlap
+                seg0_mean_abs_slope = (abs_dz_sum / run_sum * 100.0) if run_sum > 1e-9 else 0.0
+                stats += f" | 0–{seg0_end:.0f}m 평균경사: {seg0_mean_abs_slope:.1f}%"
+            except Exception:
+                pass
+
         try:
             inside = float(self._last_aoi_inside_m) if self._last_aoi_inside_m is not None else None
             if inside is not None and math.isfinite(inside) and inside > 0:
@@ -2329,14 +2424,151 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             with open(path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Distance(m)', 'Elevation(m)', 'X', 'Y'])
-                for p in self.profile_data:
-                    writer.writerow([
-                        round(p['distance'], 3), 
-                        round(p['elevation'], 3), 
-                        round(p['x'], 6), 
-                        round(p['y'], 6)
-                    ])
+                elevs = [float(p["elevation"]) for p in self.profile_data]
+                dists = [float(p["distance"]) for p in self.profile_data]
+
+                slopes = [0.0]
+                cum_up = [0.0]
+                cum_dn = [0.0]
+                for i in range(1, len(dists)):
+                    dd = float(dists[i]) - float(dists[i - 1])
+                    dz = float(elevs[i]) - float(elevs[i - 1])
+                    slopes.append((dz / dd * 100.0) if dd > 1e-9 else 0.0)
+                    cum_up.append(cum_up[-1] + (dz if dz > 0 else 0.0))
+                    cum_dn.append(cum_dn[-1] + ((-dz) if dz < 0 else 0.0))
+
+                total_d = float(dists[-1]) if dists else 0.0
+                min_e = float(min(elevs)) if elevs else 0.0
+                max_e = float(max(elevs)) if elevs else 0.0
+                ascent = float(cum_up[-1]) if cum_up else 0.0
+                descent = float(cum_dn[-1]) if cum_dn else 0.0
+
+                # Segment settings
+                try:
+                    seg_len = float(self.spinSegmentLength.value()) if getattr(self, "spinSegmentLength", None) is not None else 0.0
+                    seg_enabled = bool(self.chkSegmentStats is not None and self.chkSegmentStats.isChecked())
+                except Exception:
+                    seg_len = 0.0
+                    seg_enabled = False
+                seg_len = seg_len if seg_enabled else 0.0
+
+                seg_idx = []
+                if seg_len > 0:
+                    for d in dists:
+                        try:
+                            seg_idx.append(int(float(d) // float(seg_len)))
+                        except Exception:
+                            seg_idx.append(0)
+                else:
+                    seg_idx = [0 for _ in dists]
+
+                # Summary block (key/value rows)
+                writer.writerow(["metric", "value"])
+                writer.writerow(["total_distance_m", round(total_d, 3)])
+                writer.writerow(["min_elev_m", round(min_e, 3)])
+                writer.writerow(["max_elev_m", round(max_e, 3)])
+                writer.writerow(["elev_range_m", round(max_e - min_e, 3)])
+                writer.writerow(["total_ascent_m", round(ascent, 3)])
+                writer.writerow(["total_descent_m", round(descent, 3)])
+                if seg_len > 0:
+                    writer.writerow(["segment_length_m", round(seg_len, 3)])
+                try:
+                    inside = float(self._last_aoi_inside_m) if self._last_aoi_inside_m is not None else None
+                    if inside is not None and math.isfinite(inside) and inside > 0:
+                        writer.writerow(["aoi_inside_m", round(float(inside), 3)])
+                except Exception:
+                    pass
+
+                writer.writerow([])
+
+                # Per-sample table
+                writer.writerow(
+                    [
+                        "Distance(m)",
+                        "Elevation(m)",
+                        "Slope(%)",
+                        "CumAscent(m)",
+                        "CumDescent(m)",
+                        "Segment",
+                        "X",
+                        "Y",
+                    ]
+                )
+                for i, p in enumerate(self.profile_data):
+                    writer.writerow(
+                        [
+                            round(dists[i], 3),
+                            round(elevs[i], 3),
+                            round(slopes[i], 3),
+                            round(cum_up[i], 3),
+                            round(cum_dn[i], 3),
+                            int(seg_idx[i]),
+                            round(float(p["x"]), 6),
+                            round(float(p["y"]), 6),
+                        ]
+                    )
+
+                # Segment summary table
+                if seg_len > 0 and len(dists) >= 2 and total_d > 0:
+                    writer.writerow([])
+                    writer.writerow(
+                        [
+                            "SegStart(m)",
+                            "SegEnd(m)",
+                            "Run(m)",
+                            "NetSlope(%)",
+                            "MeanAbsSlope(%)",
+                            "Ascent(m)",
+                            "Descent(m)",
+                        ]
+                    )
+                    nseg = int(math.ceil(total_d / seg_len))
+                    for sidx in range(nseg):
+                        s0 = float(sidx) * float(seg_len)
+                        s1 = min(total_d, float(sidx + 1) * float(seg_len))
+                        run = float(s1 - s0)
+                        if run <= 1e-9:
+                            continue
+                        net_dz = 0.0
+                        abs_dz = 0.0
+                        seg_up = 0.0
+                        seg_dn = 0.0
+                        for i in range(1, len(dists)):
+                            a = float(dists[i - 1])
+                            b = float(dists[i])
+                            if b <= s0 or a >= s1:
+                                continue
+                            overlap_start = max(s0, a)
+                            overlap_end = min(s1, b)
+                            overlap = overlap_end - overlap_start
+                            if overlap <= 0:
+                                continue
+                            dd = b - a
+                            if dd <= 1e-9:
+                                continue
+                            dz = float(elevs[i]) - float(elevs[i - 1])
+                            frac = overlap / dd
+                            dz_seg = dz * frac
+                            net_dz += dz_seg
+                            abs_dz += abs(dz_seg)
+                            if dz_seg > 0:
+                                seg_up += dz_seg
+                            else:
+                                seg_dn += -dz_seg
+
+                        net_slope = net_dz / run * 100.0
+                        mean_abs_slope = abs_dz / run * 100.0
+                        writer.writerow(
+                            [
+                                round(s0, 3),
+                                round(s1, 3),
+                                round(run, 3),
+                                round(net_slope, 3),
+                                round(mean_abs_slope, 3),
+                                round(seg_up, 3),
+                                round(seg_dn, 3),
+                            ]
+                        )
             self.iface.messageBar().pushMessage("저장 완료", f"파일: {path}", level=0)
         except Exception as e:
             QMessageBox.critical(self, "오류", f"파일 저장 실패: {str(e)}")
@@ -2344,10 +2576,21 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
     def export_image(self):
         if not self.profile_data: return
         
-        path, _ = QFileDialog.getSaveFileName(
-            self, "이미지 저장", os.path.expanduser("~"), "JPEG Files (*.jpg)"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "이미지 저장",
+            os.path.expanduser("~"),
+            "PNG Files (*.png);;JPEG Files (*.jpg)",
         )
         if not path: return
+        try:
+            if not os.path.splitext(path)[1]:
+                if selected_filter and "PNG" in selected_filter:
+                    path += ".png"
+                else:
+                    path += ".jpg"
+        except Exception:
+            pass
         
         try:
             success = self.chart.save_to_image(path)
