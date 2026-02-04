@@ -69,9 +69,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self._reverse_target_fid = None
         self.last_result_layer_id = None
         self.result_marker_map = {} # layer_id -> [markers]
-        self.result_annotation_map = {} # layer_id -> [annotations] [v1.6.02]
-        self.result_observer_layer_map = {} # [v1.6.18] viewshed_layer_id -> observer_layer_id
-        self.result_aux_layer_map = {}  # [v1.6.49] raster_layer_id -> [aux_layer_ids]
+        self.result_annotation_map = {} # layer_id -> [annotations]
+        self.result_observer_layer_map = {} # viewshed_layer_id -> observer_layer_id
+        self.result_aux_layer_map = {}  # raster_layer_id -> [aux_layer_ids]
         self.label_layer = None # Core reference to prevent GC issues
         self._los_profile_data = {}  # viscode_layer_id -> profile payload
         self._los_profile_dialogs = {}  # viscode_layer_id -> dialog instance
@@ -156,7 +156,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if hasattr(self, 'btnVisibleColor'):
             self.btnVisibleColor.setColor(QColor(0, 200, 0, 180))  # Semi-transparent green
         
-        # [v1.5.95] Initialize scientific context and Higuchi signals
+        # Initialize scientific context and Higuchi signals
         if hasattr(self, 'chkHiguchi'):
             self.chkHiguchi.toggled.connect(self.on_higuchi_toggled)
         
@@ -177,7 +177,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 "※ 굴절은 곡률과 함께 의미가 있어, 일반적으로 곡률 보정과 같이 사용합니다."
             )
         
-        # [v1.6.0] Add Refraction UI programmatically since we can't edit .ui easily
+        # Add Refraction UI programmatically since we can't edit .ui easily
         # Insert a spinbox next to the refraction checkbox if possible, or in a new layout
         self.spinRefraction = QtWidgets.QDoubleSpinBox(self)
         self.spinRefraction.setRange(0.0, 1.0)
@@ -192,7 +192,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         )
         self.spinRefraction.setEnabled(self.chkRefraction.isChecked())
         
-        # [v1.5.96] Correctly inject Refraction UI into QGridLayout
+        # Correctly inject Refraction UI into QGridLayout
         if hasattr(self, 'gridLayout_2'):
             layout = self.gridLayout_2
             # Move chkRefraction to col 0 (original was colspan 2)
@@ -212,7 +212,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnScienceHelp.setToolTip("곡률/굴절(대기굴절) 보정 설명 보기")
             layout.addWidget(self.btnScienceHelp, 6, 1)
             
-        # [v1.6.19] Connect signal for automatic cleanup (Line 88 already uses layersWillBeRemoved)
+        # Connect signal for automatic cleanup (Line 88 already uses layersWillBeRemoved)
         # Consolidating to line 88 for redundancy reduction.
             
         self.chkRefraction.toggled.connect(self.spinRefraction.setEnabled)
@@ -231,7 +231,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if hasattr(self, "spinTargetHeight"):
             self.spinTargetHeight.valueChanged.connect(self._update_curvature_refraction_help)
         
-        # [v1.5.90] Code-level UI overrides for terminology and defaults
+        # Code-level UI overrides for terminology and defaults
         self.radioLineViewshed.setText("선형 및 둘레 가시권 (Line/Perimeter)")
         self.radioLineViewshed.setToolTip("선형 경로(도로, 해안선)나 성곽 둘레(Perimeter)를 따라 이동하며 보이는 영역을 분석합니다.")
 
@@ -246,12 +246,12 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         if hasattr(self, "spinMaxPoints"):
             self.spinMaxPoints.setValue(50)
 
-        # [v1.6.1] Fix Maximum Distance limit to allow > 2500m
+        # Fix Maximum Distance limit to allow > 2500m
         if hasattr(self, "spinMaxDistance"):
             self.spinMaxDistance.setMaximum(999999) # Allow large analysis radius
             # Set default if needed, but respect UI default usually
         
-        # [v1.6.1] Safer Refraction Widget Insertion
+        # Safer Refraction Widget Insertion
         # If previous insertion failed (no parent layout found), try finding thegroupBox
         if self.spinRefraction.parent() == self:
              # It means it's just floating on the dialog, which might be invisible or wrongly placed
@@ -537,7 +537,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             log_message(f"Canvas labeling error: {e}", level=Qgis.Warning)
             return None
     
-    # [v1.6.17] _get_or_create_label_layer REMOVED - deprecated, was returning None
+    # _get_or_create_label_layer REMOVED - deprecated, was returning None
 
 
     
@@ -845,7 +845,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         log_message(f"Marker cleanup error: {e}", level=Qgis.Warning)
                 del self.result_marker_map[lid]
                 
-            # 2. Clean up Text Annotations (Labels) [v1.6.02]
+            # 2. Clean up Text Annotations (Labels)
             if lid in self.result_annotation_map:
                 annotations = self.result_annotation_map[lid]
                 for item in annotations:
@@ -856,7 +856,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                         log_message(f"Annotation cleanup error: {e}", level=Qgis.Warning)
                 del self.result_annotation_map[lid]
             
-            # 3. [v1.6.18] Clean up linked Observer Layer (red points layer)
+            # 3. Clean up linked Observer Layer (red points layer)
             if lid in self.result_observer_layer_map:
                 obs_layer_id = self.result_observer_layer_map[lid]
                 try:
@@ -1118,7 +1118,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 self.canvas.setMapTool(self.original_tool)
             self.show()
     
-    # [v1.6.21] transform_to_dem_crs REMOVED - deprecated
+    # transform_to_dem_crs REMOVED - deprecated
     
     def set_line_from_tool(self, points, is_closed=False):
         """Handle a user-drawn line/polygon from the map tool."""
@@ -1166,7 +1166,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.is_line_closed = is_closed
         self.observer_point = points[0]
 
-        # [v1.5.85] Maintain vertex visibility on the map
+        # Maintain vertex visibility on the map
         self.point_marker.reset(QgsWkbTypes.LineGeometry)
         for pt in points:
             self.point_marker.addPoint(pt)
@@ -1220,7 +1220,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         self.iface.messageBar().pushMessage("처리 중", "가시권 분석 실행 중...", level=0)
         
-        # [v1.5.97] REMOVED global self.hide() from here. 
+        # REMOVED global self.hide() from here.
         # It is now moved into each specialized run_* method to avoid freezes during warnings.
         
         try:
@@ -1230,7 +1230,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     max_distance, curvature, refraction, refraction_coeff
                 )
             elif self.radioLineViewshed.isChecked():
-                # [v1.6.13] Line Viewshed now uses run_multi_viewshed for proper union logic
+                # Line Viewshed now uses run_multi_viewshed for proper union logic
                 self.run_multi_viewshed(
                     dem_layer, observer_height, target_height,
                     max_distance, curvature, refraction, refraction_coeff
@@ -1794,7 +1794,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
             
-        # [v1.5.97] Hide dialog only when processing starts
+        # Hide dialog only when processing starts
         self.hide()
         QtWidgets.QApplication.processEvents()
 
@@ -2086,7 +2086,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             ds_f = None
             ds_r = None
     
-    # [v1.6.17] run_line_viewshed REMOVED - Line Viewshed now uses run_multi_viewshed
+    # run_line_viewshed REMOVED - Line Viewshed now uses run_multi_viewshed
 
     def _ask_reverse_polygon_target_mode(self, allow_boundary=True):
         """Ask how to interpret polygon targets for reverse viewshed.
@@ -2533,7 +2533,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             )
             return
 
-        # [v1.5.97] Hide dialog only when processing starts
+        # Hide dialog only when processing starts
         self.hide()
         QtWidgets.QApplication.processEvents()
 
@@ -3360,7 +3360,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 vs_nodata = vs_band.GetNoDataValue()
                 vs_data = vs_band.ReadAsArray().astype(np.float32)
                 
-                # [v1.6.12] Simplified Merging (Aligning is already handled by gdal:warpreproject)
+                # Simplified Merging (Aligning is already handled by gdal:warpreproject)
                 v_h, v_w = vs_data.shape
                 h_overlap = min(target_height, v_h)
                 w_overlap = min(target_width, v_w)
@@ -3381,7 +3381,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     else:
                         val_to_add = 1 if is_count_mode else (2 ** min(pt_idx, 30))
                 
-                # [v1.6.14] Always calculate circular_mask for buffer-shape boundary
+                # Always calculate circular_mask for buffer-shape boundary
                 pt, pt_crs = observer_points[pt_idx]
                 pt_dem = self.transform_point(pt, pt_crs, dem_layer.crs())
                 c_col = (pt_dem.x() - target_xmin) / dem_xres
@@ -3414,7 +3414,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     pass
 
             # 5. Final NoData masking
-            # [v1.6.14] Apply circular buffer masking for ALL modes
+            # Apply circular buffer masking for ALL modes
             nodata_value = -9999
             cumulative[~circular_mask] = nodata_value
             
@@ -3468,7 +3468,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             points.append((self.observer_point, canvas_crs))
             weights.append(1.0)
         
-        # [v1.6.16] Handle manually drawn lines (from Line Viewshed tool)
+        # Handle manually drawn lines (from Line Viewshed tool)
         if hasattr(self, 'drawn_line_points') and self.drawn_line_points and len(self.drawn_line_points) >= 2:
             pts_for_geom = list(self.drawn_line_points)
             if getattr(self, 'is_line_closed', False):
@@ -3499,7 +3499,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     except Exception:
                         transform_to_dem = None
 
-                # [v1.6.02] Auto-hide labels to reduce clutter
+                # Auto-hide labels to reduce clutter
                 try:
                     obs_layer.setLabelsEnabled(False)
                 except Exception:
@@ -3565,9 +3565,9 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             restore_ui_focus(self)
             return
 
-        # [v1.5.85] Robust point management for cumulative analysis
+        # Robust point management for cumulative analysis
         total_needed = len(points)
-        # [v1.6.15] Use UI spinMaxPoints value, default 50
+        # Use UI spinMaxPoints value, default 50
         MAX_POINTS = 50
         if hasattr(self, 'spinMaxPoints'):
             MAX_POINTS = self.spinMaxPoints.value() 
@@ -3604,7 +3604,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             else:
                 self.iface.messageBar().pushMessage("경고", f"{total_needed}개 전체 점에 대해 분석을 시작합니다. 처리 중 QGIS가 응답하지 않을 수 있습니다.", level=1)
 
-        # [v1.5.97] Hide dialog ONLY after all warnings and user decisions
+        # Hide dialog ONLY after all warnings and user decisions
         self.hide()
         QtWidgets.QApplication.processEvents()
 
@@ -3615,7 +3615,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         progress.setWindowModality(QtCore.Qt.WindowModal)
         progress.show()
         QtWidgets.QApplication.processEvents() # Ensure visibility
-        # [v1.5.65] Smart Analysis Extent Optimization
+        # Smart Analysis Extent Optimization
         total_obs_ext = QgsRectangle()
         total_obs_ext.setMinimal()
         for pt, p_crs in points:
@@ -3629,7 +3629,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         final_ext = smart_ext.intersect(dem_layer.extent())
         if final_ext.isEmpty(): final_ext = dem_layer.extent()
 
-        # [v1.5.75] Unified Grid Snapping - Calculate ONCE for both Warp and NumPy
+        # Unified Grid Snapping - Calculate ONCE for both Warp and NumPy
         res = dem_layer.rasterUnitsPerPixelX()
         dem_ext = dem_layer.extent()
         
@@ -3679,7 +3679,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     temp_outputs.append(output_raw)
                     full_vs = os.path.join(tempfile.gettempdir(), f'archt_fullvs_{i}_{uuid.uuid4().hex[:8]}.tif')
                     try:
-                        # [v1.6.11] ENSURE PERFECT ALIGNMENT: Warp each result to the combined target extent.
+                        # ENSURE PERFECT ALIGNMENT: Warp each result to the combined target extent.
                         processing.run("gdal:warpreproject", {
                             'INPUT': output_raw, 
                             'TARGET_EXTENT': target_rect, 
@@ -3711,7 +3711,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         final_output = os.path.join(tempfile.gettempdir(), f'archtoolkit_viewshed_cumulative_{uuid.uuid4().hex[:8]}.tif')
         
         try:
-            # [v1.5.68] Optimized Cumulative Viewshed Merge using NumPy
+            # Optimized Cumulative Viewshed Merge using NumPy
             progress.setLabelText("결과 통합 중 (NumPy)...")
             QtWidgets.QApplication.processEvents()
             
@@ -3807,7 +3807,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 else:
                     self.apply_cumulative_style(viewshed_layer, len(points))
                 
-                # [v1.5.80] Always create a numbered observer layer for cumulative analysis.
+                # Always create a numbered observer layer for cumulative analysis.
                 # This ensures Point 1, 2, 3... are clearly visible and match the legend V(1,2).
                 observer_layer = self.create_observer_layer(
                     "누적가시권_관측점",
@@ -3824,14 +3824,14 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 except Exception:
                     pass
                 
-                # [v1.6.18] Link observer layer for cleanup when viewshed layer is deleted
+                # Link observer layer for cleanup when viewshed layer is deleted
                 if observer_layer:
                     self.result_observer_layer_map[viewshed_layer.id()] = observer_layer.id()
                 
                 # Ensure label layer is on top
                 self.update_layer_order()
                 
-                # Link markers and annotations [v1.6.02]
+                # Link markers and annotations
                 current_annotations = list(self.point_labels)
                 self.link_current_marker_to_layer(viewshed_layer.id(), points, annotations=current_annotations)
                 self.point_labels = [] # Ownership transferred
@@ -4052,7 +4052,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             QgsColorRampShader.ColorRampItem(0, not_visible_color, "보이지 않음"),
         ]
         
-        # Custom discrete color mixing for v1.5.5
+        # Custom discrete color mixing (legacy)
         # Primary base colors for up to 8 observers
         base_colors = [
             QColor(255, 0, 0, 200),   # 1: Red
@@ -4464,7 +4464,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.result_marker_map[layer_id].append(result_marker)
         result_marker.show()
         
-        # [v1.6.02] Store text annotations
+        # Store text annotations
         if annotations:
             if layer_id not in self.result_annotation_map:
                 self.result_annotation_map[layer_id] = []

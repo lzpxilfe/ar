@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 분석 툴킷 (Viewshed/LOS/Cost/LCP/Network/DEM/Contours/Profile/Terrain/Styling/GeoChem)
-version=1.6.128
+version=1.0.0
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -48,26 +48,4 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.6.128 - Map styling: QML/프리셋 내보내기 + DXF 코드 매핑 JSON 외부화
-  1.6.127 - Terrain profile: 경사/누적상승/구간 통계 + CSV/이미지(PNG) export 강화
-  1.6.126 - Viewshed: AOI 가시 통계(가시면적/가시비율) + 가중 누적/표준화(0–100%) 추가
-  1.6.125 - Cost/LCP: Least-cost corridor(회랑) + 추가 마찰 입력(래스터/벡터) 추가
-  1.6.124 - GeoChem: 사용자 프리셋(CSV/이미지 샘플링) + 구역 통계(Zonal stats) 추가
-  1.6.123 - GeoChem: 임시폴더 정리(삭제) 안전장치(레이어 사용 중이면 스킵) + 문서/메타데이터 정리
-  1.6.110 - 지구화학도: 고농도 스냅 로직 개선(거리 비교 전 적용) + 구간 대표값/평균값 필드 추가
-  1.6.109 - 지구화학도: 구간별 폴리곤에 픽셀/면적 통계 필드 추가 + 디버그 로그 강화
-  1.6.104 - 지구화학도: WMS RGB → 범례 기반 수치화 → 구간별 폴리곤(Fe2O3 프리셋)
-  1.6.103 - 지형 단면: 다중 프로파일 저장 + 단면선 선택 시 자동 열기(색상 자동 분리)
-  1.6.102 - 네트워크: 최소비용 네트워크 ‘해석 가이드’ 버튼 추가(상세 설명은 별도 창)
-  1.6.101 - 네트워크: 최소비용 네트워크에 SNA 지표 옵션(degree/component/closeness/betweenness) 추가
-  1.6.100 - 안정성: 비용표면/최소비용 네트워크 취소 처리 개선(크래시 완화)
-  1.6.99 - 조사 지원: 지적도×조사지역 ‘중첩 면적표’(AOI 피처별 분리/한글 필드 표시/전용 아이콘)
-  1.6.96 - DEM 생성: 구/현행 수치지형도 프리셋 분리(혼동 방지)
-  1.6.90 - 실시간 작업 로그 창(분석 창 옆)
-  1.6.79 - 근접/가시성 네트워크(PPA/LOS) 도구 추가
-  1.6.70 - 경사도/사면방향 도면화(AOI)
-  1.6.65 - 최소비용 네트워크(MST/k-NN/Hub)
-  1.6.55 - 비용표면/최소비용경로(LCP) + 등시간선/직선 비교
-  (이전 변경사항은 Git 태그/커밋 로그 참고)
-  1.6.51 - 비용표면/최소비용경로 (Tobler/Naismith) 추가
-  1.6.50 - 역방향 불균등: 반경 링 레이어를 항상 상단 표시
+changelog=1.0.0 - 첫 공개 릴리즈 (Viewshed/LOS, Cost/LCP/Network, GeoChem, Terrain/Profile, DXF Styling 등 포함)

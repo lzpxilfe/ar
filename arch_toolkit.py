@@ -29,7 +29,7 @@ class ArchToolkit:
         self.menu_name = u'Archaeology Toolkit'
         self.toolbar = None
         self.main_action = None
-        self.viewshed_dlg = None # [v1.6.20] Persistent reference for marker cleanup
+        self.viewshed_dlg = None  # Persistent reference for marker cleanup
         self.cost_dlg = None  # Persistent reference for temp/preview cleanup
         self.profile_dlg = None  # Persistent reference for multi-profile selection/view
         self.geochem_dlg = None  # Optional: keep reference if we later add temp cleanup
@@ -397,13 +397,13 @@ class ArchToolkit:
 
     def run_viewshed_tool(self):
         try:
-            # [v1.6.20] Maintain persistent dialog instance so layersRemoved signal persists
+            # Maintain persistent dialog instance so layersRemoved signal persists
             if self.viewshed_dlg is None:
                 from .tools.viewshed_dialog import ViewshedDialog
                 self.viewshed_dlg = ViewshedDialog(self.iface)
             
             # Show the dialog. exec_() is modal and blocks until closed.
-            # In v1.7.0 we might switch to .show() for non-modal interaction.
+            # In a future version we might switch to .show() for non-modal interaction.
             self.viewshed_dlg.exec_()
         except Exception as e:
             log_exception("Viewshed tool error", e)
