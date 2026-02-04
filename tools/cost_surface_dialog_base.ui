@@ -744,6 +744,155 @@
        </widget>
       </item>
      </layout>
+   </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupExtras">
+     <property name="title">
+      <string>4. Extras (Friction / Corridor)</string>
+     </property>
+     <layout class="QGridLayout" name="gridLayout_Extras">
+      <item row="0" column="0">
+       <widget class="QCheckBox" name="chkUseFrictionRaster">
+        <property name="text">
+         <string>Use friction raster</string>
+        </property>
+        <property name="toolTip">
+         <string>Multiply movement costs by raster values (resampled to DEM window). NoData is treated as 1.</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QgsMapLayerComboBox" name="cmbFrictionRaster"/>
+      </item>
+      <item row="0" column="2">
+       <widget class="QLabel" name="lblFrictionRasterScale">
+        <property name="text">
+         <string>Scale</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="3">
+       <widget class="QDoubleSpinBox" name="spinFrictionRasterScale">
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QCheckBox" name="chkUseFrictionVector">
+        <property name="text">
+         <string>Use friction vector</string>
+        </property>
+        <property name="toolTip">
+         <string>Rasterizes the vector layer to the DEM grid (same CRS only), then multiplies costs by the multiplier where features exist.</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QgsMapLayerComboBox" name="cmbFrictionVector"/>
+      </item>
+      <item row="1" column="2">
+       <widget class="QLabel" name="lblFrictionVectorMult">
+        <property name="text">
+         <string>Multiplier</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="3">
+       <widget class="QDoubleSpinBox" name="spinFrictionVectorMult">
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="value">
+         <double>2.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QCheckBox" name="chkCreateCorridor">
+        <property name="text">
+         <string>Create least-cost corridor</string>
+        </property>
+        <property name="toolTip">
+         <string>Creates a corridor raster where cost(start→cell)+cost(end→cell) ≤ best_cost × (1 + threshold%). Uses time cost (or energy for Pandolf).</string>
+        </property>
+        <property name="checked">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="3">
+       <layout class="QHBoxLayout" name="horizontalLayout_Corridor">
+        <item>
+         <widget class="QLabel" name="lblCorridorPercent">
+          <property name="text">
+           <string>Threshold (%)</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="spinCorridorPercent">
+          <property name="decimals">
+           <number>1</number>
+          </property>
+          <property name="minimum">
+           <double>0.000000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>100.000000000000000</double>
+          </property>
+          <property name="singleStep">
+           <double>1.000000000000000</double>
+          </property>
+          <property name="value">
+           <double>5.000000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="chkCorridorPolygon">
+          <property name="text">
+           <string>Polygonize</string>
+          </property>
+          <property name="toolTip">
+           <string>Creates a corridor polygon layer (GeoPackage) from the corridor raster.</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>

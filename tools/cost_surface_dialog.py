@@ -31,6 +31,7 @@ from qgis.core import (
     QgsColorRampShader,
     QgsCategorizedSymbolRenderer,
     QgsFeature,
+    QgsFillSymbol,
     QgsField,
     QgsGeometry,
     QgsLineSymbol,
@@ -106,6 +107,9 @@ class CostTaskResult:
     lcp_time_s: Optional[float] = None
     isochrones_vector_path: Optional[str] = None
     isoenergy_vector_path: Optional[str] = None
+    corridor_raster_path: Optional[str] = None
+    corridor_vector_path: Optional[str] = None
+    corridor_percent: Optional[float] = None
 
 
 def _inv_geotransform(gt):
@@ -148,6 +152,157 @@ def _window_geotransform(gt, xoff, yoff):
         gt[4],
         gt[5],
     )
+
+
+def _split_qgis_source_path(source: str) -> str:
+    """Best-effort: strip QGIS URI options (e.g., `|layername=...`) for GDAL/OGR."""
+    s = (str(source or "")).strip()
+    if not s:
+        return ""
+    return (s.split("|", 1)[0] or "").strip()
+
+
+def _split_qgis_ogr_uri(source: str):
+    """
+    Parse common QGIS OGR-style source URIs like:
+    - path.gpkg|layername=name
+    - path.gpkg|layerid=0
+    Returns (dataset_path, layer_name, layer_id).
+    """
+    s = (str(source or "")).strip()
+    if not s:
+        return "", None, None
+    parts = s.split("|")
+    dataset_path = (parts[0] or "").strip()
+    layer_name = None
+    layer_id = None
+    for p in parts[1:]:
+        if "=" not in p:
+            continue
+        k, v = p.split("=", 1)
+        k = (k or "").strip().lower()
+        v = (v or "").strip()
+        if k == "layername" and v:
+            layer_name = v
+        elif k == "layerid":
+            try:
+                layer_id = int(v)
+            except Exception:
+                layer_id = None
+    return dataset_path, layer_name, layer_id
+
+
+def _window_bounds(win_gt, cols: int, rows: int):
+    """Return outputBounds=(minx, miny, maxx, maxy) for a window geotransform."""
+    c = int(cols)
+    r = int(rows)
+    pts = [
+        gdal.ApplyGeoTransform(win_gt, 0, 0),
+        gdal.ApplyGeoTransform(win_gt, c, 0),
+        gdal.ApplyGeoTransform(win_gt, 0, r),
+        gdal.ApplyGeoTransform(win_gt, c, r),
+    ]
+    xs = [float(x) for x, _y in pts]
+    ys = [float(y) for _x, y in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _resample_raster_to_window(raster_source: str, *, win_gt, win_proj_wkt: str, cols: int, rows: int):
+    """Resample the raster to the given window grid (returns float32 array with NaN for nodata)."""
+    path = _split_qgis_source_path(raster_source)
+    if not path:
+        return None
+    ds = gdal.Open(path, gdal.GA_ReadOnly)
+    if ds is None:
+        return None
+
+    minx, miny, maxx, maxy = _window_bounds(win_gt, cols, rows)
+    try:
+        warp_opts = gdal.WarpOptions(
+            format="MEM",
+            outputBounds=(minx, miny, maxx, maxy),
+            width=int(cols),
+            height=int(rows),
+            dstSRS=str(win_proj_wkt or ""),
+            resampleAlg="near",
+            multithread=False,
+            outputType=gdal.GDT_Float32,
+        )
+        out_ds = gdal.Warp("", ds, options=warp_opts)
+    except Exception:
+        out_ds = None
+    if out_ds is None:
+        return None
+
+    band = out_ds.GetRasterBand(1)
+    arr = band.ReadAsArray()
+    if arr is None:
+        return None
+
+    arr = arr.astype(np.float32, copy=False)
+    nodata = band.GetNoDataValue()
+    if nodata is not None:
+        try:
+            arr[arr == float(nodata)] = np.nan
+        except Exception:
+            pass
+    arr[~np.isfinite(arr)] = np.nan
+    return arr
+
+
+def _rasterize_vector_mask(vector_source: str, *, win_gt, win_proj_wkt: str, cols: int, rows: int):
+    """Rasterize a vector layer into a boolean mask for the given window grid."""
+    dataset_path, layer_name, layer_id = _split_qgis_ogr_uri(vector_source)
+    if not dataset_path:
+        return None
+    vds = ogr.Open(dataset_path)
+    if vds is None:
+        return None
+
+    layer = None
+    if layer_name:
+        try:
+            layer = vds.GetLayerByName(str(layer_name))
+        except Exception:
+            layer = None
+    if layer is None and layer_id is not None:
+        try:
+            layer = vds.GetLayer(int(layer_id))
+        except Exception:
+            layer = None
+    if layer is None:
+        try:
+            layer = vds.GetLayer(0)
+        except Exception:
+            layer = None
+    if layer is None:
+        return None
+
+    drv = gdal.GetDriverByName("MEM")
+    if drv is None:
+        return None
+    out_ds = drv.Create("", int(cols), int(rows), 1, gdal.GDT_Byte)
+    if out_ds is None:
+        return None
+    out_ds.SetGeoTransform(win_gt)
+    out_ds.SetProjection(str(win_proj_wkt or ""))
+    band = out_ds.GetRasterBand(1)
+    band.Fill(0)
+    band.SetNoDataValue(0)
+
+    try:
+        layer.ResetReading()
+    except Exception:
+        pass
+    try:
+        gdal.RasterizeLayer(out_ds, [1], layer, burn_values=[1], options=["ALL_TOUCHED=TRUE"])
+    except Exception:
+        return None
+
+    mask = band.ReadAsArray()
+    if mask is None:
+        return None
+    return (mask != 0)
 
 
 def _bilinear_elevation(dem, nodata_mask, inv_gt, x, y):
@@ -355,6 +510,67 @@ def _create_isoenergy_gpkg(energy_raster_path, output_gpkg_path, levels_kcal, no
         fixed_levels=levels_kcal,
         nodata_value=nodata_value,
     )
+
+
+def _create_corridor_gpkg(corridor_raster_path, output_gpkg_path):
+    """Polygonize a corridor mask raster (1=corridor, 0=outside) into a GeoPackage."""
+    if not corridor_raster_path or not os.path.exists(str(corridor_raster_path)):
+        return None
+    try:
+        ds = gdal.Open(str(corridor_raster_path), gdal.GA_ReadOnly)
+        if ds is None:
+            return None
+        band = ds.GetRasterBand(1)
+        proj_wkt = ds.GetProjection() or ""
+
+        drv = ogr.GetDriverByName("GPKG")
+        if drv is None:
+            return None
+        if os.path.exists(output_gpkg_path):
+            try:
+                drv.DeleteDataSource(output_gpkg_path)
+            except Exception:
+                pass
+
+        vds = drv.CreateDataSource(output_gpkg_path)
+        if vds is None:
+            return None
+
+        srs = None
+        if proj_wkt:
+            try:
+                srs = osr.SpatialReference()
+                srs.ImportFromWkt(proj_wkt)
+            except Exception:
+                srs = None
+
+        layer = vds.CreateLayer("corridor", srs, ogr.wkbPolygon)
+        if layer is None:
+            vds = None
+            return None
+
+        layer.CreateField(ogr.FieldDefn("value", ogr.OFTInteger))
+
+        # Use the corridor band itself as a mask so only non-zero pixels are polygonized.
+        try:
+            gdal.Polygonize(band, band, layer, 0, [], callback=None)
+        except TypeError:
+            gdal.Polygonize(band, band, layer, 0, [], None)
+
+        try:
+            vds.FlushCache()
+        except Exception:
+            pass
+        vds = None
+        ds = None
+        return output_gpkg_path
+    except Exception:
+        try:
+            if os.path.exists(output_gpkg_path):
+                os.remove(output_gpkg_path)
+        except Exception:
+            pass
+        return None
 
 
 def _create_fixed_contours_gpkg(
@@ -618,6 +834,8 @@ def _astar_path(
     model_params,
     cost_mode="time_s",
     cancel_check=None,
+    friction=None,
+    friction_min=1.0,
 ):
     rows, cols = dem.shape
     sr, sc = start_rc
@@ -650,8 +868,14 @@ def _astar_path(
             vmax = float(model_params.get("naismith_horizontal_kmh", 5.0)) * 1000.0 / 3600.0
         vmax = max(0.05, vmax)
 
+        fmin = 1.0
+        try:
+            fmin = max(0.0, float(friction_min))
+        except Exception:
+            fmin = 1.0
+
         def hfun(r, c):
-            return math.hypot((ec - c) * dx, (er - r) * dy) / vmax
+            return (math.hypot((ec - c) * dx, (er - r) * dy) / vmax) * fmin
 
     heap = [(hfun(sr, sc), 0.0, start_idx)]
     moves = _neighbors(allow_diagonal, dx, dy)
@@ -680,6 +904,13 @@ def _astar_path(
                 continue
             dz = float(dem[nr, nc]) - z0
             w = _edge_cost(model_key, horiz, dz, model_params, cost_mode=cost_mode)
+            if friction is not None and math.isfinite(w):
+                try:
+                    f0 = float(friction[r, c])
+                    f1 = float(friction[nr, nc])
+                    w *= 0.5 * (f0 + f1)
+                except Exception:
+                    pass
 
             nidx = nr * cols + nc
             ng = g + w
@@ -703,6 +934,7 @@ def _dijkstra_full(
     cost_mode="time_s",
     cancel_check=None,
     progress_cb=None,
+    friction=None,
 ):
     rows, cols = dem.shape
     sr, sc = start_rc
@@ -744,6 +976,13 @@ def _dijkstra_full(
 
             dz = float(dem[nr, nc]) - z0
             w = _edge_cost(model_key, horiz, dz, model_params, cost_mode=cost_mode)
+            if friction is not None and math.isfinite(w):
+                try:
+                    f0 = float(friction[r, c])
+                    f1 = float(friction[nr, nc])
+                    w *= 0.5 * (f0 + f1)
+                except Exception:
+                    pass
             nidx = nr * cols + nc
             nd = d + w
             if nd < dist[nidx]:
@@ -796,6 +1035,13 @@ class CostSurfaceWorker(QgsTask):
         create_cost_raster,
         create_energy_raster,
         create_path,
+        create_corridor=False,
+        corridor_percent=5.0,
+        corridor_polygonize=True,
+        friction_raster_source=None,
+        friction_raster_scale=1.0,
+        friction_vector_source=None,
+        friction_vector_multiplier=1.0,
         on_done,
     ):
         super().__init__("비용표면/최소비용경로 (Cost Surface / LCP)", QgsTask.CanCancel)
@@ -812,6 +1058,15 @@ class CostSurfaceWorker(QgsTask):
         self.create_cost_raster = bool(create_cost_raster)
         self.create_energy_raster = bool(create_energy_raster)
         self.create_path = bool(create_path)
+        self.create_corridor = bool(create_corridor)
+        self.corridor_percent = float(corridor_percent) if corridor_percent is not None else 0.0
+        self.corridor_polygonize = bool(corridor_polygonize)
+        self.friction_raster_source = friction_raster_source
+        self.friction_raster_scale = float(friction_raster_scale) if friction_raster_scale is not None else 1.0
+        self.friction_vector_source = friction_vector_source
+        self.friction_vector_multiplier = (
+            float(friction_vector_multiplier) if friction_vector_multiplier is not None else 1.0
+        )
         self.on_done = on_done
         self.result_obj = CostTaskResult(ok=False)
 
@@ -963,9 +1218,88 @@ class CostSurfaceWorker(QgsTask):
             return _cb
 
         is_energy_model = self.model_key == MODEL_PANDOLF
+        path_cost_mode = "energy_j" if is_energy_model else "time_s"
+
         create_time_raster = bool(self.create_cost_raster)
         create_energy_raster = bool(self.create_energy_raster and is_energy_model)
         create_path = bool(self.create_path and has_end)
+
+        create_corridor = bool(self.create_corridor and has_end)
+        try:
+            corridor_percent = float(self.corridor_percent)
+        except Exception:
+            corridor_percent = 0.0
+        corridor_percent = max(0.0, min(100.0, corridor_percent))
+        corridor_polygonize = bool(self.corridor_polygonize)
+
+        win_gt = _window_geotransform(gt, xoff, yoff)
+        run_id = uuid.uuid4().hex[:8]
+
+        # Optional friction multiplier grid (penalty factors). 1.0 = no effect.
+        friction = None
+        friction_min = 1.0
+        if self.friction_raster_source or self.friction_vector_source:
+            friction = np.ones(dem.shape, dtype=np.float32)
+
+            if self.friction_raster_source:
+                fr = _resample_raster_to_window(
+                    self.friction_raster_source,
+                    win_gt=win_gt,
+                    win_proj_wkt=proj,
+                    cols=cols,
+                    rows=rows,
+                )
+                if fr is None:
+                    return CostTaskResult(ok=False, message="추가 마찰(래스터)을 읽을 수 없습니다.")
+                try:
+                    scale = float(self.friction_raster_scale)
+                except Exception:
+                    scale = 1.0
+                if not math.isfinite(scale) or scale <= 0:
+                    scale = 1.0
+
+                mult = fr.astype(np.float32, copy=False)
+                mult[~np.isfinite(mult)] = 1.0
+                mult = mult * float(scale)
+                mult = np.clip(mult, 0.0001, 1.0e6).astype(np.float32, copy=False)
+                friction *= mult
+
+            if self.friction_vector_source:
+                mask = _rasterize_vector_mask(
+                    self.friction_vector_source,
+                    win_gt=win_gt,
+                    win_proj_wkt=proj,
+                    cols=cols,
+                    rows=rows,
+                )
+                if mask is None:
+                    return CostTaskResult(ok=False, message="추가 마찰(벡터)을 래스터화할 수 없습니다.")
+                try:
+                    mult = float(self.friction_vector_multiplier)
+                except Exception:
+                    mult = 1.0
+                if not math.isfinite(mult) or mult <= 0:
+                    mult = 1.0
+                try:
+                    friction[mask] *= float(mult)
+                except Exception:
+                    pass
+
+            try:
+                friction[nodata_mask] = 1.0
+            except Exception:
+                pass
+
+            try:
+                finite = np.isfinite(friction)
+                if np.any(finite):
+                    friction_min = float(np.nanmin(friction[finite]))
+                else:
+                    friction_min = 1.0
+            except Exception:
+                friction_min = 1.0
+            if not math.isfinite(friction_min) or friction_min <= 0:
+                friction_min = 0.0001
 
         dist_time = None
         prev_time = None
@@ -975,61 +1309,68 @@ class CostSurfaceWorker(QgsTask):
         prev_energy = None
         end_energy_j = None
 
-        def progress_part(p, offset, scale):
-            progress_cb(float(offset) + float(p) * float(scale))
+        dist_end_for_corridor = None
 
-        # Time raster (seconds)
-        if create_time_raster:
-            log_message("CostSurface: computing time surface (seconds)…", level=Qgis.Info)
-            if create_energy_raster:
-                cb = make_progress_cb("time surface", offset=0.0, scale=0.5)
-            else:
-                cb = make_progress_cb("time surface", offset=0.0, scale=1.0)
-            dist_time, prev_time = _dijkstra_full(
-                dem,
-                nodata_mask,
-                start_rc,
-                dx,
-                dy,
-                self.allow_diagonal,
-                self.model_key,
-                self.model_params,
-                cost_mode="time_s",
-                cancel_check=cancel_check,
-                progress_cb=cb,
-            )
-            if dist_time is None or prev_time is None:
-                return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
-            if has_end:
-                end_time_s = float(dist_time[end_rc[0] * cols + end_rc[1]])
+        need_time_surface = bool(create_time_raster or (create_corridor and path_cost_mode == "time_s"))
+        need_energy_surface = bool(create_energy_raster or (create_corridor and path_cost_mode == "energy_j"))
 
-        # Energy raster (J)
-        if create_energy_raster:
-            log_message("CostSurface: computing energy surface (J)…", level=Qgis.Info)
-            if create_time_raster:
-                cb = make_progress_cb("energy surface", offset=50.0, scale=0.5)
+        stages = []
+        if need_time_surface:
+            stages.append(("time surface", "start", "time_s"))
+        if need_energy_surface:
+            stages.append(("energy surface", "start", "energy_j"))
+        if create_corridor:
+            stages.append(("corridor surface (from end)", "end", path_cost_mode))
+
+        stage_share = 100.0 / float(len(stages) or 1)
+
+        for i, (stage_label, which, mode) in enumerate(stages):
+            cb = make_progress_cb(stage_label, offset=float(i) * stage_share, scale=stage_share / 100.0)
+            if which == "start":
+                dist, prev = _dijkstra_full(
+                    dem,
+                    nodata_mask,
+                    start_rc,
+                    dx,
+                    dy,
+                    self.allow_diagonal,
+                    self.model_key,
+                    self.model_params,
+                    cost_mode=mode,
+                    cancel_check=cancel_check,
+                    progress_cb=cb,
+                    friction=friction,
+                )
+                if dist is None or prev is None:
+                    return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
+                if mode == "time_s":
+                    dist_time, prev_time = dist, prev
+                    if has_end:
+                        end_time_s = float(dist_time[end_rc[0] * cols + end_rc[1]])
+                else:
+                    dist_energy, prev_energy = dist, prev
+                    if has_end:
+                        end_energy_j = float(dist_energy[end_rc[0] * cols + end_rc[1]])
             else:
-                cb = make_progress_cb("energy surface", offset=0.0, scale=1.0)
-            dist_energy, prev_energy = _dijkstra_full(
-                dem,
-                nodata_mask,
-                start_rc,
-                dx,
-                dy,
-                self.allow_diagonal,
-                self.model_key,
-                self.model_params,
-                cost_mode="energy_j",
-                cancel_check=cancel_check,
-                progress_cb=cb,
-            )
-            if dist_energy is None or prev_energy is None:
-                return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
-            if has_end:
-                end_energy_j = float(dist_energy[end_rc[0] * cols + end_rc[1]])
+                dist, prev = _dijkstra_full(
+                    dem,
+                    nodata_mask,
+                    end_rc,
+                    dx,
+                    dy,
+                    self.allow_diagonal,
+                    self.model_key,
+                    self.model_params,
+                    cost_mode=mode,
+                    cancel_check=cancel_check,
+                    progress_cb=cb,
+                    friction=friction,
+                )
+                if dist is None or prev is None:
+                    return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
+                dist_end_for_corridor = dist
 
         # Path: optimize by the model's primary cost (energy for Pandolf, time otherwise).
-        path_cost_mode = "energy_j" if is_energy_model else "time_s"
         prev_for_path = None
         end_cost_for_path = None
         if create_path:
@@ -1048,6 +1389,8 @@ class CostSurfaceWorker(QgsTask):
                         self.model_params,
                         cost_mode="energy_j",
                         cancel_check=cancel_check,
+                        friction=friction,
+                        friction_min=friction_min,
                     )
                 prev_for_path = prev_energy
                 end_cost_for_path = end_energy_j
@@ -1065,6 +1408,8 @@ class CostSurfaceWorker(QgsTask):
                         self.model_params,
                         cost_mode="time_s",
                         cancel_check=cancel_check,
+                        friction=friction,
+                        friction_min=friction_min,
                     )
                 prev_for_path = prev_time
                 end_cost_for_path = end_time_s
@@ -1072,14 +1417,16 @@ class CostSurfaceWorker(QgsTask):
             if prev_for_path is None:
                 return CostTaskResult(ok=False, message="작업이 취소되었습니다.")
 
-        win_gt = _window_geotransform(gt, xoff, yoff)
-        run_id = uuid.uuid4().hex[:8]
+        if not stages:
+            progress_cb(100.0)
 
         cost_raster_path = None
         cost_min = None
         cost_max = None
         isochrones_vector_path = None
         isoenergy_vector_path = None
+        corridor_raster_path = None
+        corridor_vector_path = None
         log_message("CostSurface: writing outputs…", level=Qgis.Info)
         if create_time_raster and dist_time is not None:
             dist2d_s = dist_time.reshape((rows, cols))
@@ -1188,6 +1535,59 @@ class CostSurfaceWorker(QgsTask):
             except Exception:
                 isoenergy_vector_path = None
 
+        if create_corridor:
+            dist_start = dist_energy if path_cost_mode == "energy_j" else dist_time
+            if dist_start is not None and dist_end_for_corridor is not None:
+                try:
+                    best_cost = float(dist_start[end_rc[0] * cols + end_rc[1]])
+                except Exception:
+                    best_cost = None
+
+                if best_cost is not None and math.isfinite(best_cost):
+                    thr = float(best_cost) * (1.0 + float(corridor_percent) / 100.0)
+                    try:
+                        start2d = dist_start.reshape((rows, cols))
+                        end2d = dist_end_for_corridor.reshape((rows, cols))
+                        valid = np.isfinite(start2d) & np.isfinite(end2d) & (~nodata_mask)
+                        corridor_mask = np.zeros((rows, cols), dtype=np.uint8)
+                        corridor_mask[valid & ((start2d + end2d) <= thr)] = 1
+                    except Exception:
+                        corridor_mask = None
+
+                    if corridor_mask is not None:
+                        corridor_raster_path = os.path.join(
+                            tempfile.gettempdir(), f"archt_corridor_{self.model_key}_{run_id}.tif"
+                        )
+                        driver = gdal.GetDriverByName("GTiff")
+                        out_ds = driver.Create(
+                            corridor_raster_path,
+                            cols,
+                            rows,
+                            1,
+                            gdal.GDT_Byte,
+                            options=["TILED=YES", "COMPRESS=LZW"],
+                        )
+                        if out_ds is not None:
+                            out_ds.SetGeoTransform(win_gt)
+                            out_ds.SetProjection(proj)
+                            out_band = out_ds.GetRasterBand(1)
+                            out_band.SetNoDataValue(0)
+                            out_band.WriteArray(corridor_mask)
+                            out_band.FlushCache()
+                            out_ds.FlushCache()
+                            out_ds = None
+
+                            if corridor_polygonize:
+                                corridor_gpkg_path = os.path.join(
+                                    tempfile.gettempdir(),
+                                    f"archt_corridor_{self.model_key}_{run_id}.gpkg",
+                                )
+                                corridor_vector_path = _create_corridor_gpkg(
+                                    corridor_raster_path, corridor_gpkg_path
+                                )
+                        else:
+                            corridor_raster_path = None
+
         path_coords = None
         if create_path and prev_for_path is not None:
             path_idx = _reconstruct_path(prev_for_path, start_rc, end_rc, cols, rows)
@@ -1255,16 +1655,24 @@ class CostSurfaceWorker(QgsTask):
         if end_energy_j is not None and math.isfinite(end_energy_j):
             total_energy_kcal = float(end_energy_j) / 4184.0
 
-        msg = "완료"
-        if create_path:
-            if end_cost_for_path is None or not math.isfinite(end_cost_for_path):
-                msg = "도착점까지 경로를 찾지 못했습니다."
-                if path_cost_mode == "energy_j":
-                    end_energy_j = None
-                    total_energy_kcal = None
-                else:
-                    end_time_s = None
-                    lcp_time_s = None
+        msg_parts = []
+
+        if create_path and (end_cost_for_path is None or not math.isfinite(end_cost_for_path)):
+            msg_parts.append("도착점까지 경로를 찾지 못했습니다.")
+            if path_cost_mode == "energy_j":
+                end_energy_j = None
+                total_energy_kcal = None
+            else:
+                end_time_s = None
+                lcp_time_s = None
+
+        if create_corridor and not corridor_raster_path:
+            msg_parts.append("Least-cost corridor 생성 실패")
+
+        msg = "완료" if not msg_parts else " | ".join(msg_parts)
+
+        if create_corridor and not corridor_raster_path and (not create_time_raster) and (not create_energy_raster) and (not create_path):
+            return CostTaskResult(ok=False, message=msg)
 
         return CostTaskResult(
             ok=True,
@@ -1292,6 +1700,9 @@ class CostSurfaceWorker(QgsTask):
             lcp_time_s=lcp_time_s,
             isochrones_vector_path=isochrones_vector_path,
             isoenergy_vector_path=isoenergy_vector_path,
+            corridor_raster_path=corridor_raster_path,
+            corridor_vector_path=corridor_vector_path,
+            corridor_percent=(float(corridor_percent) if create_corridor else None),
         )
 
 
@@ -1556,6 +1967,13 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self._reset_preview()
 
         self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.RasterLayer)
+        try:
+            if hasattr(self, "cmbFrictionRaster"):
+                self.cmbFrictionRaster.setFilters(QgsMapLayerProxyModel.RasterLayer)
+            if hasattr(self, "cmbFrictionVector"):
+                self.cmbFrictionVector.setFilters(QgsMapLayerProxyModel.VectorLayer)
+        except Exception:
+            pass
         self._init_models()
         self.cmbModel.currentIndexChanged.connect(self._on_model_changed)
         self._on_model_changed()
@@ -1565,12 +1983,30 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btnRun.clicked.connect(self.run_analysis)
         self.btnClose.clicked.connect(self.reject)
         self.chkCreatePath.toggled.connect(self._on_create_path_toggled)
+        try:
+            if hasattr(self, "chkCreateCorridor"):
+                self.chkCreateCorridor.toggled.connect(self._on_create_corridor_toggled)
+            if hasattr(self, "chkUseFrictionRaster"):
+                self.chkUseFrictionRaster.toggled.connect(self._on_friction_raster_toggled)
+            if hasattr(self, "chkUseFrictionVector"):
+                self.chkUseFrictionVector.toggled.connect(self._on_friction_vector_toggled)
+        except Exception:
+            pass
 
         self.cmbDemLayer.layerChanged.connect(self._on_dem_changed)
         self._on_dem_changed()
         self._update_labels()
         self._update_point_help()
         self._on_create_path_toggled(bool(self.chkCreatePath.isChecked()))
+        try:
+            if hasattr(self, "chkCreateCorridor"):
+                self._on_create_corridor_toggled(bool(self.chkCreateCorridor.isChecked()))
+            if hasattr(self, "chkUseFrictionRaster"):
+                self._on_friction_raster_toggled(bool(self.chkUseFrictionRaster.isChecked()))
+            if hasattr(self, "chkUseFrictionVector"):
+                self._on_friction_vector_toggled(bool(self.chkUseFrictionVector.isChecked()))
+        except Exception:
+            pass
 
     def cleanup_for_unload(self):
         """Best-effort cleanup for plugin unload/reload (disconnect global signals, cancel tasks)."""
@@ -1587,9 +2023,16 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def _is_path_required(self):
         try:
-            return bool(self.chkCreatePath.isChecked())
+            if bool(self.chkCreatePath.isChecked()):
+                return True
         except Exception:
-            return False
+            pass
+        try:
+            if hasattr(self, "chkCreateCorridor") and bool(self.chkCreateCorridor.isChecked()):
+                return True
+        except Exception:
+            pass
+        return False
 
     def _update_point_help(self):
         try:
@@ -1603,11 +2046,44 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
     def _on_create_path_toggled(self, checked):
         # When LCP output is disabled, drop any previously-selected end point to reduce confusion.
         try:
-            if not checked:
+            if not self._is_path_required():
                 self._end_canvas = None
                 self._update_preview()
                 self._update_labels()
             self._update_point_help()
+        except Exception:
+            pass
+
+    def _on_create_corridor_toggled(self, checked):
+        try:
+            if hasattr(self, "spinCorridorPercent"):
+                self.spinCorridorPercent.setEnabled(bool(checked))
+            if hasattr(self, "chkCorridorPolygon"):
+                self.chkCorridorPolygon.setEnabled(bool(checked))
+
+            if not self._is_path_required():
+                self._end_canvas = None
+                self._update_preview()
+                self._update_labels()
+            self._update_point_help()
+        except Exception:
+            pass
+
+    def _on_friction_raster_toggled(self, checked):
+        try:
+            if hasattr(self, "cmbFrictionRaster"):
+                self.cmbFrictionRaster.setEnabled(bool(checked))
+            if hasattr(self, "spinFrictionRasterScale"):
+                self.spinFrictionRasterScale.setEnabled(bool(checked))
+        except Exception:
+            pass
+
+    def _on_friction_vector_toggled(self, checked):
+        try:
+            if hasattr(self, "cmbFrictionVector"):
+                self.cmbFrictionVector.setEnabled(bool(checked))
+            if hasattr(self, "spinFrictionVectorMult"):
+                self.spinFrictionVectorMult.setEnabled(bool(checked))
         except Exception:
             pass
 
@@ -1849,14 +2325,43 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         create_cost_raster = bool(self.chkCreateCostRaster.isChecked())
         create_energy_raster = bool(getattr(self, "chkCreateEnergyRaster", None) and self.chkCreateEnergyRaster.isChecked())
         create_path = bool(self.chkCreatePath.isChecked())
-        if not create_cost_raster and not create_energy_raster and not create_path:
+        create_corridor = bool(getattr(self, "chkCreateCorridor", None) and self.chkCreateCorridor.isChecked())
+
+        if not create_cost_raster and not create_energy_raster and not create_path and not create_corridor:
             push_message(self.iface, "오류", "최소 1개 출력(누적 비용/경로)을 선택하세요.", level=2)
             restore_ui_focus(self)
             return
-        if create_path and not self._end_canvas:
-            push_message(self.iface, "오류", "최소비용경로를 생성하려면 도착점이 필요합니다.", level=2)
+        if (create_path or create_corridor) and not self._end_canvas:
+            push_message(self.iface, "오류", "경로/회랑을 생성하려면 도착점이 필요합니다.", level=2)
             restore_ui_focus(self)
             return
+
+        use_friction_raster = bool(
+            getattr(self, "chkUseFrictionRaster", None) and self.chkUseFrictionRaster.isChecked()
+        )
+        friction_raster_layer = self.cmbFrictionRaster.currentLayer() if use_friction_raster and hasattr(self, "cmbFrictionRaster") else None
+        friction_raster_scale = float(self.spinFrictionRasterScale.value()) if use_friction_raster and hasattr(self, "spinFrictionRasterScale") else 1.0
+        if use_friction_raster and not friction_raster_layer:
+            push_message(self.iface, "오류", "추가 마찰(래스터) 레이어를 선택하세요.", level=2)
+            restore_ui_focus(self)
+            return
+
+        use_friction_vector = bool(
+            getattr(self, "chkUseFrictionVector", None) and self.chkUseFrictionVector.isChecked()
+        )
+        friction_vector_layer = self.cmbFrictionVector.currentLayer() if use_friction_vector and hasattr(self, "cmbFrictionVector") else None
+        friction_vector_multiplier = float(self.spinFrictionVectorMult.value()) if use_friction_vector and hasattr(self, "spinFrictionVectorMult") else 1.0
+        if use_friction_vector and not friction_vector_layer:
+            push_message(self.iface, "오류", "추가 마찰(벡터) 레이어를 선택하세요.", level=2)
+            restore_ui_focus(self)
+            return
+        if use_friction_vector and friction_vector_layer and (friction_vector_layer.crs() != dem_layer.crs()):
+            push_message(self.iface, "오류", "추가 마찰(벡터) 레이어 CRS는 DEM CRS와 동일해야 합니다.", level=2)
+            restore_ui_focus(self)
+            return
+
+        corridor_percent = float(self.spinCorridorPercent.value()) if create_corridor and hasattr(self, "spinCorridorPercent") else 5.0
+        corridor_polygonize = bool(self.chkCorridorPolygon.isChecked()) if create_corridor and hasattr(self, "chkCorridorPolygon") else True
 
         # Live log window (non-modal) so users can see progress in real time.
         ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
@@ -1914,6 +2419,13 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             create_cost_raster=create_cost_raster,
             create_energy_raster=create_energy_raster,
             create_path=create_path,
+            create_corridor=create_corridor,
+            corridor_percent=corridor_percent,
+            corridor_polygonize=corridor_polygonize,
+            friction_raster_source=(friction_raster_layer.source() if use_friction_raster and friction_raster_layer else None),
+            friction_raster_scale=friction_raster_scale,
+            friction_vector_source=(friction_vector_layer.source() if use_friction_vector and friction_vector_layer else None),
+            friction_vector_multiplier=friction_vector_multiplier,
             on_done=on_done,
         )
         self._task = task
@@ -2035,6 +2547,40 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 )
                 self._track_layer_output(energy_layer, res.energy_raster_path)
                 bottom_to_top.append(energy_layer)
+
+        if res.corridor_raster_path:
+            pct = res.corridor_percent
+            pct_txt = f"{float(pct):.1f}%" if pct is not None and math.isfinite(float(pct)) else ""
+            layer_name = "Least-cost corridor"
+            if pct_txt:
+                layer_name = f"{layer_name} ({pct_txt})"
+            if model_tag:
+                layer_name = f"{layer_name} - {model_tag}"
+            corridor_layer = QgsRasterLayer(res.corridor_raster_path, layer_name)
+            if corridor_layer.isValid():
+                self._tag_cost_surface_layer(corridor_layer, run_id, "corridor_raster")
+                self._apply_corridor_raster_style(corridor_layer)
+                self._track_layer_output(corridor_layer, res.corridor_raster_path)
+                bottom_to_top.append(corridor_layer)
+
+        if res.corridor_vector_path:
+            pct = res.corridor_percent
+            pct_txt = f"{float(pct):.1f}%" if pct is not None and math.isfinite(float(pct)) else ""
+            layer_name = "Least-cost corridor (polygon)"
+            if pct_txt:
+                layer_name = f"{layer_name} ({pct_txt})"
+            if model_tag:
+                layer_name = f"{layer_name} - {model_tag}"
+            corridor_poly = QgsVectorLayer(
+                f"{res.corridor_vector_path}|layername=corridor",
+                layer_name,
+                "ogr",
+            )
+            if corridor_poly.isValid():
+                self._tag_cost_surface_layer(corridor_poly, run_id, "corridor_polygon")
+                self._apply_corridor_polygon_style(corridor_poly)
+                self._track_layer_output(corridor_poly, res.corridor_vector_path)
+                bottom_to_top.append(corridor_poly)
 
         if res.isochrones_vector_path:
             iso_name = "등시간선 (Isochrones)"
@@ -2380,6 +2926,42 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.triggerRepaint()
         except Exception as e:
             log_message(f"Iso-energy style error: {e}", level=Qgis.Warning)
+
+    def _apply_corridor_raster_style(self, layer: QgsRasterLayer):
+        try:
+            nodata_value = 0.0
+            layer.dataProvider().setNoDataValue(1, nodata_value)
+
+            shader = QgsRasterShader()
+            ramp = QgsColorRampShader()
+            ramp.setColorRampType(QgsColorRampShader.Discrete)
+            items = [
+                QgsColorRampShader.ColorRampItem(nodata_value, QColor(0, 0, 0, 0), "Outside"),
+                QgsColorRampShader.ColorRampItem(1.0, QColor(0, 170, 255, 210), "Corridor"),
+            ]
+            ramp.setColorRampItemList(items)
+            shader.setRasterShaderFunction(ramp)
+
+            renderer = QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader)
+            layer.setRenderer(renderer)
+            layer.setOpacity(0.65)
+            layer.triggerRepaint()
+        except Exception as e:
+            log_message(f"Corridor raster style error: {e}", level=Qgis.Warning)
+
+    def _apply_corridor_polygon_style(self, layer: QgsVectorLayer):
+        try:
+            symbol = QgsFillSymbol.createSimple(
+                {
+                    "color": "0,0,0,0",
+                    "outline_color": "0,170,255,220",
+                    "outline_width": "0.9",
+                }
+            )
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+            layer.triggerRepaint()
+        except Exception as e:
+            log_message(f"Corridor polygon style error: {e}", level=Qgis.Warning)
 
     def _apply_cost_raster_style(self, layer: QgsRasterLayer, vmin, vmax):
         try:
