@@ -8,6 +8,7 @@ venv/
 ENV/
 .vscode/
 .idea/
+.agent/backups/
 .DS_Store
 *.bak
 *.tmp
