@@ -24,8 +24,10 @@
 현재 프리셋: Fe2O3 (산화철) (사용자가 제공한 범례 포인트 기반)
 """
 
+import csv
 import math
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -38,7 +40,7 @@ from osgeo import gdal, ogr
 import processing
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt, QVariant
-from qgis.PyQt.QtGui import QColor, QIcon
+from qgis.PyQt.QtGui import QColor, QIcon, QImage
 from qgis.core import (
     Qgis,
     QgsCategorizedSymbolRenderer,
@@ -57,7 +59,7 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapLayerComboBox
 
-from .utils import log_exception, log_message, push_message, restore_ui_focus
+from .utils import is_metric_crs, log_exception, log_message, push_message, restore_ui_focus
 from .live_log_dialog import ensure_live_log_dialog
 
 
@@ -192,6 +194,44 @@ PRESETS: Dict[str, GeoChemPreset] = {
     "ba": GeoChemPreset(key="ba", label="Ba (바륨)", unit="ppm", points=BA_POINTS),
     "cao": GeoChemPreset(key="cao", label="CaO (칼슘)", unit="%", points=CAO_POINTS),
 }
+
+
+def _safe_custom_preset_key(label: str) -> str:
+    txt = (label or "").strip().lower()
+    txt = re.sub(r"[^a-z0-9]+", "_", txt).strip("_")
+    if not txt:
+        txt = "preset"
+    return f"custom_{txt}_{uuid.uuid4().hex[:6]}"
+
+
+def _inv_geotransform(gt):
+    """Return inverse geotransform in a GDAL-version-safe way."""
+    inv = gdal.InvGeoTransform(gt)
+
+    # Variant A: (success, inv_gt)
+    if isinstance(inv, (list, tuple)) and len(inv) == 2:
+        ok, inv_gt = inv
+        if not ok:
+            raise Exception("geotransform inverse failed")
+        return inv_gt
+
+    # Variant B: inv_gt (6-tuple)
+    if isinstance(inv, (list, tuple)) and len(inv) == 6:
+        return inv
+
+    raise Exception("geotransform inverse failed")
+
+
+def _window_geotransform(gt, xoff: int, yoff: int):
+    """Compute a sub-window geotransform for an affine geotransform."""
+    return (
+        float(gt[0] + xoff * gt[1] + yoff * gt[2]),
+        float(gt[1]),
+        float(gt[2]),
+        float(gt[3] + xoff * gt[4] + yoff * gt[5]),
+        float(gt[4]),
+        float(gt[5]),
+    )
 
 
 def _points_to_breaks(points: Sequence[LegendPoint]) -> List[float]:
@@ -421,6 +461,94 @@ def _rgb_for_value(*, points: Sequence[LegendPoint], value: float) -> Tuple[int,
     return pts[-1].rgb
 
 
+def _legend_points_from_csv(csv_path: str) -> List[LegendPoint]:
+    """Load legend points from CSV with columns: value,r,g,b (header optional)."""
+    points: List[LegendPoint] = []
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
+                continue
+            if len(row) == 1:
+                txt = str(row[0] or "").strip()
+                if not txt or txt.startswith("#"):
+                    continue
+                # Allow "value,r,g,b" in a single cell (copied from spreadsheets)
+                row = [x.strip() for x in txt.split(",") if x.strip()]
+            row = [str(x).strip() for x in row if str(x).strip()]
+            if len(row) < 4:
+                continue
+            if row[0].lower() in ("value", "val"):
+                continue
+            try:
+                v = float(row[0])
+                r = int(float(row[1]))
+                g = int(float(row[2]))
+                b = int(float(row[3]))
+            except Exception:
+                continue
+            r = max(0, min(255, r))
+            g = max(0, min(255, g))
+            b = max(0, min(255, b))
+            points.append(LegendPoint(float(v), (r, g, b)))
+
+    points = sorted(points, key=lambda p: float(p.value))
+    # De-duplicate values (keep last)
+    dedup: Dict[float, LegendPoint] = {}
+    for p in points:
+        dedup[float(p.value)] = p
+    out = list(dedup.values())
+    out = sorted(out, key=lambda p: float(p.value))
+    return out
+
+
+def _parse_float_list(text: str) -> List[float]:
+    vals: List[float] = []
+    for part in (text or "").replace(";", ",").split(","):
+        t = part.strip()
+        if not t:
+            continue
+        try:
+            vals.append(float(t))
+        except Exception:
+            continue
+    return vals
+
+
+def _sample_qimage_rgb(image: QImage, x: int, y: int, radius: int = 1) -> Tuple[int, int, int]:
+    if image is None or image.isNull():
+        return (204, 204, 204)
+    w = int(image.width() or 0)
+    h = int(image.height() or 0)
+    if w <= 0 or h <= 0:
+        return (204, 204, 204)
+
+    x = max(0, min(w - 1, int(x)))
+    y = max(0, min(h - 1, int(y)))
+    r0 = max(0, x - int(radius))
+    r1 = min(w - 1, x + int(radius))
+    c0 = max(0, y - int(radius))
+    c1 = min(h - 1, y + int(radius))
+
+    rs = 0
+    gs = 0
+    bs = 0
+    n = 0
+    for yy in range(c0, c1 + 1):
+        for xx in range(r0, r1 + 1):
+            try:
+                col = QColor(image.pixel(xx, yy))
+                rs += int(col.red())
+                gs += int(col.green())
+                bs += int(col.blue())
+                n += 1
+            except Exception:
+                continue
+    if n <= 0:
+        return (204, 204, 204)
+    return (int(round(rs / n)), int(round(gs / n)), int(round(bs / n)))
+
+
 class GeoChemPolygonizeDialog(QtWidgets.QDialog):
     def __init__(self, iface, parent=None):
         super().__init__(parent)
@@ -493,10 +621,25 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.txtUnit.setText(PRESETS["fe2o3"].unit)
         self.txtUnit.setMaximumWidth(80)
         self.txtUnit.setToolTip("구간 라벨 표시용 단위(예: %, wt%).")
+
+        self.btnPresetImport = QtWidgets.QToolButton(grp_preset)
+        self.btnPresetImport.setText("불러오기")
+        self.btnPresetImport.setToolTip("사용자 범례 프리셋을 추가합니다(CSV/이미지 샘플링).")
+        self.btnPresetImport.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        try:
+            menu = QtWidgets.QMenu(self.btnPresetImport)
+            act_csv = menu.addAction("CSV로 프리셋 불러오기…")
+            act_csv.triggered.connect(self._import_preset_from_csv)
+            act_img = menu.addAction("범례 이미지에서 샘플링…")
+            act_img.triggered.connect(self._import_preset_from_legend_image)
+            self.btnPresetImport.setMenu(menu)
+        except Exception:
+            pass
         h.addWidget(QtWidgets.QLabel("프리셋"))
         h.addWidget(self.cmbPreset, 1)
         h.addWidget(QtWidgets.QLabel("단위"))
         h.addWidget(self.txtUnit)
+        h.addWidget(self.btnPresetImport)
         layout.addWidget(grp_preset)
 
         grp_clip = QtWidgets.QGroupBox("3. 처리/보정 옵션")
@@ -633,7 +776,35 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         grid3.addWidget(self.lblOutHelp, 4, 0, 1, 2)
         layout.addWidget(grp_out)
 
-        grp_center = QtWidgets.QGroupBox("5. 중심점(포인트)")
+        grp_zonal = QtWidgets.QGroupBox("5. 구역 통계(Zonal stats)")
+        grid_z = QtWidgets.QGridLayout(grp_zonal)
+
+        self.chkZonalStats = QtWidgets.QCheckBox("구역 통계 레이어 생성(폴리곤별 평균/구간면적)")
+        self.chkZonalStats.setChecked(False)
+        self.chkZonalStats.setToolTip(
+            "선택한 구역(행정구역/유적폴리곤 등)마다 value/class 래스터를 집계합니다.\n"
+            "- value: 평균/표준편차/최솟값/최댓값\n"
+            "- class: 구간별 픽셀수/면적/비율\n\n"
+            "※ 많은 피처/큰 해상도에서는 시간이 오래 걸릴 수 있습니다."
+        )
+
+        self.cmbZoneLayer = QgsMapLayerComboBox(grp_zonal)
+        try:
+            self.cmbZoneLayer.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        except Exception:
+            self.cmbZoneLayer.setFilters(QgsMapLayerProxyModel.VectorLayer)
+
+        self.chkZoneSelectedOnly = QtWidgets.QCheckBox("구역 레이어 선택 피처만 사용")
+        self.chkZoneSelectedOnly.setChecked(False)
+
+        grid_z.addWidget(self.chkZonalStats, 0, 0, 1, 2)
+        grid_z.addWidget(QtWidgets.QLabel("구역(폴리곤) 레이어"), 1, 0)
+        grid_z.addWidget(self.cmbZoneLayer, 1, 1)
+        grid_z.addWidget(self.chkZoneSelectedOnly, 2, 0, 1, 2)
+
+        layout.addWidget(grp_zonal)
+
+        grp_center = QtWidgets.QGroupBox("6. 중심점(포인트)")
         grid4 = QtWidgets.QGridLayout(grp_center)
         self.chkWeightedCenter = QtWidgets.QCheckBox("중심점 생성")
         self.chkWeightedCenter.setChecked(False)
@@ -704,11 +875,13 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         self.cmbPreset.currentIndexChanged.connect(self._on_preset_changed)
         self.chkMakePolygons.stateChanged.connect(self._update_polygon_ui)
         self.chkAddRasters.stateChanged.connect(self._on_add_rasters_changed)
+        self.chkZonalStats.stateChanged.connect(self._update_zonal_ui)
         self.chkWeightedCenter.stateChanged.connect(self._update_weight_ui)
         self.cmbWeightRule.currentIndexChanged.connect(self._update_weight_ui)
         self.cmbCenterMethod.currentIndexChanged.connect(self._update_weight_ui)
 
         self._update_polygon_ui()
+        self._update_zonal_ui()
         self._update_weight_ui()
 
         # Tooltips: keep the dialog short, show detailed guidance on hover.
@@ -792,6 +965,180 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
+    def _import_preset_from_csv(self):
+        try:
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                "CSV 프리셋 불러오기",
+                "",
+                "CSV Files (*.csv);;All Files (*.*)",
+            )
+        except Exception:
+            path = ""
+        if not path:
+            return
+
+        try:
+            points = _legend_points_from_csv(path)
+        except Exception as e:
+            push_message(self.iface, "오류", f"CSV를 읽을 수 없습니다: {e}", level=2, duration=7)
+            return
+        if len(points) < 2:
+            push_message(self.iface, "오류", "CSV에는 value,r,g,b 형태의 포인트가 2개 이상 필요합니다.", level=2, duration=7)
+            return
+
+        base_label = os.path.splitext(os.path.basename(path))[0]
+        try:
+            label, ok = QtWidgets.QInputDialog.getText(self, "프리셋 이름", "프리셋 표시 이름", text=base_label)
+        except Exception:
+            label, ok = (base_label, True)
+        label = (label or "").strip()
+        if not ok or not label:
+            return
+
+        try:
+            unit, ok2 = QtWidgets.QInputDialog.getText(self, "단위", "표시용 단위(예: ppm, %, wt%). 비워도 됩니다.", text="")
+        except Exception:
+            unit, ok2 = ("", True)
+        if not ok2:
+            return
+        unit = (unit or "").strip()
+
+        key = _safe_custom_preset_key(label)
+        preset = GeoChemPreset(key=key, label=label, unit=unit, points=points)
+        PRESETS[key] = preset
+        try:
+            self.cmbPreset.addItem(preset.label, preset.key)
+            self.cmbPreset.setCurrentIndex(self.cmbPreset.count() - 1)
+            self.txtUnit.setText(preset.unit or "")
+        except Exception:
+            pass
+        try:
+            push_message(self.iface, "프리셋", f"사용자 프리셋을 추가했습니다: {preset.label}", level=0, duration=5)
+        except Exception:
+            pass
+
+    def _import_preset_from_legend_image(self):
+        try:
+            img_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                "범례 이미지 선택",
+                "",
+                "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*.*)",
+            )
+        except Exception:
+            img_path = ""
+        if not img_path:
+            return
+
+        base_label = os.path.splitext(os.path.basename(img_path))[0]
+        try:
+            label, ok = QtWidgets.QInputDialog.getText(self, "프리셋 이름", "프리셋 표시 이름", text=base_label)
+        except Exception:
+            label, ok = (base_label, True)
+        label = (label or "").strip()
+        if not ok or not label:
+            return
+
+        try:
+            unit, ok2 = QtWidgets.QInputDialog.getText(self, "단위", "표시용 단위(예: ppm, %, wt%). 비워도 됩니다.", text="")
+        except Exception:
+            unit, ok2 = ("", True)
+        if not ok2:
+            return
+        unit = (unit or "").strip()
+
+        try:
+            values_txt, ok3 = QtWidgets.QInputDialog.getText(
+                self,
+                "값 목록",
+                "값 목록(쉼표로 구분, 예: 0, 3.1, 3.5, 3.9, ...)\n"
+                "※ 이미지의 색상바가 위/아래로 변하는 '연속 범례'라고 가정합니다.",
+                text="",
+            )
+        except Exception:
+            values_txt, ok3 = ("", False)
+        if not ok3:
+            return
+        vals = _parse_float_list(values_txt)
+        vals = sorted(set([float(v) for v in vals]))
+        if len(vals) < 2:
+            push_message(self.iface, "오류", "값 목록은 2개 이상이어야 합니다.", level=2, duration=7)
+            return
+
+        try:
+            direction, ok4 = QtWidgets.QInputDialog.getItem(
+                self,
+                "샘플링 방향",
+                "범례 이미지에서 낮은 값(최소값)이 위치한 곳",
+                ["낮은 값이 아래(권장)", "낮은 값이 위"],
+                0,
+                False,
+            )
+        except Exception:
+            direction, ok4 = ("낮은 값이 아래(권장)", True)
+        if not ok4:
+            return
+        low_at_bottom = str(direction).startswith("낮은 값이 아래")
+
+        try:
+            x_ratio, ok5 = QtWidgets.QInputDialog.getDouble(
+                self,
+                "샘플링 X 위치",
+                "색상바 샘플 x 비율 (0~1, 0.5=가운데)",
+                0.5,
+                0.0,
+                1.0,
+                2,
+            )
+        except Exception:
+            x_ratio, ok5 = (0.5, True)
+        if not ok5:
+            return
+
+        img = QImage(str(img_path))
+        if img.isNull():
+            push_message(self.iface, "오류", "이미지를 열 수 없습니다.", level=2, duration=7)
+            return
+        w = int(img.width() or 0)
+        h = int(img.height() or 0)
+        if w <= 1 or h <= 1:
+            push_message(self.iface, "오류", "이미지 크기가 올바르지 않습니다.", level=2, duration=7)
+            return
+
+        x = int(round(float(x_ratio) * float(w - 1)))
+        n = len(vals)
+        points: List[LegendPoint] = []
+        for i, v in enumerate(vals):
+            if n <= 1:
+                frac = 0.5
+            else:
+                frac = float(i) / float(n - 1)
+            # Image coordinate: y=0 is top
+            if low_at_bottom:
+                frac = 1.0 - frac
+            y = int(round(frac * float(h - 1)))
+            rgb = _sample_qimage_rgb(img, x, y, radius=1)
+            points.append(LegendPoint(float(v), rgb))
+
+        if len(points) < 2:
+            push_message(self.iface, "오류", "범례 포인트를 만들 수 없습니다.", level=2, duration=7)
+            return
+
+        key = _safe_custom_preset_key(label)
+        preset = GeoChemPreset(key=key, label=label, unit=unit, points=points)
+        PRESETS[key] = preset
+        try:
+            self.cmbPreset.addItem(preset.label, preset.key)
+            self.cmbPreset.setCurrentIndex(self.cmbPreset.count() - 1)
+            self.txtUnit.setText(preset.unit or "")
+        except Exception:
+            pass
+        try:
+            push_message(self.iface, "프리셋", f"범례 이미지에서 프리셋을 추가했습니다: {preset.label}", level=0, duration=5)
+        except Exception:
+            pass
+
     def _on_add_rasters_changed(self):
         try:
             if self.chkAddRasters.isChecked():
@@ -804,6 +1151,16 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             enabled = bool(self.chkMakePolygons.isChecked())
             self.chkDissolve.setEnabled(enabled)
             self.chkDropNoData.setEnabled(enabled)
+        except Exception:
+            pass
+
+    def _update_zonal_ui(self):
+        try:
+            enabled = bool(getattr(self, "chkZonalStats", None) and self.chkZonalStats.isChecked())
+            if getattr(self, "cmbZoneLayer", None):
+                self.cmbZoneLayer.setEnabled(enabled)
+            if getattr(self, "chkZoneSelectedOnly", None):
+                self.chkZoneSelectedOnly.setEnabled(enabled)
         except Exception:
             pass
 
@@ -942,6 +1299,9 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         do_drop_nodata = bool(getattr(self, "chkDropNoData", None) and self.chkDropNoData.isChecked()) and do_make_polygons
         do_save_rasters = bool(getattr(self, "chkSaveRasters", None) and self.chkSaveRasters.isChecked())
         do_add_rasters = bool(getattr(self, "chkAddRasters", None) and self.chkAddRasters.isChecked())
+        do_zonal_stats = bool(getattr(self, "chkZonalStats", None) and self.chkZonalStats.isChecked())
+        zone_layer = self.cmbZoneLayer.currentLayer() if do_zonal_stats and getattr(self, "cmbZoneLayer", None) else None
+        zone_selected_only = bool(getattr(self, "chkZoneSelectedOnly", None) and self.chkZoneSelectedOnly.isChecked())
         do_weight_center = bool(getattr(self, "chkWeightedCenter", None) and self.chkWeightedCenter.isChecked())
         center_method = (
             str(getattr(self, "cmbCenterMethod", None).currentData() or "weighted_mean")
@@ -954,6 +1314,16 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         weight_top_pct = float(getattr(self, "spinWeightTopPct", None).value()) if getattr(self, "spinWeightTopPct", None) else 10.0
         if do_add_rasters:
             do_save_rasters = True
+
+        if do_zonal_stats:
+            if zone_layer is None or not isinstance(zone_layer, QgsVectorLayer):
+                push_message(self.iface, "오류", "구역 통계용 폴리곤 레이어를 선택해주세요.", level=2, duration=7)
+                restore_ui_focus(self)
+                return
+            if zone_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+                push_message(self.iface, "오류", "구역 통계 레이어는 폴리곤 레이어여야 합니다.", level=2, duration=7)
+                restore_ui_focus(self)
+                return
 
         # Survey area extent (bounding rectangle), optionally buffered.
         try:
@@ -1278,7 +1648,9 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                     log_message("GeoChem: value stats (no valid pixels)", level=Qgis.Warning)
             except Exception:
                 pass
-            need_class = bool(do_make_polygons or do_make_class_raster)
+
+            zone_stats_layer = None
+            need_class = bool(do_make_polygons or do_make_class_raster or do_zonal_stats)
             if need_class:
                 # 3) Class raster (optional output, required internally for polygonize)
                 breaks = _points_to_breaks(preset.points)
@@ -1350,6 +1722,25 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
                     nodata=0,
                     gdal_type=gdal.GDT_Int16,
                 )
+
+                if do_zonal_stats:
+                    try:
+                        zone_stats_layer = self._make_zonal_stats_layer(
+                            zone_layer=zone_layer,
+                            zone_selected_only=zone_selected_only,
+                            values=out,
+                            classes=cls,
+                            breaks=breaks,
+                            nodata_value=float(nodata_val),
+                            geotransform=gt,
+                            projection_wkt=proj_wkt,
+                            raster_crs=raster.crs(),
+                            preset=preset,
+                            unit=unit,
+                            run_id=run_id,
+                        )
+                    except Exception as e:
+                        log_message(f"GeoChem: zonal stats failed: {e}", level=Qgis.Warning)
             else:
                 self._last_geochem_pix_counts = {}
                 self._last_geochem_class_mean = {}
@@ -1509,6 +1900,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             self._add_to_project(
                 layer=poly,
                 center_layer=center_layer,
+                zone_stats_layer=zone_stats_layer,
                 preset=preset,
                 unit=unit,
                 run_id=run_id,
@@ -1884,6 +2276,290 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
 
         return layer
 
+    def _make_zonal_stats_layer(
+        self,
+        *,
+        zone_layer: QgsVectorLayer,
+        zone_selected_only: bool,
+        values: np.ndarray,
+        classes: np.ndarray,
+        breaks: Sequence[float],
+        nodata_value: float,
+        geotransform,
+        projection_wkt: str,
+        raster_crs,
+        preset: GeoChemPreset,
+        unit: str,
+        run_id: str,
+    ) -> Optional[QgsVectorLayer]:
+        """Aggregate value/class rasters per zone polygon and return a new polygon memory layer."""
+        if zone_layer is None or (not isinstance(zone_layer, QgsVectorLayer)):
+            return None
+        if zone_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+            return None
+        if geotransform is None:
+            return None
+
+        try:
+            inv_gt = _inv_geotransform(geotransform)
+        except Exception:
+            return None
+
+        full_ysize, full_xsize = values.shape
+        if full_xsize <= 0 or full_ysize <= 0:
+            return None
+
+        try:
+            px_area = abs(float(geotransform[1]) * float(geotransform[5]) - float(geotransform[2]) * float(geotransform[4]))
+        except Exception:
+            px_area = 0.0
+        if not math.isfinite(px_area) or px_area < 0:
+            px_area = 0.0
+
+        # Output layer (same CRS as zone layer)
+        crs = zone_layer.crs()
+        uri = "Polygon?crs=EPSG:4326"
+        try:
+            auth = (crs.authid() or "").strip() if crs else ""
+            if auth:
+                uri = f"Polygon?crs={auth}"
+        except Exception:
+            pass
+
+        out_layer = QgsVectorLayer(uri, f"{preset.key}_zonal_{run_id}", "memory")
+        if not out_layer.isValid():
+            return None
+        try:
+            if crs:
+                out_layer.setCrs(crs)
+        except Exception:
+            pass
+
+        pr = out_layer.dataProvider()
+        try:
+            orig_fields = list(zone_layer.fields())
+        except Exception:
+            orig_fields = []
+
+        extra_fields: List[QgsField] = [
+            QgsField("element", QVariant.String),
+            QgsField("unit", QVariant.String),
+            QgsField("run_id", QVariant.String),
+            QgsField("pix_in", QVariant.Int),
+            QgsField("pix_val", QVariant.Int),
+            QgsField("cov_pct", QVariant.Double),
+            QgsField("val_mean", QVariant.Double),
+            QgsField("val_std", QVariant.Double),
+            QgsField("val_min", QVariant.Double),
+            QgsField("val_max", QVariant.Double),
+            QgsField("px_area", QVariant.Double),
+        ]
+
+        n_classes = max(0, int(len(breaks) - 1))
+        width = min(3, max(2, len(str(max(1, n_classes)))))
+        for cid in range(1, n_classes + 1):
+            s = str(cid).zfill(width)
+            extra_fields.append(QgsField(f"c{s}_n", QVariant.Int))
+            extra_fields.append(QgsField(f"c{s}_pct", QVariant.Double))
+            extra_fields.append(QgsField(f"c{s}_area", QVariant.Double))
+
+        try:
+            pr.addAttributes(orig_fields + extra_fields)
+        except Exception:
+            try:
+                for f in orig_fields + extra_fields:
+                    pr.addAttributes([f])
+            except Exception:
+                return None
+        out_layer.updateFields()
+
+        # Transform zones to raster CRS for rasterization
+        ct = None
+        try:
+            if crs and raster_crs and crs != raster_crs:
+                ct = QgsCoordinateTransform(crs, raster_crs, QgsProject.instance())
+        except Exception:
+            ct = None
+
+        # Iterate zones
+        feats = None
+        try:
+            if zone_selected_only and zone_layer.selectedFeatureCount() > 0:
+                feats = zone_layer.selectedFeatures()
+            else:
+                feats = zone_layer.getFeatures()
+        except Exception:
+            feats = zone_layer.getFeatures()
+
+        added = 0
+        for zft in feats:
+            try:
+                geom = zft.geometry()
+            except Exception:
+                geom = None
+            if geom is None or geom.isEmpty():
+                continue
+
+            # Keep original geometry for output
+            out_geom = geom
+
+            # Copy & transform for rasterization
+            geom_r = QgsGeometry(geom)
+            if ct is not None:
+                try:
+                    geom_r.transform(ct)
+                except Exception:
+                    pass
+
+            try:
+                bbox = geom_r.boundingBox()
+            except Exception:
+                continue
+            if bbox.isEmpty():
+                continue
+
+            # Compute pixel window from bbox (fast crop)
+            try:
+                corners = [
+                    (bbox.xMinimum(), bbox.yMinimum()),
+                    (bbox.xMinimum(), bbox.yMaximum()),
+                    (bbox.xMaximum(), bbox.yMinimum()),
+                    (bbox.xMaximum(), bbox.yMaximum()),
+                ]
+                cols = []
+                rows = []
+                for x, y in corners:
+                    c, r = gdal.ApplyGeoTransform(inv_gt, float(x), float(y))
+                    cols.append(float(c))
+                    rows.append(float(r))
+                min_col = int(math.floor(min(cols)))
+                max_col = int(math.ceil(max(cols)))
+                min_row = int(math.floor(min(rows)))
+                max_row = int(math.ceil(max(rows)))
+            except Exception:
+                continue
+
+            xoff = max(0, min(full_xsize - 1, min_col))
+            yoff = max(0, min(full_ysize - 1, min_row))
+            xend = max(0, min(full_xsize - 1, max_col))
+            yend = max(0, min(full_ysize - 1, max_row))
+            xsize = int(xend - xoff + 1)
+            ysize = int(yend - yoff + 1)
+            if xsize <= 0 or ysize <= 0:
+                continue
+
+            sub_gt = _window_geotransform(geotransform, xoff, yoff)
+            try:
+                mask = _gdal_rasterize_wkt_mask(
+                    geom_wkt=str(geom_r.asWkt()),
+                    xsize=int(xsize),
+                    ysize=int(ysize),
+                    geotransform=sub_gt,
+                    projection_wkt=str(projection_wkt or ""),
+                )
+            except Exception:
+                mask = None
+            if mask is None:
+                continue
+
+            v_sub = values[yoff : yoff + ysize, xoff : xoff + xsize]
+            c_sub = classes[yoff : yoff + ysize, xoff : xoff + xsize]
+
+            inside = mask.astype(bool, copy=False)
+            try:
+                pix_in = int(np.count_nonzero(inside))
+            except Exception:
+                pix_in = 0
+            if pix_in <= 0:
+                continue
+
+            v_inside = v_sub[inside].astype(np.float32, copy=False)
+            valid = np.isfinite(v_inside)
+            try:
+                valid &= v_inside != np.float32(float(nodata_value))
+            except Exception:
+                pass
+            pix_val = int(np.count_nonzero(valid)) if pix_in > 0 else 0
+            cov_pct = float(pix_val) * 100.0 / float(pix_in) if pix_in > 0 else 0.0
+
+            v_mean = None
+            v_std = None
+            v_min = None
+            v_max = None
+            if pix_val > 0:
+                try:
+                    vv = v_inside[valid].astype(np.float64, copy=False)
+                    v_mean = float(np.mean(vv))
+                    v_std = float(np.std(vv))
+                    v_min = float(np.min(vv))
+                    v_max = float(np.max(vv))
+                except Exception:
+                    v_mean = None
+                    v_std = None
+                    v_min = None
+                    v_max = None
+
+            # Class counts (within valid pixels only)
+            cls_counts = None
+            try:
+                cls_inside = c_sub[inside].astype(np.int64, copy=False)
+                if cls_inside.shape == valid.shape:
+                    cls_inside = cls_inside[valid]
+                cls_counts = np.bincount(cls_inside, minlength=max(1, n_classes + 1))
+            except Exception:
+                cls_counts = None
+
+            out_ft = QgsFeature(out_layer.fields())
+            try:
+                out_ft.setGeometry(out_geom)
+            except Exception:
+                pass
+
+            try:
+                attrs = list(zft.attributes())
+            except Exception:
+                attrs = []
+            try:
+                out_ft.setAttributes(attrs + [None] * len(extra_fields))
+            except Exception:
+                pass
+
+            try:
+                out_ft["element"] = preset.label
+                out_ft["unit"] = unit
+                out_ft["run_id"] = run_id
+                out_ft["pix_in"] = int(pix_in)
+                out_ft["pix_val"] = int(pix_val)
+                out_ft["cov_pct"] = float(cov_pct)
+                out_ft["val_mean"] = float(v_mean) if v_mean is not None else None
+                out_ft["val_std"] = float(v_std) if v_std is not None else None
+                out_ft["val_min"] = float(v_min) if v_min is not None else None
+                out_ft["val_max"] = float(v_max) if v_max is not None else None
+                out_ft["px_area"] = float(px_area) if px_area > 0 else None
+
+                if cls_counts is not None:
+                    for cid in range(1, n_classes + 1):
+                        s = str(cid).zfill(width)
+                        n = int(cls_counts[cid]) if cid < len(cls_counts) else 0
+                        out_ft[f"c{s}_n"] = int(n)
+                        out_ft[f"c{s}_pct"] = float(n) * 100.0 / float(pix_in) if pix_in > 0 else 0.0
+                        out_ft[f"c{s}_area"] = float(n) * float(px_area) if px_area > 0 else None
+            except Exception:
+                pass
+
+            try:
+                pr.addFeatures([out_ft])
+                added += 1
+            except Exception:
+                continue
+
+        out_layer.updateExtents()
+        try:
+            log_message(f"GeoChem: zonal stats features={added}", level=Qgis.Info)
+        except Exception:
+            pass
+        return out_layer
+
     def _style_value_raster(self, *, layer: QgsRasterLayer, preset: GeoChemPreset, unit: str):
         """Apply legend-based pseudo-color styling to a value raster layer."""
         try:
@@ -2211,6 +2887,7 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         *,
         layer: Optional[QgsVectorLayer],
         center_layer: Optional[QgsVectorLayer] = None,
+        zone_stats_layer: Optional[QgsVectorLayer] = None,
         preset: GeoChemPreset,
         unit: str,
         run_id: str,
@@ -2233,6 +2910,11 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         if center_layer is not None:
             try:
                 center_layer.setName(f"{preset.key}_중심점_{run_id}")
+            except Exception:
+                pass
+        if zone_stats_layer is not None:
+            try:
+                zone_stats_layer.setName(f"{preset.key}_구역통계_{run_id}")
             except Exception:
                 pass
 
@@ -2262,6 +2944,8 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             layers_to_add.append(layer)
         if center_layer is not None and center_layer.isValid():
             layers_to_add.append(center_layer)
+        if zone_stats_layer is not None and zone_stats_layer.isValid():
+            layers_to_add.append(zone_stats_layer)
 
         for lyr in layers_to_add:
             project.addMapLayer(lyr, False)
