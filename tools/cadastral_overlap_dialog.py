@@ -130,6 +130,15 @@ class CadastralOverlapDialog(QtWidgets.QDialog):
         header.setStyleSheet("background:#e8f5e9; padding:10px; border:1px solid #c8e6c9; border-radius:4px;")
         layout.addWidget(header)
 
+        notice = QtWidgets.QLabel(
+            "<b>주의</b>: 연속지적도/공간정보 데이터는 <b>참고용</b>입니다.<br>"
+            "법적 효력이 필요하거나 경계/면적이 중요한 경우, 관할 <b>시·군·구청(시청/구청)</b>에서 "
+            "발급받은 지적도/토지(임야)대장 등 <b>공식 자료</b>를 반드시 확인하세요."
+        )
+        notice.setWordWrap(True)
+        notice.setStyleSheet("background:#fff3e0; padding:10px; border:1px solid #ffe0b2; border-radius:4px; color:#e65100;")
+        layout.addWidget(notice)
+
         grp = QtWidgets.QGroupBox("1. 입력 레이어")
         form = QtWidgets.QFormLayout(grp)
 
