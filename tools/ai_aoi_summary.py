@@ -32,6 +32,7 @@ from qgis.core import (
     QgsFeatureRequest,
     QgsGeometry,
     QgsMapLayer,
+    QgsPointXY,
     QgsProject,
     QgsRasterLayer,
     QgsRectangle,
@@ -40,6 +41,39 @@ from qgis.core import (
 )
 
 from .utils import is_metric_crs, log_message
+
+
+_NUMERIC_FIELD_CANDIDATES = (
+    # Generic stats-like fields
+    "value",
+    "val",
+    "min",
+    "max",
+    "mean",
+    "avg",
+    # Viewshed AOI stats (common)
+    "vis_pct",
+    "vis_m2",
+    "tot_m2",
+    "feat_n",
+    # Terrain profile (line attributes)
+    "distance",
+    "min_elev",
+    "max_elev",
+    # Cost/LCP outputs
+    "dist_m",
+    "time_min",
+    "energy_kcal",
+    # GeoChem polygonize outputs
+    "val_min",
+    "val_max",
+    "v_min",
+    "v_max",
+    # Cadastral overlap outputs
+    "parcel_m2",
+    "in_aoi_m2",
+    "in_aoi_pct",
+)
 
 
 def _split_qgis_source_path(src: str) -> str:
@@ -189,12 +223,22 @@ def _vector_layer_stats_in_geom(
     geom: QgsGeometry,
     *,
     max_features_scan: int = 20000,
+    origin_point: Optional[QgsPointXY] = None,
+    origin_crs=None,
 ) -> Dict[str, Any]:
     out: Dict[str, Any] = {"features": 0}
     if layer is None or geom is None or geom.isEmpty():
         return out
 
     da = _safe_distance_area(layer.crs())
+    da_origin = _safe_distance_area(origin_crs) if origin_point is not None and origin_crs is not None else None
+    ct_to_origin = None
+    if da_origin is not None:
+        try:
+            if layer.crs() != origin_crs:
+                ct_to_origin = QgsCoordinateTransform(layer.crs(), origin_crs, QgsProject.instance())
+        except Exception:
+            ct_to_origin = None
 
     bbox: QgsRectangle = geom.boundingBox()
     req = QgsFeatureRequest().setFilterRect(bbox)
@@ -219,6 +263,15 @@ def _vector_layer_stats_in_geom(
             hist_field = cand
             hist = {}
             break
+
+    num_fields = [c for c in _NUMERIC_FIELD_CANDIDATES if c in field_names]
+    num_acc: Dict[str, Dict[str, Any]] = {}
+    for f in num_fields:
+        num_acc[str(f)] = {"sum": 0.0, "min": float("inf"), "max": float("-inf"), "n": 0}
+
+    dist_acc = None
+    if geom_type == QgsWkbTypes.PointGeometry and da_origin is not None and origin_point is not None:
+        dist_acc = {"sum": 0.0, "min": float("inf"), "max": float("-inf"), "n": 0}
 
     for feat in layer.getFeatures(req):
         scanned += 1
@@ -256,6 +309,36 @@ def _vector_layer_stats_in_geom(
             except Exception:
                 pass
 
+        for f, acc in num_acc.items():
+            try:
+                v = feat[f]
+                if v is None:
+                    continue
+                x = float(v)
+                if not math.isfinite(x):
+                    continue
+                acc["sum"] = float(acc["sum"]) + float(x)
+                acc["min"] = float(min(float(acc["min"]), float(x)))
+                acc["max"] = float(max(float(acc["max"]), float(x)))
+                acc["n"] = int(acc["n"]) + 1
+            except Exception:
+                continue
+
+        if dist_acc is not None:
+            try:
+                pt = g.centroid().asPoint()
+                pt_xy = QgsPointXY(pt)
+                if ct_to_origin is not None:
+                    pt_xy = ct_to_origin.transform(pt_xy)
+                dist = float(da_origin.measureLine(origin_point, pt_xy))
+                if math.isfinite(dist):
+                    dist_acc["sum"] = float(dist_acc["sum"]) + dist
+                    dist_acc["min"] = float(min(float(dist_acc["min"]), dist))
+                    dist_acc["max"] = float(max(float(dist_acc["max"]), dist))
+                    dist_acc["n"] = int(dist_acc["n"]) + 1
+            except Exception:
+                pass
+
     out["features"] = int(n)
     out["scanned"] = int(scanned)
     if geom_type == QgsWkbTypes.LineGeometry:
@@ -267,6 +350,38 @@ def _vector_layer_stats_in_geom(
         items = sorted(hist.items(), key=lambda kv: kv[1], reverse=True)[:20]
         out["top_values"] = [{"value": k, "count": int(v)} for k, v in items]
         out["top_field"] = hist_field
+
+    numeric_out = {}
+    for f, acc in num_acc.items():
+        try:
+            n0 = int(acc.get("n") or 0)
+            if n0 <= 0:
+                continue
+            s0 = float(acc.get("sum") or 0.0)
+            numeric_out[f] = {
+                "n": n0,
+                "min": float(acc.get("min")),
+                "max": float(acc.get("max")),
+                "mean": float(s0 / float(n0)),
+            }
+        except Exception:
+            continue
+    if numeric_out:
+        out["numeric_fields"] = numeric_out
+
+    if dist_acc is not None:
+        try:
+            dn = int(dist_acc.get("n") or 0)
+            if dn > 0:
+                ds = float(dist_acc.get("sum") or 0.0)
+                out["dist_to_aoi_centroid_m"] = {
+                    "n": dn,
+                    "min": float(dist_acc.get("min")),
+                    "max": float(dist_acc.get("max")),
+                    "mean": float(ds / float(dn)),
+                }
+        except Exception:
+            pass
     return out
 
 
@@ -417,10 +532,21 @@ def _raster_stats_in_geom(
             "max": float(np.nanmax(vals)),
             "mean": float(np.nanmean(vals)),
         }
-        # Binary-ish visibility hint
+        # Binary-ish mask hint (e.g., viewshed/corridor): only compute when data looks 0/Max-ish.
         try:
-            vis = float(np.count_nonzero(vals > 0.5)) / float(vals.size) * 100.0
-            out["gt_0_5_pct"] = float(vis)
+            sample = vals
+            if int(sample.size) > 200_000:
+                step0 = int(max(1, sample.size // 200_000))
+                sample = sample[::step0]
+            vmin = float(out.get("min"))
+            vmax = float(out.get("max"))
+            if math.isfinite(vmin) and math.isfinite(vmax) and vmax > 0 and vmin >= -1e-6 and sample.size > 0:
+                near0 = float(np.count_nonzero(np.isclose(sample, 0.0, atol=1e-6)))
+                nearMax = float(np.count_nonzero(np.isclose(sample, vmax, atol=1e-6)))
+                frac = (near0 + nearMax) / float(sample.size)
+                if frac >= 0.98:
+                    vis = float(np.count_nonzero(vals > 0.5)) / float(vals.size) * 100.0
+                    out["gt_0_5_pct"] = float(vis)
         except Exception:
             pass
         return out
@@ -468,6 +594,14 @@ def build_aoi_context(
         buf_area = float(da.measureArea(buf_geom))
     except Exception:
         buf_area = None
+
+    aoi_centroid_pt = None
+    try:
+        c = aoi_geom.centroid()
+        if c and (not c.isEmpty()):
+            aoi_centroid_pt = QgsPointXY(c.asPoint())
+    except Exception:
+        aoi_centroid_pt = None
 
     layers = list(QgsProject.instance().mapLayers().values())
     summaries: List[Dict[str, Any]] = []
@@ -518,7 +652,12 @@ def build_aoi_context(
                 pass
 
             try:
-                item["stats"] = _vector_layer_stats_in_geom(lyr, g_layer)
+                item["stats"] = _vector_layer_stats_in_geom(
+                    lyr,
+                    g_layer,
+                    origin_point=aoi_centroid_pt,
+                    origin_crs=aoi_crs,
+                )
             except Exception:
                 item["stats"] = {"features": 0}
 

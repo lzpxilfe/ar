@@ -66,13 +66,53 @@ def _layer_stats_lines(layer: Dict[str, Any]) -> List[str]:
             if preview:
                 lines.append(f"- 상위 값({top_field}): {preview}")
 
+        num = stats.get("numeric_fields") or {}
+        if isinstance(num, dict) and num:
+            preferred = [
+                # Viewshed AOI stats
+                "vis_pct",
+                "vis_m2",
+                "tot_m2",
+                # Cost/LCP
+                "dist_m",
+                "time_min",
+                "energy_kcal",
+                # Terrain profile
+                "distance",
+                "min_elev",
+                "max_elev",
+                # GeoChem
+                "val_min",
+                "val_max",
+                "v_min",
+                "v_max",
+                # Cadastral
+                "in_aoi_pct",
+                "in_aoi_m2",
+                "parcel_m2",
+            ]
+            show_fields = [f for f in preferred if f in num]
+            if not show_fields:
+                show_fields = list(num.keys())
+            for f in show_fields[:8]:
+                d = num.get(f) or {}
+                lines.append(
+                    f"- {f}: mean={_fmt_float(d.get('mean'), digits=2)} (min={_fmt_float(d.get('min'), digits=2)}, max={_fmt_float(d.get('max'), digits=2)}, n={_fmt_int(d.get('n'))})"
+                )
+
+        dist = stats.get("dist_to_aoi_centroid_m")
+        if isinstance(dist, dict) and dist.get("n"):
+            lines.append(
+                f"- AOI 중심까지 거리: mean={_fmt_float(dist.get('mean'), digits=1)} m (min={_fmt_float(dist.get('min'), digits=1)}, max={_fmt_float(dist.get('max'), digits=1)}, n={_fmt_int(dist.get('n'))})"
+            )
+
     elif t == "raster":
         lines.append(f"- 픽셀(표본) 수: {_fmt_int(stats.get('count'))}")
         lines.append(
             f"- min/mean/max: { _fmt_float(stats.get('min'), digits=3) } / { _fmt_float(stats.get('mean'), digits=3) } / { _fmt_float(stats.get('max'), digits=3) }"
         )
         if "gt_0_5_pct" in stats:
-            lines.append(f"- (힌트) 0.5 초과 비율: { _fmt_float(stats.get('gt_0_5_pct'), digits=1) } %")
+            lines.append(f"- (힌트) 마스크/가시(>0.5) 비율: { _fmt_float(stats.get('gt_0_5_pct'), digits=1) } %")
     else:
         lines.append("- 통계: (지원되지 않는 레이어 타입)")
 
@@ -208,4 +248,3 @@ def generate_report(ctx: Dict[str, Any]) -> str:
     out.append("")
 
     return "\n".join(out).strip() + "\n"
-
