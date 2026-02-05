@@ -181,7 +181,6 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.cad_overlap_action)
             self.iface.addPluginToMenu(self.menu_name, self.terrain_action)
             self.iface.addPluginToMenu(self.menu_name, self.geochem_action)
-            self.iface.addPluginToMenu(self.menu_name, self.ai_report_action)
             self.iface.addPluginToMenu(self.menu_name, self.profile_action)
             self.iface.addPluginToMenu(self.menu_name, self.cost_action)
             self.iface.addPluginToMenu(self.menu_name, self.network_action)
@@ -189,6 +188,8 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.style_action)
             self.iface.addPluginToMenu(self.menu_name, self.drafting_action)
             self.iface.addPluginToMenu(self.menu_name, self.viewshed_action)
+            # AI tools should sit at the bottom (separate from core analysis tools)
+            self.iface.addPluginToMenu(self.menu_name, self.ai_report_action)
 
             # 3. Create Dedicated Toolbar for Visibility
             self.toolbar = self.iface.addToolBar(u"ArchToolkit")
@@ -206,7 +207,6 @@ class ArchToolkit:
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.terrain_action)
             self.tool_menu.addAction(self.geochem_action)
-            self.tool_menu.addAction(self.ai_report_action)
             self.tool_menu.addAction(self.profile_action)
             self.tool_menu.addAction(self.viewshed_action)
             self.tool_menu.addAction(self.cost_action)
@@ -215,6 +215,8 @@ class ArchToolkit:
             self.tool_menu.addSeparator()
             self.tool_menu.addAction(self.style_action)
             self.tool_menu.addAction(self.drafting_action)
+            self.tool_menu.addSeparator()
+            self.tool_menu.addAction(self.ai_report_action)
              
             self.main_action.setMenu(self.tool_menu)
             
@@ -228,8 +230,9 @@ class ArchToolkit:
             
             # Keep references for cleanup
             self.actions = [
-                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action, self.geochem_action, self.ai_report_action,
+                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action, self.geochem_action,
                 self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.viewshed_action,
+                self.ai_report_action,
                 self.main_action
             ]
         except Exception as e:
