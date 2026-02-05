@@ -242,7 +242,10 @@ class ArchToolkit:
     def unload(self):
         # Remove from menu
         for action in self.actions:
-            self.iface.removePluginMenu(self.menu_name, action)
+            try:
+                self.iface.removePluginMenu(self.menu_name, action)
+            except Exception:
+                pass
 
         try:
             stop_ui_log_pump()
@@ -300,8 +303,14 @@ class ArchToolkit:
              
         # Remove toolbar cleanly from mainWindow
         if self.toolbar:
-            self.iface.mainWindow().removeToolBar(self.toolbar)
-            self.toolbar.deleteLater()
+            try:
+                self.iface.mainWindow().removeToolBar(self.toolbar)
+            except Exception:
+                pass
+            try:
+                self.toolbar.deleteLater()
+            except Exception:
+                pass
             self.toolbar = None
 
     def run_dem_tool(self):

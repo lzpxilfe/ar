@@ -19,11 +19,25 @@ _ui_log_timer = None
 _ui_log_listeners = set()
 
 def transform_point(point, src_crs, dest_crs):
-    """Transform point from source CRS to destination CRS"""
-    if src_crs == dest_crs:
+    """Transform point from source CRS to destination CRS (best-effort).
+
+    This helper is used in multiple tools. Coordinate transform errors should not
+    crash the plugin UI; in that case we return the original point and log a
+    warning.
+    """
+    if point is None:
+        return None
+    try:
+        if src_crs == dest_crs:
+            return point
+        transform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
+        return transform.transform(point)
+    except Exception as e:
+        try:
+            log_message(f"CRS transform failed (fallback to original point): {e}", level=Qgis.Warning)
+        except Exception:
+            pass
         return point
-    transform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
-    return transform.transform(point)
 
 def cleanup_files(file_paths):
     """Safely remove a list of file paths"""
@@ -253,9 +267,20 @@ def is_metric_crs(crs):
 
 def restore_ui_focus(dialog):
     """Ensure the dialog is visible and has focus"""
-    dialog.show()
-    dialog.raise_()
-    dialog.activateWindow()
+    if dialog is None:
+        return
+    try:
+        dialog.show()
+    except Exception:
+        pass
+    try:
+        dialog.raise_()
+    except Exception:
+        pass
+    try:
+        dialog.activateWindow()
+    except Exception:
+        pass
 
 def push_message(iface, title, text, level=0, duration=3):
     """Helper to push message to QGIS message bar"""
@@ -268,4 +293,16 @@ def push_message(iface, title, text, level=0, duration=3):
         log_message(f"{title}: {text}", level=lvl)
     except Exception:
         pass
-    iface.messageBar().pushMessage(title, text, level=level, duration=duration)
+    try:
+        if iface is None:
+            return
+        mb = iface.messageBar()
+        if mb is None:
+            return
+        mb.pushMessage(title, text, level=level, duration=duration)
+    except Exception:
+        # Never crash due to message bar errors
+        try:
+            log_message(f"(messageBar failed) {title}: {text}", level=Qgis.Warning)
+        except Exception:
+            pass

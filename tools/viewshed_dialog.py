@@ -80,11 +80,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         
         
         # Setup layer combos
-        self.cmbDemLayer.setFilters(QgsMapLayerProxyModel.Filter.RasterLayer)
-        self.cmbObserverLayer.setFilters(QgsMapLayerProxyModel.Filter.VectorLayer)
+        # QGIS API compatibility: Filter may be scoped or unscoped depending on build.
+        try:
+            self._mlpm_filter = QgsMapLayerProxyModel.Filter
+        except Exception:
+            self._mlpm_filter = QgsMapLayerProxyModel
+
+        self.cmbDemLayer.setFilters(self._mlpm_filter.RasterLayer)
+        self.cmbObserverLayer.setFilters(self._mlpm_filter.VectorLayer)
         try:
             if hasattr(self, "cmbAoiStatsLayer"):
-                self.cmbAoiStatsLayer.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
+                self.cmbAoiStatsLayer.setFilters(self._mlpm_filter.PolygonLayer)
         except Exception:
             pass
         
@@ -616,7 +622,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.groupObserver.setTitle("3. 분석 대상(선형/둘레) 설정")
             
             # Filter layer for Line/Polygon only
-            self.cmbObserverLayer.setFilters(QgsMapLayerProxyModel.Filter.LineLayer | QgsMapLayerProxyModel.Filter.PolygonLayer)
+            self.cmbObserverLayer.setFilters(self._mlpm_filter.LineLayer | self._mlpm_filter.PolygonLayer)
             
             if self.radioFromLayer.isChecked():
                 self.btnSelectPoint.setText("🖱️ 추가 관측점 클릭 (선택사항)")
@@ -694,10 +700,10 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         # 4. Layer filters: Filter by geometry type based on mode
         if is_line_mode:
             # Only show Line or Polygon layers for Line Viewshed (those with length/perimeter)
-            self.cmbObserverLayer.setFilters(QgsMapLayerProxyModel.Filter.LineLayer | QgsMapLayerProxyModel.Filter.PolygonLayer)
+            self.cmbObserverLayer.setFilters(self._mlpm_filter.LineLayer | self._mlpm_filter.PolygonLayer)
         else:
             # Show Point and Polygon layers (to support centroid-based analysis)
-            self.cmbObserverLayer.setFilters(QgsMapLayerProxyModel.Filter.PointLayer | QgsMapLayerProxyModel.Filter.PolygonLayer)
+            self.cmbObserverLayer.setFilters(self._mlpm_filter.PointLayer | self._mlpm_filter.PolygonLayer)
         
         # Trigger source change handler to update dependent UI
         self.on_source_changed()

@@ -143,9 +143,14 @@ class CadastralOverlapDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout(grp)
 
         self.cmbCadastral = QgsMapLayerComboBox(grp)
-        self.cmbCadastral.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
+        # QGIS API compatibility: Filter may be scoped or unscoped depending on build.
+        try:
+            poly_filter = QgsMapLayerProxyModel.Filter.PolygonLayer
+        except Exception:
+            poly_filter = QgsMapLayerProxyModel.PolygonLayer
+        self.cmbCadastral.setFilters(poly_filter)
         self.cmbSurvey = QgsMapLayerComboBox(grp)
-        self.cmbSurvey.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
+        self.cmbSurvey.setFilters(poly_filter)
 
         self.chkCadastralSelected = QtWidgets.QCheckBox("지적도: 선택 피처만 사용")
         self.chkSurveySelected = QtWidgets.QCheckBox("조사지역: 선택 피처만 사용")

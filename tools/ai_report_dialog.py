@@ -221,7 +221,12 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout(grp_in)
 
         self.cmbAoi = QgsMapLayerComboBox(grp_in)
-        self.cmbAoi.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
+        # QGIS API compatibility: Filter may be scoped or unscoped depending on build.
+        try:
+            poly_filter = QgsMapLayerProxyModel.Filter.PolygonLayer
+        except Exception:
+            poly_filter = QgsMapLayerProxyModel.PolygonLayer
+        self.cmbAoi.setFilters(poly_filter)
         form.addRow("조사지역 폴리곤(AOI):", self.cmbAoi)
 
         self.chkSelectedOnly = QtWidgets.QCheckBox("선택된 피처만 사용")
