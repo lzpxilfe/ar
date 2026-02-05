@@ -79,6 +79,13 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         header.setStyleSheet("background:#e3f2fd; padding:10px; border:1px solid #bbdefb; border-radius:4px;")
         layout.addWidget(header)
 
+        help_row = QtWidgets.QHBoxLayout()
+        help_row.addStretch(1)
+        self.btnHelp = QtWidgets.QPushButton("도움말")
+        self.btnHelp.clicked.connect(self._on_help)
+        help_row.addWidget(self.btnHelp)
+        layout.addLayout(help_row)
+
         grp_in = QtWidgets.QGroupBox("1. 입력")
         form = QtWidgets.QFormLayout(grp_in)
 
@@ -100,6 +107,10 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         self.chkOnlyArchToolkit = QtWidgets.QCheckBox("ArchToolkit 결과 레이어만 요약(권장)")
         self.chkOnlyArchToolkit.setChecked(True)
         form.addRow("", self.chkOnlyArchToolkit)
+
+        self.chkExcludeStyling = QtWidgets.QCheckBox("도면/Style(카토그래피) 결과 레이어 제외(권장)")
+        self.chkExcludeStyling.setChecked(True)
+        form.addRow("", self.chkExcludeStyling)
 
         layout.addWidget(grp_in)
 
@@ -287,6 +298,7 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         radius_m = float(self.spinRadius.value())
         selected_only = bool(self.chkSelectedOnly.isChecked())
         only_arch = bool(self.chkOnlyArchToolkit.isChecked())
+        exclude_styling = bool(self.chkExcludeStyling.isChecked())
 
         try:
             ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
@@ -299,6 +311,7 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             selected_only=selected_only,
             radius_m=radius_m,
             only_archtoolkit_layers=only_arch,
+            exclude_styling_layers=exclude_styling,
             max_layers=40,
         )
         if err:
@@ -354,6 +367,37 @@ class AiAoiReportDialog(QtWidgets.QDialog):
 
         self.txtOutput.setPlainText(text or "")
         push_message(self.iface, "AI 요약", "완료", level=0, duration=4)
+
+    def _on_help(self):
+        html = (
+            "<b>왜 이 기능을 넣었나요?</b><br>"
+            "분석 결과(가시권/비용/네트워크/지형지수/GeoChem/지적중첩 등)가 여러 레이어로 흩어지면, "
+            "현장 기록·보고서에 쓰기 어렵습니다. AI 조사요약은 AOI 반경 내 결과를 모아 "
+            "<b>요약/보고서 문장</b>으로 빠르게 정리하려고 만들었습니다.<br><br>"
+            "<b>어떻게 쓰면 좋나요?</b><br>"
+            "1) 먼저 원하는 분석을 실행해 결과 레이어를 만든 다음<br>"
+            "2) AOI와 반경(m)을 고르고<br>"
+            "3) 모드를 선택합니다: <b>무료(로컬)</b>은 외부 전송 없이 요약, <b>Gemini</b>는 더 자연어 보고서 생성(키 필요).<br>"
+            "4) 생성된 문장을 <b>반드시 검토</b>한 뒤 저장/편집하세요.<br><br>"
+            "<b>이 도구가 ‘읽는 것’</b><br>"
+            "- 현재 QGIS 프로젝트의 레이어 중 AOI 버퍼와 겹치는 레이어를 스캔합니다.<br>"
+            "- 벡터: 피처 수, (가능하면) 길이/면적 합, 일부 필드 분포(상위 값).<br>"
+            "- 래스터: min/mean/max 등 단순 통계(가능하면).<br><br>"
+            "<b>모든 분석을 AI가 답변할 수 있나요?</b><br>"
+            "원칙적으로 ‘결과가 레이어(래스터/벡터)로 존재’하면 요약에 포함될 수 있습니다. "
+            "다만 현재는 <b>도구별 의미(예: 가시비율, corridor 면적 등)를 완벽히 해석하는 단계까지는 아닙니다</b> — "
+            "지금은 레이어 기반 통계를 모아 문장화하는 구조입니다. "
+            "추후 각 도구 출력에 표준 메타데이터(파라미터/요약지표)를 붙이면, 도구별로 더 정확한 해석/답변이 가능해집니다.<br><br>"
+            "<b>팁</b><br>"
+            "- AOI는 가능하면 <b>투영 CRS(미터)</b>에서 사용하세요.<br>"
+            "- 레이어 이름/속성에 민감정보가 있으면 Gemini 모드 사용 시 전송될 수 있으니 주의하세요.<br>"
+            "- 도면/Style 결과는 해석에 방해가 될 수 있어 기본적으로 제외(체크)하는 것을 권장합니다."
+        )
+        try:
+            QtWidgets.QMessageBox.information(self, "AI 조사요약 도움말", html)
+        except Exception:
+            # Fallback plain text
+            QtWidgets.QMessageBox.information(self, "AI 조사요약 도움말", "README의 AI 조사요약 섹션을 참고하세요.")
 
     def _on_export(self):
         txt = self.txtOutput.toPlainText()

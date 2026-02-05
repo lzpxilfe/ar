@@ -118,6 +118,23 @@ def is_archtoolkit_layer(layer: QgsMapLayer) -> bool:
             return True
     except Exception:
         pass
+    try:
+        # Many tools place outputs under an "ArchToolkit - ..." layer tree group.
+        root = QgsProject.instance().layerTreeRoot()
+        node = root.findLayer(layer.id())
+        cur = node.parent() if node is not None else None
+        while cur is not None and cur != root:
+            try:
+                if str(cur.name() or "").startswith("ArchToolkit -"):
+                    return True
+            except Exception:
+                pass
+            try:
+                cur = cur.parent()
+            except Exception:
+                break
+    except Exception:
+        pass
     return False
 
 
@@ -417,6 +434,7 @@ def build_aoi_context(
     selected_only: bool,
     radius_m: float,
     only_archtoolkit_layers: bool = True,
+    exclude_styling_layers: bool = False,
     max_layers: int = 40,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if aoi_layer is None or aoi_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
@@ -457,6 +475,12 @@ def build_aoi_context(
     for lyr in layers:
         if lyr is None or lyr.id() == aoi_layer.id():
             continue
+        if exclude_styling_layers:
+            try:
+                if str(lyr.name() or "").startswith("Style:"):
+                    continue
+            except Exception:
+                pass
         if only_archtoolkit_layers and (not is_archtoolkit_layer(lyr)):
             continue
 
@@ -530,6 +554,7 @@ def build_aoi_context(
         "options": {
             "selected_only": bool(selected_only),
             "archtoolkit_only": bool(only_archtoolkit_layers),
+            "exclude_styling_layers": bool(exclude_styling_layers),
             "max_layers": int(max_layers),
         },
     }
