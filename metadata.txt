@@ -32,7 +32,7 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
     <li><b>근접/가시성 네트워크</b>: 근접성(PPA) 그래프 + DEM 기반 상호가시성(Visibility) 그래프
     <li><b>도면 시각화</b>: 한국 수치지형도(DXF) 레이어 분류/집계 + 카토그래피 스타일 + QML/프리셋 내보내기 + 코드 매핑(JSON) 커스터마이즈 + DEM 배경(옵션)
     <li><b>지구화학도 수치화</b>: WMS RGB → 범례 기반 value/class 래스터 + (옵션) 구간 폴리곤/중심점
-    <li><b>AI 조사요약</b>: 조사지역(AOI) + 반경 내 결과 요약 → 보고서 형태 문장 생성 (옵션: Gemini API)
+    <li><b>AI 조사요약</b>: 조사지역(AOI) + 반경 내 결과 요약 → 보고서 형태 문장 생성 (무료: 로컬 요약 / 옵션: Gemini API)
   </ul>
   대부분의 도구는 실행 중 <b>실시간 작업 로그</b> 창을 통해 진행 상황을 확인할 수 있습니다.
   <br>
@@ -49,4 +49,4 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.0.0 - 첫 공개 릴리즈 + AI: Gemini AOI Report(조사지역 반경 내 요약 → 보고서 생성) 포함
+changelog=1.0.0 - 첫 공개 릴리즈 + AI 조사요약(AOI Report: 로컬/Gemini) 포함

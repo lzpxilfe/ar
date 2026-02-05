@@ -20,7 +20,7 @@ ArchToolkit은 한국의 고고학 연구 환경에 최적화된 다양한 분�
 - **근접/가시성 네트워크 (PPA / Visibility)**: 근접성(PPA) 그래프 + DEM 기반 상호가시성(Visibility) 그래프 생성.
 - **도면 시각화 (Map Styling)**: 한국 수치지형도(DXF) 레이어 집계/분류 + 도로·하천·건물 카토그래피 스타일 + DEM 배경 스타일(옵션) + QML/프리셋 내보내기 + DXF 코드 매핑(JSON) 커스터마이즈.
 - **지구화학도 래스터 수치화 (GeoChem WMS → Raster)**: WMS RGB(범례 기반) 수치화 → value/class 래스터 + (옵션) 구간별 폴리곤/중심점 생성.
-- **AI 조사요약 (Gemini AOI Report)**: 조사지역(AOI) + 반경(m) 내의 ArchToolkit 결과(및 선택 레이어) 요약 → 보고서 형태 문장 생성(옵션: Gemini API).
+- **AI 조사요약 (AOI Report)**: 조사지역(AOI) + 반경(m) 내의 ArchToolkit 결과(및 선택 레이어) 요약 → 보고서 형태 문장 생성(무료: 로컬 요약 / 옵션: Gemini API).
 
 대부분의 도구는 실행 중 **실시간 작업 로그 창**을 띄워 진행 상황과 경고/오류를 확인할 수 있습니다.
 
@@ -29,27 +29,30 @@ ArchToolkit은 한국의 고고학 연구 환경에 최적화된 다양한 분�
 - DXF 코드/선폭/라벨 매핑은 `tools/map_styling_codes.json`에서 수정할 수 있습니다. (다이얼로그의 “다시 불러오기”로 즉시 반영)
 - `📦 QML/프리셋 내보내기...` 버튼으로 스타일 QML(도로/하천/건물)과 현재 코드 매핑 JSON을 폴더로 저장할 수 있습니다. (DEM 스타일은 DEM 선택+체크 시 함께 저장)
 
-## AI 조사요약(Gemini) 주의
+## AI 조사요약 - Gemini 모드 주의
 
 - Gemini API를 사용할 경우, **AOI 반경 내 요약 정보(레이어 이름/카운트/통계)**가 외부 API로 전송됩니다. (원본 래스터/벡터 전체를 업로드하지 않도록 설계했지만, 프로젝트에 따라 민감정보가 레이어명/속성에 포함될 수 있으니 주의하세요.)
 - API 키는 QGIS **인증 저장소(QgsAuthManager)**에 저장하도록 구현했습니다.
+- `무료(로컬 요약)` 모드는 외부 전송 없이, 프로젝트 통계를 문장으로 정리합니다.
 
-## AI 조사요약(Gemini) 사용 방법
+## AI 조사요약 사용 방법
 
-1. `ArchToolkit` 메뉴에서 **AI 조사요약 (Gemini AOI Report)** 실행
+1. `ArchToolkit` 메뉴에서 **AI 조사요약 (AOI Report)** 실행
 2. `조사지역 폴리곤(AOI)` 레이어 선택 (가능하면 **투영 CRS(미터 단위)** 사용)
-3. 반경(m) 설정 → **AI 요약 생성**
-4. 필요 시 `저장…`으로 Markdown/Text 파일로 내보내기
+3. `모드` 선택: `무료(로컬 요약)` 또는 `Gemini(API)`
+4. (Gemini 모드인 경우) **API 키 설정/변경…**에서 키 입력
+5. 반경(m) 설정 → **AI 요약 생성**
+6. 필요 시 `저장…`으로 Markdown/Text 파일로 내보내기
 
 ## Gemini API 키 발급(받는 법)
 
-ArchToolkit의 “AI 조사요약(Gemini)” 기능은 **Google Gemini API 키**가 있어야 동작합니다.
+ArchToolkit의 `Gemini(API)` 모드는 **Google Gemini API 키**가 있어야 동작합니다. (`무료(로컬 요약)`은 키가 필요 없습니다.)
 
 1. Google AI Studio에 로그인합니다.
    - `https://aistudio.google.com/`
 2. **API Keys** 페이지로 이동해 `Create API key`를 눌러 키를 생성합니다.
    - `https://aistudio.google.com/app/apikey`
-3. 생성된 키를 복사한 뒤, QGIS에서 `AI 조사요약 (Gemini AOI Report)` 창의 **API 키 설정/변경…** 버튼으로 입력합니다.
+3. 생성된 키를 복사한 뒤, QGIS에서 `AI 조사요약 (AOI Report)` 창의 **API 키 설정/변경…** 버튼으로 입력합니다.
 
 ### 주의(보안/과금)
 

@@ -92,7 +92,7 @@ class ArchToolkit:
             )
             self.geochem_action.triggered.connect(self.run_geochem_tool)
 
-            # AI AOI Report (Gemini)
+            # AI AOI Report (Local/Gemini)
             ai_icon = None
             for icon_name in ("icon.png", "terrain_icon.png", "style_icon.png"):
                 icon_path = os.path.join(plugin_dir, icon_name)
@@ -101,7 +101,7 @@ class ArchToolkit:
                     break
             self.ai_report_action = QAction(
                 QIcon(ai_icon or ""),
-                u"AI 조사요약 (Gemini AOI Report)",
+                u"AI 조사요약 (AOI Report)",
                 self.iface.mainWindow(),
             )
             self.ai_report_action.triggered.connect(self.run_ai_report_tool)

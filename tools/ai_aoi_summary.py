@@ -527,6 +527,11 @@ def build_aoi_context(
         "radius_m": float(r),
         "buffer_area_m2": buf_area,
         "layers": summaries,
+        "options": {
+            "selected_only": bool(selected_only),
+            "archtoolkit_only": bool(only_archtoolkit_layers),
+            "max_layers": int(max_layers),
+        },
     }
 
     try:
