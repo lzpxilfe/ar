@@ -561,6 +561,8 @@ def build_aoi_context(
     radius_m: float,
     only_archtoolkit_layers: bool = True,
     exclude_styling_layers: bool = False,
+    layer_ids: Optional[List[str]] = None,
+    group_path_prefix: Optional[str] = None,
     max_layers: int = 40,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if aoi_layer is None or aoi_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
@@ -603,12 +605,40 @@ def build_aoi_context(
     except Exception:
         aoi_centroid_pt = None
 
-    layers = list(QgsProject.instance().mapLayers().values())
+    group_prefix = str(group_path_prefix or "").strip().strip("/")
+    if layer_ids:
+        map_layers = QgsProject.instance().mapLayers()
+        ordered = []
+        seen = set()
+        for lid in layer_ids:
+            lid0 = str(lid or "").strip()
+            if not lid0:
+                continue
+            lyr = map_layers.get(lid0)
+            if lyr is None:
+                continue
+            if lyr.id() in seen:
+                continue
+            ordered.append(lyr)
+            seen.add(lyr.id())
+        layers = ordered
+    else:
+        layers = list(QgsProject.instance().mapLayers().values())
     summaries: List[Dict[str, Any]] = []
 
     for lyr in layers:
         if lyr is None or lyr.id() == aoi_layer.id():
             continue
+
+        group_path = None
+        if group_prefix:
+            try:
+                group_path = str(_layer_group_path(lyr.id()) or "")
+            except Exception:
+                group_path = ""
+            if group_path != group_prefix and (not group_path.startswith(group_prefix + "/")):
+                continue
+
         if exclude_styling_layers:
             try:
                 if str(lyr.name() or "").startswith("Style:"):
@@ -637,7 +667,7 @@ def build_aoi_context(
             "name": lyr.name(),
             "type": "raster" if isinstance(lyr, QgsRasterLayer) else "vector" if isinstance(lyr, QgsVectorLayer) else "other",
             "crs": getattr(lyr.crs(), "authid", lambda: "")() if hasattr(lyr, "crs") else "",
-            "group_path": _layer_group_path(lyr.id()),
+            "group_path": group_path if group_path is not None else _layer_group_path(lyr.id()),
         }
 
         if isinstance(lyr, QgsVectorLayer):
@@ -694,6 +724,9 @@ def build_aoi_context(
             "selected_only": bool(selected_only),
             "archtoolkit_only": bool(only_archtoolkit_layers),
             "exclude_styling_layers": bool(exclude_styling_layers),
+            "layer_scope": "layers" if layer_ids else "group" if group_prefix else "auto",
+            "group_path_prefix": group_prefix or None,
+            "layer_ids_count": int(len(layer_ids)) if layer_ids else None,
             "max_layers": int(max_layers),
         },
     }

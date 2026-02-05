@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import json
 import os
+from typing import List, Optional
 
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import QSettings, Qt
 from qgis.PyQt.QtGui import QIcon
 
-from qgis.core import QgsMapLayerProxyModel, QgsVectorLayer
+from qgis.core import QgsLayerTreeGroup, QgsMapLayerProxyModel, QgsProject, QgsRasterLayer, QgsVectorLayer
 from qgis.gui import QgsMapLayerComboBox  # noqa: F401 (needed for custom widget)
 
 from . import ai_aoi_summary
@@ -29,13 +30,129 @@ from .utils import log_message, push_message, restore_ui_focus
 _SETTINGS_PREFIX = "ArchToolkit/ai/report"
 
 
+class _LayerMultiSelectDialog(QtWidgets.QDialog):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        aoi_layer_id: str,
+        preselected_ids: Optional[List[str]] = None,
+    ):
+        super().__init__(parent)
+        self._aoi_layer_id = str(aoi_layer_id or "")
+        self._preselected = set(str(x) for x in (preselected_ids or []) if str(x or "").strip())
+
+        self.setWindowTitle("대상 레이어 선택 - AI 조사요약")
+        self._setup_ui()
+        self._populate()
+        self._apply_filter("")
+
+    def _setup_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+
+        hint = QtWidgets.QLabel(
+            "AOI 반경 내에서 요약할 레이어를 선택하세요.\n"
+            "- 벡터/래스터 레이어만 표시됩니다.\n"
+            "- AOI 레이어는 자동으로 제외됩니다."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#455a64;")
+        layout.addWidget(hint)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("필터:"))
+        self.txtFilter = QtWidgets.QLineEdit()
+        self.txtFilter.setPlaceholderText("레이어/그룹 이름으로 검색…")
+        self.txtFilter.textChanged.connect(self._apply_filter)
+        row.addWidget(self.txtFilter, 1)
+        layout.addLayout(row)
+
+        self.listLayers = QtWidgets.QListWidget()
+        self.listLayers.setAlternatingRowColors(True)
+        layout.addWidget(self.listLayers, 1)
+
+        quick = QtWidgets.QHBoxLayout()
+        self.btnCheckVisible = QtWidgets.QPushButton("보이는 것 전체 선택")
+        self.btnCheckVisible.clicked.connect(lambda: self._set_all_checked(True, visible_only=True))
+        self.btnUncheckVisible = QtWidgets.QPushButton("보이는 것 전체 해제")
+        self.btnUncheckVisible.clicked.connect(lambda: self._set_all_checked(False, visible_only=True))
+        quick.addWidget(self.btnCheckVisible)
+        quick.addWidget(self.btnUncheckVisible)
+        quick.addStretch(1)
+        layout.addLayout(quick)
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _populate(self):
+        self.listLayers.clear()
+        layers = list(QgsProject.instance().mapLayers().values())
+        for lyr in layers:
+            if lyr is None:
+                continue
+            if lyr.id() == self._aoi_layer_id:
+                continue
+            if not isinstance(lyr, (QgsVectorLayer, QgsRasterLayer)):
+                continue
+
+            group_path = ""
+            try:
+                group_path = str(ai_aoi_summary._layer_group_path(lyr.id()) or "")
+            except Exception:
+                group_path = ""
+
+            kind = "V" if isinstance(lyr, QgsVectorLayer) else "R"
+            text = f"[{kind}] {lyr.name()}"
+            if group_path:
+                text = f"{group_path} / {text}"
+
+            item = QtWidgets.QListWidgetItem(text)
+            item.setData(Qt.UserRole, lyr.id())
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if lyr.id() in self._preselected else Qt.Unchecked)
+            self.listLayers.addItem(item)
+
+    def _apply_filter(self, text: str):
+        q = str(text or "").strip().lower()
+        for i in range(self.listLayers.count()):
+            item = self.listLayers.item(i)
+            if not q:
+                item.setHidden(False)
+                continue
+            item.setHidden(q not in str(item.text() or "").lower())
+
+    def _set_all_checked(self, checked: bool, *, visible_only: bool):
+        state = Qt.Checked if checked else Qt.Unchecked
+        for i in range(self.listLayers.count()):
+            item = self.listLayers.item(i)
+            if visible_only and item.isHidden():
+                continue
+            item.setCheckState(state)
+
+    def selected_layer_ids(self) -> List[str]:
+        ids: List[str] = []
+        for i in range(self.listLayers.count()):
+            item = self.listLayers.item(i)
+            if item.checkState() != Qt.Checked:
+                continue
+            lid = str(item.data(Qt.UserRole) or "").strip()
+            if lid and lid not in ids:
+                ids.append(lid)
+        return ids
+
+
 class AiAoiReportDialog(QtWidgets.QDialog):
     def __init__(self, iface, parent=None):
         super().__init__(parent)
         self.iface = iface
+        self._selected_layer_ids: List[str] = []
         self._setup_ui()
         self._update_provider_ui()
         self._refresh_key_status()
+        self._refresh_group_list()
+        self._update_layer_scope_ui()
 
     def _settings_get(self, key: str, default=None):
         try:
@@ -55,6 +172,20 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             return str(v or "").strip() or "local"
         except Exception:
             return "local"
+
+    def _get_layer_scope(self) -> str:
+        try:
+            v = self.cmbLayerScope.currentData()
+            return str(v or "").strip() or "auto"
+        except Exception:
+            return "auto"
+
+    def _get_target_group_path(self) -> str:
+        try:
+            v = self.cmbTargetGroup.currentData()
+            return str(v or "").strip()
+        except Exception:
+            return ""
 
     def _setup_ui(self):
         self.setWindowTitle("AI 조사요약 (AOI Report) - ArchToolkit")
@@ -111,6 +242,46 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         self.chkExcludeStyling = QtWidgets.QCheckBox("도면/Style(카토그래피) 결과 레이어 제외(권장)")
         self.chkExcludeStyling.setChecked(True)
         form.addRow("", self.chkExcludeStyling)
+
+        self.cmbLayerScope = QtWidgets.QComboBox()
+        self.cmbLayerScope.addItem("자동(현재 설정대로 스캔)", "auto")
+        self.cmbLayerScope.addItem("그룹 지정(레이어 그룹 선택)", "group")
+        self.cmbLayerScope.addItem("레이어 직접 선택", "layers")
+        saved_scope = str(self._settings_get("layer_scope", "auto") or "").strip() or "auto"
+        try:
+            idx = self.cmbLayerScope.findData(saved_scope)
+            if idx >= 0:
+                self.cmbLayerScope.setCurrentIndex(idx)
+        except Exception:
+            pass
+        self.cmbLayerScope.currentIndexChanged.connect(self._on_layer_scope_changed)
+        form.addRow("대상 레이어:", self.cmbLayerScope)
+
+        self.cmbTargetGroup = QtWidgets.QComboBox()
+        self.cmbTargetGroup.currentIndexChanged.connect(self._on_target_group_changed)
+        self.btnRefreshGroups = QtWidgets.QPushButton("새로고침")
+        self.btnRefreshGroups.clicked.connect(self._refresh_group_list)
+        w_group = QtWidgets.QWidget()
+        row_group = QtWidgets.QHBoxLayout(w_group)
+        row_group.setContentsMargins(0, 0, 0, 0)
+        row_group.addWidget(self.cmbTargetGroup, 1)
+        row_group.addWidget(self.btnRefreshGroups)
+        form.addRow("대상 그룹:", w_group)
+
+        self.btnSelectLayers = QtWidgets.QPushButton("레이어 선택…")
+        self.btnSelectLayers.clicked.connect(self._on_select_layers)
+        self.btnClearLayers = QtWidgets.QPushButton("초기화")
+        self.btnClearLayers.clicked.connect(self._on_clear_layers)
+        self.lblSelectedLayers = QtWidgets.QLabel("선택 없음")
+        self.lblSelectedLayers.setStyleSheet("color:#455a64;")
+
+        w_layers = QtWidgets.QWidget()
+        row_layers = QtWidgets.QHBoxLayout(w_layers)
+        row_layers.setContentsMargins(0, 0, 0, 0)
+        row_layers.addWidget(self.btnSelectLayers)
+        row_layers.addWidget(self.btnClearLayers)
+        row_layers.addWidget(self.lblSelectedLayers, 1)
+        form.addRow("대상 레이어:", w_layers)
 
         layout.addWidget(grp_in)
 
@@ -185,6 +356,119 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         v.addLayout(btn_row)
 
         layout.addWidget(grp_out)
+
+    def _collect_group_paths(self) -> List[str]:
+        root = QgsProject.instance().layerTreeRoot()
+        paths: List[str] = []
+
+        def walk(group: QgsLayerTreeGroup, prefix: str):
+            for child in group.children():
+                if not isinstance(child, QgsLayerTreeGroup):
+                    continue
+                name = str(child.name() or "").strip()
+                if not name:
+                    continue
+                p = f"{prefix}/{name}" if prefix else name
+                paths.append(p)
+                walk(child, p)
+
+        try:
+            walk(root, "")
+        except Exception:
+            return []
+
+        return paths
+
+    def _refresh_group_list(self):
+        keep = self._get_target_group_path() or str(self._settings_get("target_group_path", "") or "").strip()
+        paths = self._collect_group_paths()
+
+        self.cmbTargetGroup.blockSignals(True)
+        try:
+            self.cmbTargetGroup.clear()
+            self.cmbTargetGroup.addItem("(그룹 선택)", "")
+            for p in paths:
+                self.cmbTargetGroup.addItem(p, p)
+            if keep:
+                idx = self.cmbTargetGroup.findData(keep)
+                if idx >= 0:
+                    self.cmbTargetGroup.setCurrentIndex(idx)
+        finally:
+            self.cmbTargetGroup.blockSignals(False)
+
+    def _update_selected_layers_label(self):
+        ids: List[str] = []
+        names: List[str] = []
+        for lid in self._selected_layer_ids:
+            lyr = QgsProject.instance().mapLayer(lid)
+            if lyr is None:
+                continue
+            ids.append(lid)
+            try:
+                names.append(str(lyr.name() or ""))
+            except Exception:
+                pass
+        self._selected_layer_ids = ids
+
+        if not ids:
+            self.lblSelectedLayers.setText("선택 없음")
+            self.lblSelectedLayers.setToolTip("")
+            return
+        self.lblSelectedLayers.setText(f"{len(ids)}개 선택됨")
+        preview = "\n".join([n for n in names if n][:30])
+        self.lblSelectedLayers.setToolTip(preview)
+
+    def _update_layer_scope_ui(self):
+        scope = self._get_layer_scope()
+        is_auto = scope == "auto"
+        is_group = scope == "group"
+        is_layers = scope == "layers"
+
+        try:
+            self.chkOnlyArchToolkit.setEnabled(is_auto)
+        except Exception:
+            pass
+
+        try:
+            self.cmbTargetGroup.setEnabled(is_group)
+            self.btnRefreshGroups.setEnabled(is_group)
+        except Exception:
+            pass
+
+        try:
+            self.btnSelectLayers.setEnabled(is_layers)
+            self.btnClearLayers.setEnabled(is_layers)
+        except Exception:
+            pass
+
+        self._update_selected_layers_label()
+
+    def _on_layer_scope_changed(self):
+        scope = self._get_layer_scope()
+        self._settings_set("layer_scope", scope)
+        self._update_layer_scope_ui()
+
+    def _on_target_group_changed(self):
+        self._settings_set("target_group_path", self._get_target_group_path())
+
+    def _on_select_layers(self):
+        aoi_layer = self.cmbAoi.currentLayer()
+        aoi_id = ""
+        try:
+            aoi_id = str(getattr(aoi_layer, "id", lambda: "")() or "")
+        except Exception:
+            aoi_id = ""
+
+        dlg = _LayerMultiSelectDialog(self, aoi_layer_id=aoi_id, preselected_ids=self._selected_layer_ids)
+        res = dlg.exec_() if hasattr(dlg, "exec_") else dlg.exec()
+        if res != QtWidgets.QDialog.Accepted:
+            return
+        self._selected_layer_ids = dlg.selected_layer_ids()
+        self._update_selected_layers_label()
+
+    def _on_clear_layers(self):
+        self._selected_layer_ids = []
+        self._update_selected_layers_label()
 
     def _on_provider_changed(self):
         provider = self._get_provider()
@@ -300,6 +584,24 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         only_arch = bool(self.chkOnlyArchToolkit.isChecked())
         exclude_styling = bool(self.chkExcludeStyling.isChecked())
 
+        scope = self._get_layer_scope()
+        target_group = None
+        layer_ids = None
+        if scope == "group":
+            target_group = self._get_target_group_path()
+            if not target_group:
+                push_message(self.iface, "오류", "대상 그룹을 선택하세요. (또는 ‘자동’으로 변경)", level=2, duration=7)
+                return
+            only_arch = False
+        elif scope == "layers":
+            if not self._selected_layer_ids:
+                self._on_select_layers()
+            if not self._selected_layer_ids:
+                push_message(self.iface, "오류", "대상 레이어를 선택하세요. (또는 ‘자동’으로 변경)", level=2, duration=7)
+                return
+            layer_ids = list(self._selected_layer_ids)
+            only_arch = False
+
         try:
             ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
         except Exception:
@@ -312,6 +614,8 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             radius_m=radius_m,
             only_archtoolkit_layers=only_arch,
             exclude_styling_layers=exclude_styling,
+            layer_ids=layer_ids,
+            group_path_prefix=target_group,
             max_layers=40,
         )
         if err:
@@ -390,6 +694,7 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             "추후 각 도구 출력에 표준 메타데이터(파라미터/요약지표)를 붙이면, 도구별로 더 정확한 해석/답변이 가능해집니다.<br><br>"
             "<b>팁</b><br>"
             "- AOI는 가능하면 <b>투영 CRS(미터)</b>에서 사용하세요.<br>"
+            "- 대상 레이어가 너무 많거나 섞여 있으면, <b>대상 그룹/대상 레이어</b>를 지정해 범위를 좁히면 더 정확합니다.<br>"
             "- 레이어 이름/속성에 민감정보가 있으면 Gemini 모드 사용 시 전송될 수 있으니 주의하세요.<br>"
             "- 도면/Style 결과는 해석에 방해가 될 수 있어 기본적으로 제외(체크)하는 것을 권장합니다."
         )
