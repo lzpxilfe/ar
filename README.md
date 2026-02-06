@@ -175,6 +175,31 @@ git push -u my work/geochem
 git push my --tags
 ```
 
+### Viridian City(복귀 지점) 운영
+
+이 저장소는 “언제든 돌아갈 수 있는 집”을 `viridian-city` 태그로 관리합니다.
+
+- `viridian-city`: 최신 안정 상태를 가리키는 *움직이는 태그* (필요하면 `-f`로 갱신)
+- `viridian-city-YYYYMMDD-v1.0.0-N`: 그날의 스냅샷(되돌리기/비교용, 고정)
+
+> GitHub에서 보이는 README는 이 `README.md`입니다. 수정 후 `main`에 커밋/푸시하면 GitHub에 바로 반영됩니다.
+
+```bash
+# (1) 현재 상태를 Viridian City(집)로 지정
+git tag -a -f viridian-city -m "Viridian City home"
+git push -f origin viridian-city
+
+# (2) 스냅샷 태그 추가(예시)
+git tag -a viridian-city-20260206-v1.0.0-2 -m "Viridian City snapshot"
+git push origin viridian-city-20260206-v1.0.0-2
+
+# (3) 복귀
+git switch main
+git reset --hard viridian-city
+```
+
+> 태그 자체는 “포인터”라 용량을 거의 늘리지 않습니다. 다만 큰 바이너리 파일(이미지/래스터 등)을 자주 커밋하면 저장소 용량은 커질 수 있습니다.
+
 ## 라이선스
 
 이 프로젝트는 **GNU GPL v3** 라이선스를 따릅니다. 
