@@ -76,8 +76,14 @@ class ArchToolkit:
             self.terrain_action.triggered.connect(self.run_terrain_tool)
 
             # AHP Suitability (Multi-criteria)
+            ahp_icon = None
+            for icon_name in ("AHP.png", "ahp.png", "terrain_icon.png"):
+                icon_path = os.path.join(plugin_dir, icon_name)
+                if os.path.exists(icon_path):
+                    ahp_icon = icon_path
+                    break
             self.ahp_action = QAction(
-                QIcon(terrain_icon),
+                QIcon(ahp_icon or terrain_icon),
                 u"AHP 입지적합도 (AHP Suitability)",
                 self.iface.mainWindow(),
             )
@@ -102,7 +108,7 @@ class ArchToolkit:
 
             # AI AOI Report (Local/Gemini)
             ai_icon = None
-            for icon_name in ("icon.png", "terrain_icon.png", "style_icon.png"):
+            for icon_name in ("AI.png", "ai.png", "icon.png", "terrain_icon.png", "style_icon.png"):
                 icon_path = os.path.join(plugin_dir, icon_name)
                 if os.path.exists(icon_path):
                     ai_icon = icon_path

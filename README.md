@@ -45,12 +45,27 @@ ArchToolkit은 한국의 고고학·문화유산 조사/연구 환경에서 자�
 - **지적도 중첩 면적표 (Cadastral Overlap)**: 조사지역×필지 중첩 면적/비율 계산 + 중첩(클립) 레이어 생성.
 - **도면 시각화 (Map Styling)**: 한국 수치지형도(DXF) 레이어 집계/분류 + 도로·하천·건물 카토그래피 스타일 + DEM 배경 스타일(옵션) + QML/프리셋 내보내기 + DXF 코드 매핑(JSON) 커스터마이즈.
 - **지구화학도 래스터 수치화 (GeoChem WMS → Raster)**: WMS RGB(범례 기반) 수치화 → value/class 래스터 + (옵션) 구간별 폴리곤/중심점 생성.
-- **AI 조사요약 (AOI Report)**: 조사지역(AOI) + 반경(m) 내 레이어 요약 → 보고서/업무 메모 문장 생성(무료: 로컬 요약 / 옵션: Gemini API).
+- **AI 조사요약 (AOI Report)**: 조사지역(AOI) + 반경(m) 내 레이어 요약 → 보고서/업무 메모 문장 생성(무료: 로컬 요약 / 옵션: Gemini API / 통계 CSV·번들 저장).
 
 ## Map Styling 커스터마이즈
 
 - DXF 코드/선폭/라벨 매핑은 `tools/map_styling_codes.json`에서 수정할 수 있습니다. (다이얼로그의 “다시 불러오기”로 즉시 반영)
 - `📦 QML/프리셋 내보내기...` 버튼으로 스타일 QML(도로/하천/건물)과 현재 코드 매핑 JSON을 폴더로 저장할 수 있습니다. (DEM 스타일은 DEM 선택+체크 시 함께 저장)
+
+## AHP 입지적합도 (AHP Suitability)
+
+여러 환경변수(래스터)를 **AHP(쌍대비교) 가중치**로 통합해 “입지 적합도” 래스터를 생성합니다.
+
+- 정규화: 각 기준을 `min~max`로 0–1 스케일로 정규화 (Benefit: 값↑ 좋음 / Cost: 값↓ 좋음)
+- 가중치: 쌍대비교 표로 가중치 계산(일관성비율 CR 제공)
+- 출력: 가중합 적합도(기본 0–1, 옵션 0–100) 래스터 + `ArchToolkit - AHP` 그룹에 정리 + 메타데이터 태깅
+
+사용 흐름:
+1. (선택) AOI 지정 + `AOI 범위로 자르기` 체크(권장)
+2. 기준 래스터 추가(각 기준마다 Benefit/Cost 방향 지정)
+3. 필요 시 `통계 계산(min/max)` 실행(미계산이면 실행 시 자동 계산)
+4. 쌍대비교 표 입력 → CR이 **0.10 초과**면 가중치 일관성 재검토 권장
+5. `실행` → 결과 래스터 생성
 
 ## AI 조사요약 (AOI Report)
 
@@ -86,6 +101,7 @@ AI 조사요약(로컬/Gemini)은 가능하면 이 메타데이터를 우선 사
 - Gemini API를 사용할 경우, **AOI 반경 내 요약 정보(레이어 이름/카운트/통계)**가 외부 API로 전송됩니다.
   - 원본 래스터/벡터 전체를 업로드하지 않도록 설계했지만, 프로젝트에 따라 민감정보가 레이어명/속성에 포함될 수 있으니 주의하세요.
 - API 키는 QGIS **인증 저장소(QgsAuthManager)**에 저장하도록 구현했습니다.
+  - 한 번 저장하면 다음 실행부터는 자동으로 불러옵니다(필요할 때만 변경).
 
 1. `ArchToolkit` 메뉴에서 **AI 조사요약 (AOI Report)** 실행
 2. `조사지역 폴리곤(AOI)` 레이어 선택 (가능하면 **투영 CRS(미터 단위)** 사용)
@@ -106,9 +122,9 @@ AI 없이도 “AOI 반경 내 표준 통계표”를 바로 뽑아, 보고서 �
 ArchToolkit의 `Gemini(API)` 모드는 **Google Gemini API 키**가 있어야 동작합니다. (`무료(로컬 요약)`은 키가 필요 없습니다.)
 
 1. Google AI Studio에 로그인합니다.
-   - `https://aistudio.google.com/`
+   - https://aistudio.google.com/
 2. **API Keys** 페이지로 이동해 `Create API key`를 눌러 키를 생성합니다.
-   - `https://aistudio.google.com/app/apikey`
+   - https://aistudio.google.com/app/apikey
 3. 생성된 키를 복사한 뒤, QGIS에서 `AI 조사요약 (AOI Report)` 창의 **API 키 설정/변경…** 버튼으로 입력합니다.
 
 ### 주의(보안/과금)

@@ -198,9 +198,11 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         self.setWindowTitle("AI 조사요약 (AOI Report) - ArchToolkit")
         try:
             plugin_dir = os.path.dirname(os.path.dirname(__file__))
-            icon_path = os.path.join(plugin_dir, "icon.png")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            for icon_name in ("AI.png", "ai.png", "icon.png"):
+                icon_path = os.path.join(plugin_dir, icon_name)
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+                    break
         except Exception:
             pass
 
