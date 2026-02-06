@@ -44,6 +44,7 @@ from qgis.gui import QgsMapLayerComboBox
 
 from .live_log_dialog import ensure_live_log_dialog
 from .utils import log_message, push_message, restore_ui_focus
+from .utils import set_archtoolkit_layer_metadata
 
 
 def _safe_make_valid(geom: QgsGeometry) -> QgsGeometry:
@@ -410,6 +411,17 @@ class CadastralOverlapDialog(QtWidgets.QDialog):
 
                 out = create_output_layer(f"{run_group_name}_AOI{aoi_fid}")
                 pr = out.dataProvider()
+                try:
+                    set_archtoolkit_layer_metadata(
+                        out,
+                        tool_id="cadastral_overlap",
+                        run_id=str(run_id),
+                        kind="overlap_by_aoi",
+                        units="m2/%",
+                        params={"split_by_feature": True},
+                    )
+                except Exception:
+                    pass
 
                 out_feats: List[QgsFeature] = []
                 sum_in = 0.0
@@ -551,6 +563,17 @@ class CadastralOverlapDialog(QtWidgets.QDialog):
 
         out = create_output_layer(run_group_name)
         pr = out.dataProvider()
+        try:
+            set_archtoolkit_layer_metadata(
+                out,
+                tool_id="cadastral_overlap",
+                run_id=str(run_id),
+                kind="overlap",
+                units="m2/%",
+                params={"split_by_feature": False},
+            )
+        except Exception:
+            pass
 
         out_feats: List[QgsFeature] = []
         sum_in = 0.0

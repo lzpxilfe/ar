@@ -179,6 +179,12 @@ def generate_report(ctx: Dict[str, Any]) -> str:
             ltype = str(lyr.get("type") or "")
             group_path = str(lyr.get("group_path") or "").strip()
             wkb = str(lyr.get("wkb") or "").strip()
+            arch = lyr.get("archtoolkit") or {}
+            tool_id = str((arch.get("tool_id") if isinstance(arch, dict) else "") or "").strip()
+            run_id = str((arch.get("run_id") if isinstance(arch, dict) else "") or "").strip()
+            kind = str((arch.get("kind") if isinstance(arch, dict) else "") or "").strip()
+            units = str((arch.get("units") if isinstance(arch, dict) else "") or "").strip()
+            created_at = str((arch.get("created_at") if isinstance(arch, dict) else "") or "").strip()
 
             meta_bits = []
             if ltype:
@@ -191,6 +197,19 @@ def generate_report(ctx: Dict[str, Any]) -> str:
             out.append(f"### - {name}")
             if meta:
                 out.append(f"- 분류: {meta}")
+            if tool_id or run_id:
+                meta2 = []
+                if tool_id:
+                    meta2.append(f"tool_id={tool_id}")
+                if kind:
+                    meta2.append(f"kind={kind}")
+                if units:
+                    meta2.append(f"units={units}")
+                if run_id:
+                    meta2.append(f"run_id={run_id}")
+                if created_at:
+                    meta2.append(f"created_at={created_at}")
+                out.append(f"- ArchToolkit 메타: {', '.join(meta2)}")
             out.extend(_layer_stats_lines(lyr))
             out.append("")
 

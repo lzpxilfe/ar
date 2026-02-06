@@ -66,7 +66,7 @@ from qgis.core import (
 
 import processing
 
-from .utils import cleanup_files, push_message, restore_ui_focus
+from .utils import cleanup_files, push_message, restore_ui_focus, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
 
 
@@ -247,6 +247,21 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
                     label_size_pt=label_size_pt,
                     slope_class_step=slope_class_step,
                 )
+                try:
+                    set_archtoolkit_layer_metadata(
+                        out_grid,
+                        tool_id="slope_aspect_drafting",
+                        run_id=str(run_id),
+                        kind="slope_grid",
+                        units="deg",
+                        params={
+                            "step_cells": int(step_cells),
+                            "label_size_pt": float(label_size_pt),
+                            "slope_class_step": int(slope_class_step),
+                        },
+                    )
+                except Exception:
+                    pass
                 project.addMapLayer(out_grid, False)
                 run_group.insertLayer(0, out_grid)
 
@@ -273,6 +288,21 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
                     flat_thresh_deg=flat_thresh,
                     arrow_size_mm=arrow_size_mm,
                 )
+                try:
+                    set_archtoolkit_layer_metadata(
+                        out_pts,
+                        tool_id="slope_aspect_drafting",
+                        run_id=str(run_id),
+                        kind="aspect_arrows",
+                        units="deg",
+                        params={
+                            "step_cells": int(step_cells),
+                            "flat_thresh_deg": float(flat_thresh),
+                            "arrow_size_mm": float(arrow_size_mm),
+                        },
+                    )
+                except Exception:
+                    pass
                 project.addMapLayer(out_pts, False)
                 run_group.insertLayer(0, out_pts)
 

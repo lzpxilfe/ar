@@ -59,7 +59,14 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapLayerComboBox
 
-from .utils import is_metric_crs, log_exception, log_message, push_message, restore_ui_focus
+from .utils import (
+    is_metric_crs,
+    log_exception,
+    log_message,
+    push_message,
+    restore_ui_focus,
+    set_archtoolkit_layer_metadata,
+)
 from .live_log_dialog import ensure_live_log_dialog
 
 
@@ -2948,6 +2955,36 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             layers_to_add.append(zone_stats_layer)
 
         for lyr in layers_to_add:
+            try:
+                kind = "layer"
+                units0 = str(unit or "").strip()
+                if lyr is val_layer:
+                    kind = "value_raster"
+                elif lyr is cls_layer:
+                    kind = "class_raster"
+                    units0 = "class"
+                elif lyr is layer:
+                    kind = "polygonize"
+                elif lyr is center_layer:
+                    kind = "weighted_center"
+                    units0 = "m"
+                elif lyr is zone_stats_layer:
+                    kind = "zonal_stats"
+
+                set_archtoolkit_layer_metadata(
+                    lyr,
+                    tool_id="geochem",
+                    run_id=str(run_id),
+                    kind=kind,
+                    units=units0,
+                    params={
+                        "preset_key": str(getattr(preset, "key", "") or ""),
+                        "preset_label": str(getattr(preset, "label", "") or ""),
+                        "unit": str(unit or ""),
+                    },
+                )
+            except Exception:
+                pass
             project.addMapLayer(lyr, False)
             parent.insertLayer(0, lyr)
 

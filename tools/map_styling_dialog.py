@@ -39,7 +39,7 @@ from qgis.core import (
     QgsSingleBandGrayRenderer, QgsHillshadeRenderer,
     QgsRasterBandStats, QgsLayerTreeLayer
 )
-from .utils import restore_ui_focus, push_message
+from .utils import new_run_id, restore_ui_focus, push_message, set_archtoolkit_layer_metadata
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'map_styling_dialog_base.ui'))
@@ -85,6 +85,7 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
         super(MapStylingDialog, self).__init__(parent)
         self.setupUi(self)
         self.iface = iface
+        self._style_run_id = None
         
         # Setup
         self.populate_layers()
@@ -240,6 +241,7 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
 
 
         try:
+            self._style_run_id = new_run_id("map_styling")
             results = []
             
             # 1. Raster Background Styling
@@ -328,6 +330,7 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def style_dem_background(self, source_raster):
         """Create a 3-layer styled background group from a single DEM"""
+        run_id = str(getattr(self, "_style_run_id", "") or "").strip() or new_run_id("map_styling")
         
         group_name = f"Style: 배경 지형 ({source_raster.name()})"
         root = QgsProject.instance().layerTreeRoot()
@@ -347,6 +350,17 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
         hillshade_layer = source_raster.clone()
         hillshade_layer.setName(f"{source_raster.name()}_음영기복")
         hillshade_layer.setRenderer(QgsHillshadeRenderer(hillshade_layer.dataProvider(), 1, 315, 45))
+        try:
+            set_archtoolkit_layer_metadata(
+                hillshade_layer,
+                tool_id="map_styling",
+                run_id=run_id,
+                kind="dem_hillshade",
+                units="m",
+                params={"source": str(source_raster.name() or "")},
+            )
+        except Exception:
+            pass
         QgsProject.instance().addMapLayer(hillshade_layer, False)
         group.addLayer(hillshade_layer) 
         
@@ -356,6 +370,17 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
         gray_layer.setRenderer(QgsSingleBandGrayRenderer(gray_layer.dataProvider(), 1))
         gray_layer.setOpacity(0.4)
         gray_layer.setBlendMode(QPainter.CompositionMode_Multiply) 
+        try:
+            set_archtoolkit_layer_metadata(
+                gray_layer,
+                tool_id="map_styling",
+                run_id=run_id,
+                kind="dem_gray",
+                units="m",
+                params={"source": str(source_raster.name() or "")},
+            )
+        except Exception:
+            pass
         QgsProject.instance().addMapLayer(gray_layer, False)
         gray_node = QgsLayerTreeLayer(gray_layer)
         group.insertChildNode(0, gray_node) # Insert at top of group
@@ -380,6 +405,17 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
         shader.setRasterShaderFunction(color_ramp)
         color_layer.setRenderer(QgsSingleBandPseudoColorRenderer(color_layer.dataProvider(), 1, shader))
         color_layer.setOpacity(0.7)
+        try:
+            set_archtoolkit_layer_metadata(
+                color_layer,
+                tool_id="map_styling",
+                run_id=run_id,
+                kind="dem_color",
+                units="m",
+                params={"source": str(source_raster.name() or "")},
+            )
+        except Exception:
+            pass
         QgsProject.instance().addMapLayer(color_layer, False)
         color_node = QgsLayerTreeLayer(color_layer)
         group.insertChildNode(0, color_node) # Insert at very top of group
@@ -396,6 +432,7 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def aggregate_features(self, source_layers, codes, name, dest_geom="line"):
         """Combine matching features from multiple layers into one memory layer"""
+        run_id = str(getattr(self, "_style_run_id", "") or "").strip() or new_run_id("map_styling")
         if not codes:
             return None
         is_building = dest_geom == "polygon"
@@ -459,6 +496,17 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
             return None
             
         pr.addFeatures(all_features)
+        try:
+            set_archtoolkit_layer_metadata(
+                dest_layer,
+                tool_id="map_styling",
+                run_id=run_id,
+                kind="styled_vector",
+                units="",
+                params={"name": str(name or ""), "dest_geom": str(dest_geom or "")},
+            )
+        except Exception:
+            pass
         QgsProject.instance().addMapLayer(dest_layer, False)  # Add to project but NOT to layer tree
         return dest_layer
 

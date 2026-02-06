@@ -40,7 +40,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
-from .utils import is_metric_crs, log_message
+from .utils import get_archtoolkit_layer_metadata, is_metric_crs, log_message
 
 
 _NUMERIC_FIELD_CANDIDATES = (
@@ -134,6 +134,12 @@ def is_archtoolkit_layer(layer: QgsMapLayer) -> bool:
     if layer is None:
         return False
     try:
+        meta = get_archtoolkit_layer_metadata(layer)
+        if meta and (meta.get("tool_id") or meta.get("run_id")):
+            return True
+    except Exception:
+        pass
+    try:
         name = str(layer.name() or "")
         if name.startswith("Style:") or name.startswith("AOI_"):
             return True
@@ -170,6 +176,31 @@ def is_archtoolkit_layer(layer: QgsMapLayer) -> bool:
     except Exception:
         pass
     return False
+
+
+def _layer_archtoolkit_meta(layer: QgsMapLayer) -> Dict[str, Any]:
+    """Return ArchToolkit metadata dict for this layer (best-effort)."""
+    if layer is None:
+        return {}
+    try:
+        meta = get_archtoolkit_layer_metadata(layer) or {}
+        if meta:
+            return meta
+    except Exception:
+        meta = {}
+
+    # Backward-compat: older builds tagged cost surface layers under a different key.
+    try:
+        rid = layer.customProperty("archtoolkit/cost_surface/run_id", None)
+        if rid:
+            out = {"tool_id": "cost_surface", "run_id": str(rid)}
+            k = layer.customProperty("archtoolkit/cost_surface/kind", None)
+            if k:
+                out["kind"] = str(k)
+            return out
+    except Exception:
+        pass
+    return {}
 
 
 def _layer_group_path(layer_id: str) -> str:
@@ -639,13 +670,21 @@ def build_aoi_context(
             if group_path != group_prefix and (not group_path.startswith(group_prefix + "/")):
                 continue
 
+        meta = _layer_archtoolkit_meta(lyr)
+
         if exclude_styling_layers:
             try:
                 if str(lyr.name() or "").startswith("Style:"):
                     continue
             except Exception:
                 pass
-        if only_archtoolkit_layers and (not is_archtoolkit_layer(lyr)):
+            try:
+                if (meta or {}).get("tool_id") == "map_styling":
+                    continue
+            except Exception:
+                pass
+
+        if only_archtoolkit_layers and (not meta) and (not is_archtoolkit_layer(lyr)):
             continue
 
         # Transform buffer geometry to layer CRS to do intersection tests.
@@ -669,6 +708,8 @@ def build_aoi_context(
             "crs": getattr(lyr.crs(), "authid", lambda: "")() if hasattr(lyr, "crs") else "",
             "group_path": group_path if group_path is not None else _layer_group_path(lyr.id()),
         }
+        if meta:
+            item["archtoolkit"] = meta
 
         if isinstance(lyr, QgsVectorLayer):
             item["geometry_type"] = int(lyr.geometryType())
@@ -737,3 +778,214 @@ def build_aoi_context(
         pass
 
     return ctx, None
+
+
+def export_aoi_context_csv(
+    ctx: Dict[str, Any],
+    *,
+    layers_csv_path: str,
+    numeric_fields_csv_path: str,
+) -> Optional[str]:
+    """Export aoi context stats to CSV files (best-effort).
+
+    This is designed to work without any AI provider so users can bundle
+    standard stats into a report folder.
+    Returns an error message on failure, else None.
+    """
+    if not ctx:
+        return "context is empty"
+
+    try:
+        import csv
+        import json
+    except Exception as e:  # pragma: no cover
+        return str(e)
+
+    try:
+        layers = ctx.get("layers") or []
+    except Exception:
+        layers = []
+
+    try:
+        out_dir = os.path.dirname(str(layers_csv_path or ""))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    try:
+        out_dir = os.path.dirname(str(numeric_fields_csv_path or ""))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    def _as_text(v: Any) -> str:
+        try:
+            if v is None:
+                return ""
+            if isinstance(v, (dict, list)):
+                return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+            return str(v)
+        except Exception:
+            return ""
+
+    # 1) Layer summary CSV (one row per layer)
+    try:
+        fieldnames = [
+            "layer_id",
+            "layer_name",
+            "layer_type",
+            "group_path",
+            "crs",
+            "provider",
+            "wkb",
+            "source",
+            # ArchToolkit metadata
+            "tool_id",
+            "run_id",
+            "kind",
+            "units",
+            "created_at",
+            # Common vector stats
+            "features",
+            "scanned",
+            "total_length_m",
+            "total_area_m2",
+            "top_field",
+            "top_values_preview",
+            "dist_to_aoi_centroid_mean_m",
+            "dist_to_aoi_centroid_min_m",
+            "dist_to_aoi_centroid_max_m",
+            "dist_to_aoi_centroid_n",
+            # Common raster stats
+            "pixel_count",
+            "raster_min",
+            "raster_mean",
+            "raster_max",
+            "gt_0_5_pct",
+            # Raw JSON
+            "stats_json",
+        ]
+        with open(str(layers_csv_path), "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for lyr in layers:
+                if not isinstance(lyr, dict):
+                    continue
+                meta = lyr.get("archtoolkit") or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                stats = lyr.get("stats") or {}
+                if not isinstance(stats, dict):
+                    stats = {}
+
+                top_preview = ""
+                try:
+                    tv = stats.get("top_values") or []
+                    if isinstance(tv, list) and tv:
+                        top_preview = ";".join([f"{d.get('value')}={d.get('count')}" for d in tv[:10] if isinstance(d, dict)])
+                except Exception:
+                    top_preview = ""
+
+                dist = stats.get("dist_to_aoi_centroid_m") or {}
+                if not isinstance(dist, dict):
+                    dist = {}
+
+                row = {
+                    "layer_id": _as_text(lyr.get("id")),
+                    "layer_name": _as_text(lyr.get("name")),
+                    "layer_type": _as_text(lyr.get("type")),
+                    "group_path": _as_text(lyr.get("group_path")),
+                    "crs": _as_text(lyr.get("crs")),
+                    "provider": _as_text(lyr.get("provider")),
+                    "wkb": _as_text(lyr.get("wkb")),
+                    "source": _as_text(lyr.get("source")),
+                    # metadata
+                    "tool_id": _as_text(meta.get("tool_id")),
+                    "run_id": _as_text(meta.get("run_id")),
+                    "kind": _as_text(meta.get("kind")),
+                    "units": _as_text(meta.get("units")),
+                    "created_at": _as_text(meta.get("created_at")),
+                    # vector stats
+                    "features": _as_text(stats.get("features")),
+                    "scanned": _as_text(stats.get("scanned")),
+                    "total_length_m": _as_text(stats.get("total_length_m")),
+                    "total_area_m2": _as_text(stats.get("total_area_m2")),
+                    "top_field": _as_text(stats.get("top_field")),
+                    "top_values_preview": _as_text(top_preview),
+                    "dist_to_aoi_centroid_mean_m": _as_text(dist.get("mean")),
+                    "dist_to_aoi_centroid_min_m": _as_text(dist.get("min")),
+                    "dist_to_aoi_centroid_max_m": _as_text(dist.get("max")),
+                    "dist_to_aoi_centroid_n": _as_text(dist.get("n")),
+                    # raster stats
+                    "pixel_count": _as_text(stats.get("count")),
+                    "raster_min": _as_text(stats.get("min")),
+                    "raster_mean": _as_text(stats.get("mean")),
+                    "raster_max": _as_text(stats.get("max")),
+                    "gt_0_5_pct": _as_text(stats.get("gt_0_5_pct")),
+                    # raw
+                    "stats_json": _as_text(lyr.get("stats")),
+                }
+                w.writerow(row)
+    except Exception as e:
+        return str(e)
+
+    # 2) Numeric fields CSV (long format, one row per layer-field)
+    try:
+        fieldnames = [
+            "layer_id",
+            "layer_name",
+            "group_path",
+            "layer_type",
+            "tool_id",
+            "run_id",
+            "kind",
+            "units",
+            "field",
+            "n",
+            "min",
+            "mean",
+            "max",
+        ]
+        with open(str(numeric_fields_csv_path), "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for lyr in layers:
+                if not isinstance(lyr, dict):
+                    continue
+                stats = lyr.get("stats") or {}
+                if not isinstance(stats, dict):
+                    continue
+                num = stats.get("numeric_fields") or {}
+                if not isinstance(num, dict) or not num:
+                    continue
+
+                meta = lyr.get("archtoolkit") or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+
+                for fname, d in num.items():
+                    if not isinstance(d, dict):
+                        continue
+                    w.writerow(
+                        {
+                            "layer_id": _as_text(lyr.get("id")),
+                            "layer_name": _as_text(lyr.get("name")),
+                            "group_path": _as_text(lyr.get("group_path")),
+                            "layer_type": _as_text(lyr.get("type")),
+                            "tool_id": _as_text(meta.get("tool_id")),
+                            "run_id": _as_text(meta.get("run_id")),
+                            "kind": _as_text(meta.get("kind")),
+                            "units": _as_text(meta.get("units")),
+                            "field": _as_text(fname),
+                            "n": _as_text(d.get("n")),
+                            "min": _as_text(d.get("min")),
+                            "mean": _as_text(d.get("mean")),
+                            "max": _as_text(d.get("max")),
+                        }
+                    )
+    except Exception as e:
+        return str(e)
+
+    return None

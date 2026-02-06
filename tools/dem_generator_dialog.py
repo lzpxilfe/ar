@@ -25,7 +25,7 @@ from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtGui import QIcon
 import processing
 import tempfile
-from .utils import push_message, restore_ui_focus
+from .utils import new_run_id, push_message, restore_ui_focus, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
 
 # Load the UI file
@@ -589,6 +589,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         selected_layers = self.get_selected_layers()
         output_path = self.fileOutput.filePath()
         pixel_size = self.spinPixelSize.value()
+        run_id = new_run_id("dem")
         
         if not selected_layers:
             push_message(self.iface, "오류", "레이어를 체크해주세요", level=2)
@@ -684,7 +685,23 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             
             # Add result to map
             if result and os.path.exists(output_path):
-                self.iface.addRasterLayer(output_path, "생성된 DEM")
+                out_layer = self.iface.addRasterLayer(output_path, "생성된 DEM")
+                try:
+                    if out_layer is not None:
+                        set_archtoolkit_layer_metadata(
+                            out_layer,
+                            tool_id="dem_generate",
+                            run_id=str(run_id),
+                            kind="dem",
+                            units="m",
+                            params={
+                                "pixel_size_m": float(pixel_size),
+                                "method": str(method_name or ""),
+                                "algorithm": str(algorithm or ""),
+                            },
+                        )
+                except Exception:
+                    pass
                 push_message(self.iface, "완료", f"DEM 생성 완료! ({len(selected_layers)}개 레이어 병합)", level=0)
                 self.accept()
             else:

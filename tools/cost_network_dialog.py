@@ -69,6 +69,7 @@ from .utils import (
     log_message,
     push_message,
     restore_ui_focus,
+    set_archtoolkit_layer_metadata,
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
@@ -2543,6 +2544,34 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         line_layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
         line_layer.setLabelsEnabled(True)
+
+        try:
+            set_archtoolkit_layer_metadata(
+                line_layer,
+                tool_id="cost_network",
+                run_id=str(run_id),
+                kind="edges",
+                units="m/min/kcal",
+                params={
+                    "network_mode": str(res.network_mode or ""),
+                    "cost_mode": str(res.cost_mode or ""),
+                    "model_label": str(res.model_label or ""),
+                },
+            )
+            set_archtoolkit_layer_metadata(
+                pt_layer,
+                tool_id="cost_network",
+                run_id=str(run_id),
+                kind="nodes",
+                units="",
+                params={
+                    "network_mode": str(res.network_mode or ""),
+                    "cost_mode": str(res.cost_mode or ""),
+                    "model_label": str(res.model_label or ""),
+                },
+            )
+        except Exception:
+            pass
 
         project.addMapLayer(line_layer, False)
         project.addMapLayer(pt_layer, False)

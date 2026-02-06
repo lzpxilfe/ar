@@ -31,7 +31,7 @@ from qgis.core import (
     QgsRasterShader, QgsColorRampShader, QgsSingleBandPseudoColorRenderer
 )
 import processing
-from .utils import cleanup_files, push_message, restore_ui_focus
+from .utils import cleanup_files, push_message, restore_ui_focus, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
@@ -278,6 +278,17 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 cls_info = self.SLOPE_CLASSIFICATIONS[cls_key]
                 layer = QgsRasterLayer(output, f"경사도_{cls_info['name']}")
                 if layer.isValid():
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            layer,
+                            tool_id="terrain_analysis",
+                            run_id=str(run_id),
+                            kind="slope",
+                            units="deg",
+                            params={"classification": str(cls_key)},
+                        )
+                    except Exception:
+                        pass
                     QgsProject.instance().addMapLayer(layer)
                     self.apply_style(layer, cls_info['classes'], 90)
                     results.append("경사도")
@@ -290,6 +301,16 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 })
                 layer = QgsRasterLayer(output, "사면방향_8방위")
                 if layer.isValid():
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            layer,
+                            tool_id="terrain_analysis",
+                            run_id=str(run_id),
+                            kind="aspect",
+                            units="deg",
+                        )
+                    except Exception:
+                        pass
                     QgsProject.instance().addMapLayer(layer)
                     self.apply_style(layer, self.ASPECT_CLASSES, 360)
                     results.append("사면방향")
@@ -304,6 +325,17 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 layer_name = f"TRI Riley 1999 (험준기준:{tri_max})"
                 layer = QgsRasterLayer(output, layer_name)
                 if layer.isValid():
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            layer,
+                            tool_id="terrain_analysis",
+                            run_id=str(run_id),
+                            kind="tri",
+                            units="index",
+                            params={"tri_max": float(tri_max)},
+                        )
+                    except Exception:
+                        pass
                     QgsProject.instance().addMapLayer(layer)
                     self.apply_style(layer, tri_classes, tri_max * 2.5)
                     results.append("TRI")
@@ -320,6 +352,16 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 })
                 layer = QgsRasterLayer(output, "Roughness Wilson 2000")
                 if layer.isValid():
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            layer,
+                            tool_id="terrain_analysis",
+                            run_id=str(run_id),
+                            kind="roughness",
+                            units="index",
+                        )
+                    except Exception:
+                        pass
                     QgsProject.instance().addMapLayer(layer)
                     self.apply_style(layer, self.ROUGHNESS_CLASSES, 20)
                     results.append("Roughness")
@@ -436,6 +478,17 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             layer = QgsRasterLayer(output, layer_name)
             
             if layer.isValid():
+                try:
+                    set_archtoolkit_layer_metadata(
+                        layer,
+                        tool_id="terrain_analysis",
+                        run_id=str(run_id),
+                        kind="tpi",
+                        units="index",
+                        params={"radius": int(radius), "threshold": float(threshold)},
+                    )
+                except Exception:
+                    pass
                 QgsProject.instance().addMapLayer(layer)
                 self.apply_style(layer, tpi_classes, 10)
                 results.append("TPI")
@@ -528,6 +581,21 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
                 layer_name = f"지형분류 (경사:{slope_thresh}°, TPI:{tpi_low:.1f}~{tpi_high:.1f})"
                 layer = QgsRasterLayer(output_path, layer_name)
                 if layer.isValid():
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            layer,
+                            tool_id="terrain_analysis",
+                            run_id=str(run_id),
+                            kind="slope_position",
+                            units="class",
+                            params={
+                                "slope_thresh_deg": float(slope_thresh),
+                                "tpi_low": float(tpi_low),
+                                "tpi_high": float(tpi_high),
+                            },
+                        )
+                    except Exception:
+                        pass
                     QgsProject.instance().addMapLayer(layer)
                     self.apply_style(layer, self.SLOPE_POSITION_CLASSES, 6)
                     results.append("지형분류")

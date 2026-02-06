@@ -35,7 +35,14 @@ from qgis.core import (
     QgsLineSymbol, QgsSingleSymbolRenderer, QgsSymbolLayer, QgsProperty, Qgis, QgsDistanceArea, QgsCoordinateTransform
 )
 from qgis.gui import QgsMapLayerComboBox, QgsMapToolEmitPoint, QgsRubberBand
-from .utils import log_message, push_message, restore_ui_focus, transform_point
+from .utils import (
+    log_message,
+    new_run_id,
+    push_message,
+    restore_ui_focus,
+    set_archtoolkit_layer_metadata,
+    transform_point,
+)
 from .live_log_dialog import ensure_live_log_dialog
 
 PROFILE_LAYER_NAME = "Terrain Profile Lines"
@@ -2186,6 +2193,21 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             layer.setCustomProperty(PROFILE_KIND_PROP, PROFILE_KIND_SINGLE)
         except Exception:
             pass
+        try:
+            set_archtoolkit_layer_metadata(
+                layer,
+                tool_id="terrain_profile",
+                run_id=new_run_id("terrain_profile"),
+                kind="profile_single",
+                units="m",
+                params={
+                    "no": int(no),
+                    "distance_m": float(total_distance),
+                    "samples": int(num_samples or 0),
+                },
+            )
+        except Exception:
+            pass
 
         project = QgsProject.instance()
         sub = self._ensure_single_group()
@@ -2208,6 +2230,17 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
             try:
                 self._ensure_profile_layer_schema(layer)
                 self._connect_profile_layer(layer)
+            except Exception:
+                pass
+            try:
+                if not str(layer.customProperty("archtoolkit/tool_id", "") or "").strip():
+                    set_archtoolkit_layer_metadata(
+                        layer,
+                        tool_id="terrain_profile",
+                        run_id=new_run_id("terrain_profile"),
+                        kind="profile_lines",
+                        units="m",
+                    )
             except Exception:
                 pass
             return layer
@@ -2249,6 +2282,16 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         group = root.findGroup(PROFILE_GROUP_NAME)
         if group is None:
             group = root.insertGroup(0, PROFILE_GROUP_NAME)
+        try:
+            set_archtoolkit_layer_metadata(
+                layer,
+                tool_id="terrain_profile",
+                run_id=new_run_id("terrain_profile"),
+                kind="profile_lines",
+                units="m",
+            )
+        except Exception:
+            pass
         project.addMapLayer(layer, False)
         group.insertLayer(0, layer)
 

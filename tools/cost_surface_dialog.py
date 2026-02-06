@@ -62,6 +62,7 @@ from .utils import (
     log_message,
     push_message,
     restore_ui_focus,
+    set_archtoolkit_layer_metadata,
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
@@ -2805,6 +2806,21 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         try:
             layer.setCustomProperty("archtoolkit/cost_surface/run_id", str(run_id))
             layer.setCustomProperty("archtoolkit/cost_surface/kind", str(kind))
+        except Exception:
+            pass
+        try:
+            units = ""
+            if str(kind) == "cost_raster":
+                units = "min"
+            elif str(kind) == "energy_raster":
+                units = "kcal"
+            set_archtoolkit_layer_metadata(
+                layer,
+                tool_id="cost_surface",
+                run_id=str(run_id),
+                kind=str(kind or ""),
+                units=units,
+            )
         except Exception:
             pass
 

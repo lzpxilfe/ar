@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
+import json
 import os
 import queue
 import tempfile
 import traceback
+import uuid
 from datetime import datetime
 
 from qgis.core import (
@@ -306,3 +308,90 @@ def push_message(iface, title, text, level=0, duration=3):
             log_message(f"(messageBar failed) {title}: {text}", level=Qgis.Warning)
         except Exception:
             pass
+
+
+def new_run_id(prefix: str = "run") -> str:
+    """Generate a short run id for grouping outputs.
+
+    This is intended for tagging layers created by ArchToolkit tools so AI/reporting
+    can reliably group related outputs even if layer names change.
+    """
+    p = str(prefix or "run").strip().replace(" ", "_")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    rnd = uuid.uuid4().hex[:6]
+    return f"{p}-{ts}-{rnd}"
+
+
+def set_archtoolkit_layer_metadata(
+    layer,
+    *,
+    tool_id: str,
+    run_id: str,
+    kind: str = "",
+    units: str = "",
+    params: dict = None,
+) -> None:
+    """Attach stable metadata to a QGIS layer (best-effort).
+
+    Stored as layer custom properties so it persists in the project and can be
+    read by AI 조사요약 / 리포트 번들 내보내기.
+    """
+    if layer is None:
+        return
+    tool_id0 = str(tool_id or "").strip()
+    run_id0 = str(run_id or "").strip()
+    if not tool_id0 or not run_id0:
+        return
+
+    try:
+        layer.setCustomProperty("archtoolkit/tool_id", tool_id0)
+        layer.setCustomProperty("archtoolkit/run_id", run_id0)
+        if kind:
+            layer.setCustomProperty("archtoolkit/kind", str(kind or "").strip())
+        if units:
+            layer.setCustomProperty("archtoolkit/units", str(units or "").strip())
+        layer.setCustomProperty("archtoolkit/created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        if params:
+            try:
+                layer.setCustomProperty(
+                    "archtoolkit/params_json",
+                    json.dumps(params, ensure_ascii=False, separators=(",", ":")),
+                )
+            except Exception:
+                pass
+    except Exception:
+        # Never crash due to metadata tagging.
+        pass
+
+
+def get_archtoolkit_layer_metadata(layer) -> dict:
+    """Read ArchToolkit metadata from a layer (best-effort)."""
+    if layer is None:
+        return {}
+    try:
+        tool_id = str(layer.customProperty("archtoolkit/tool_id", "") or "").strip()
+        run_id = str(layer.customProperty("archtoolkit/run_id", "") or "").strip()
+        if not tool_id and not run_id:
+            return {}
+        out = {"tool_id": tool_id, "run_id": run_id}
+
+        kind = str(layer.customProperty("archtoolkit/kind", "") or "").strip()
+        units = str(layer.customProperty("archtoolkit/units", "") or "").strip()
+        created_at = str(layer.customProperty("archtoolkit/created_at", "") or "").strip()
+        params_json = str(layer.customProperty("archtoolkit/params_json", "") or "").strip()
+
+        if kind:
+            out["kind"] = kind
+        if units:
+            out["units"] = units
+        if created_at:
+            out["created_at"] = created_at
+        if params_json:
+            try:
+                out["params"] = json.loads(params_json)
+            except Exception:
+                # keep raw if not valid json
+                out["params_json"] = params_json
+        return out
+    except Exception:
+        return {}

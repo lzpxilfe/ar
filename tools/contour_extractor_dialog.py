@@ -23,7 +23,7 @@ from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import Qt
 from qgis.core import QgsProject, QgsVectorLayer, QgsMapLayerProxyModel
 import processing
-from .utils import push_message
+from .utils import push_message, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
 
 # Load the UI file
@@ -206,6 +206,17 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
             if result and os.path.exists(temp_output):
                 output_layer = QgsVectorLayer(temp_output, f"등고선_{interval}m", "ogr")
                 if output_layer.isValid():
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            output_layer,
+                            tool_id="contour_extract",
+                            run_id=str(run_id),
+                            kind="contours",
+                            units="m",
+                            params={"interval_m": float(interval)},
+                        )
+                    except Exception:
+                        pass
                     QgsProject.instance().addMapLayer(output_layer)
                     self.iface.messageBar().pushMessage("완료", f"등고선 생성 완료 (간격: {interval}m)", level=0)
                     self.accept()

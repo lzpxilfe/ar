@@ -57,6 +57,7 @@ from .utils import (
     log_message,
     push_message,
     restore_ui_focus,
+    set_archtoolkit_layer_metadata,
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
@@ -1225,7 +1226,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         push_message(self.iface, "PPA", f"근접성 네트워크 생성 중... (노드 {n}, 간선 {len(edges)})", level=0, duration=4)
         QtWidgets.QApplication.processEvents()
 
-        edge_layer, run_group = self._add_edge_layer(
+        edge_layer, run_group, run_id = self._add_edge_layer(
             nodes=nodes,
             edges=sorted(edges),
             layer_name=layer_name,
@@ -1241,6 +1242,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                 edges=set(edges),
                 crs_authid=crs_authid,
                 run_group=run_group,
+                run_id=run_id,
                 title="PPA_Nodes",
                 compute_closeness=compute_closeness,
                 compute_betweenness=compute_betweenness,
@@ -1482,6 +1484,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         edges: Set[Tuple[int, int]],
         crs_authid: str,
         run_group,
+        run_id: str,
         title: str,
         compute_closeness: bool,
         compute_betweenness: bool,
@@ -1619,6 +1622,17 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             pass
 
         project = QgsProject.instance()
+        try:
+            set_archtoolkit_layer_metadata(
+                layer,
+                tool_id="spatial_network",
+                run_id=str(run_id),
+                kind="nodes_metrics",
+                units="",
+                params={"title": str(title or "")},
+            )
+        except Exception:
+            pass
         project.addMapLayer(layer, False)
         try:
             run_group.addLayer(layer)
@@ -2044,7 +2058,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
             QgsField("mutual", QVariant.Int),
         ]
 
-        edge_layer, run_group = self._add_edge_layer(
+        edge_layer, run_group, run_id = self._add_edge_layer(
             nodes=nodes,
             edges=sorted(edges),
             layer_name="Visibility_LOS",
@@ -2099,6 +2113,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
                 edges=edges_for_metrics,
                 crs_authid=dem_layer.crs().authid(),
                 run_group=run_group,
+                run_id=run_id,
                 title="LOS_Nodes",
                 compute_closeness=compute_closeness,
                 compute_betweenness=compute_betweenness,
@@ -2267,6 +2282,22 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+        try:
+            set_archtoolkit_layer_metadata(
+                layer,
+                tool_id="spatial_network",
+                run_id=str(run_id),
+                kind="edges",
+                units="m",
+                params={
+                    "layer_name": str(layer_name or ""),
+                    "add_dist": bool(add_dist),
+                    "has_status": bool(status_by_edge is not None),
+                    "has_ratio": bool(ratio_by_edge is not None),
+                },
+            )
+        except Exception:
+            pass
         project.addMapLayer(layer, False)
         run_group.addLayer(layer)
 
@@ -2280,4 +2311,4 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
-        return layer, run_group
+        return layer, run_group, run_id

@@ -36,7 +36,16 @@ from qgis.core import (
 from qgis.gui import QgsMapToolEmitPoint, QgsRubberBand, QgsSnapIndicator, QgsMapCanvasAnnotationItem
 from qgis.PyQt.QtGui import QTextDocument
 
-from .utils import cleanup_files, is_metric_crs, log_message, restore_ui_focus, push_message, transform_point
+from .utils import (
+    cleanup_files,
+    is_metric_crs,
+    log_message,
+    new_run_id,
+    push_message,
+    restore_ui_focus,
+    set_archtoolkit_layer_metadata,
+    transform_point,
+)
 from .live_log_dialog import ensure_live_log_dialog
 
 # Load the UI file
@@ -1777,6 +1786,24 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             push_message(self.iface, "AOI 통계", "AOI 통계 레이어 생성 실패", level=1, duration=6)
             return
 
+        try:
+            parent_run_id = str(raster_layer.customProperty("archtoolkit/run_id", "") or "").strip()
+            if not parent_run_id:
+                parent_run_id = new_run_id("viewshed")
+            set_archtoolkit_layer_metadata(
+                stats_layer,
+                tool_id="viewshed",
+                run_id=parent_run_id,
+                kind="aoi_stats",
+                units="m2/%",
+                params={
+                    "raster_name": str(raster_layer.name() or ""),
+                    "aoi_layer": str(aoi_layer.name() or ""),
+                    "selected_only": bool(selected_only),
+                },
+            )
+        except Exception:
+            pass
         QgsProject.instance().addMapLayer(stats_layer)
         try:
             self.result_aux_layer_map.setdefault(raster_layer.id(), []).append(stats_layer.id())
@@ -1882,6 +1909,28 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 viewshed_layer = QgsRasterLayer(raster_path, layer_name)
                 
                 if viewshed_layer.isValid():
+                    try:
+                        kind = "viewshed_single"
+                        if use_higuchi:
+                            kind = "higuchi"
+                        elif is_reverse:
+                            kind = "reverse_single"
+                        set_archtoolkit_layer_metadata(
+                            viewshed_layer,
+                            tool_id="viewshed",
+                            run_id=str(run_id),
+                            kind=kind,
+                            units="mask",
+                            params={
+                                "max_dist_m": float(max_dist),
+                                "observer_height_m": float(obs_height),
+                                "target_height_m": float(tgt_height),
+                                "use_higuchi": bool(use_higuchi),
+                                "reverse": bool(is_reverse),
+                            },
+                        )
+                    except Exception:
+                        pass
                     if use_higuchi:
                         self.apply_higuchi_style(viewshed_layer)
                     else:
@@ -2469,10 +2518,22 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             if mask_geometries_dem:
                 self._burn_nodata_for_geometries_in_raster(final_output, mask_geometries_dem, nodata_value=-9999)
 
+            result_run_id = new_run_id("viewshed")
             viewshed_layer = QgsRasterLayer(final_output, layer_name)
             if not viewshed_layer.isValid():
                 raise Exception("결과 레이어 로드 실패")
 
+            try:
+                set_archtoolkit_layer_metadata(
+                    viewshed_layer,
+                    tool_id="viewshed",
+                    run_id=str(result_run_id),
+                    kind="reverse_union",
+                    units="mask",
+                    params={"max_dist_m": float(max_dist), "points_n": int(len(points))},
+                )
+            except Exception:
+                pass
             self.apply_viewshed_style(viewshed_layer)
             QgsProject.instance().addMapLayer(viewshed_layer)
             self.last_result_layer_id = viewshed_layer.id()
@@ -2550,6 +2611,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             self.create_observer_layer("역방향_대상물", points_info)
 
         forward_raster = None
+        result_run_id = new_run_id("viewshed")
         try:
             self.iface.messageBar().pushMessage("처리 중", "시각적 불균등: 1/3 (정방향 가시권)", level=0)
             forward_raster = self._compute_viewshed_raster_file(
@@ -2592,6 +2654,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             reverse_layer = QgsRasterLayer(reverse_raster, reverse_layer_name)
             if not reverse_layer.isValid():
                 raise Exception("역방향 결과 레이어 로드 실패")
+            try:
+                set_archtoolkit_layer_metadata(
+                    reverse_layer,
+                    tool_id="viewshed",
+                    run_id=str(result_run_id),
+                    kind="reverse_visual_imbalance_reverse",
+                    units="mask",
+                    params={"max_dist_m": float(max_dist)},
+                )
+            except Exception:
+                pass
             self.apply_viewshed_style(reverse_layer)
             QgsProject.instance().addMapLayer(reverse_layer)
             self.last_result_layer_id = reverse_layer.id()
@@ -2599,6 +2672,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             imbalance_layer = QgsRasterLayer(imbalance_raster, imbalance_layer_name)
             if not imbalance_layer.isValid():
                 raise Exception("불균등 결과 레이어 로드 실패")
+            try:
+                set_archtoolkit_layer_metadata(
+                    imbalance_layer,
+                    tool_id="viewshed",
+                    run_id=str(result_run_id),
+                    kind="visual_imbalance",
+                    units="class",
+                    params={"max_dist_m": float(max_dist)},
+                )
+            except Exception:
+                pass
             self.apply_visual_imbalance_style(imbalance_layer)
             QgsProject.instance().addMapLayer(imbalance_layer)
 
@@ -2612,6 +2696,17 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     layer_name=f"역방향_반경_{int(max_dist)}m",
                 )
                 if ring_layer is not None:
+                    try:
+                        set_archtoolkit_layer_metadata(
+                            ring_layer,
+                            tool_id="viewshed",
+                            run_id=str(result_run_id),
+                            kind="analysis_radius_ring",
+                            units="m",
+                            params={"max_dist_m": float(max_dist)},
+                        )
+                    except Exception:
+                        pass
                     self.result_aux_layer_map.setdefault(imbalance_layer.id(), []).append(ring_layer.id())
             except Exception:
                 pass
@@ -3179,6 +3274,29 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
             layers_to_add.append(obs_layer)
 
         for lyr in layers_to_add:
+            try:
+                k = "los_layer"
+                u = ""
+                if lyr is observer_layer:
+                    k = "los_observer"
+                elif lyr is target_layer:
+                    k = "los_target"
+                elif lyr is obs_layer:
+                    k = "los_first_obstruction"
+                    u = "m"
+                else:
+                    k = "los_line"
+                    u = "m"
+                set_archtoolkit_layer_metadata(
+                    lyr,
+                    tool_id="viewshed",
+                    run_id=str(run_id),
+                    kind=k,
+                    units=u,
+                    params={"total_dist_m": float(total_dist), "visible": bool(is_visible_overall)},
+                )
+            except Exception:
+                pass
             project.addMapLayer(lyr, False)
             run_group.addLayer(lyr)
 
@@ -3792,9 +3910,30 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                 layer_name = f"가시권_가중누적_{len(points)}개점"
             else:
                 layer_name = f"가시권_누적_{len(points)}개점"
+            result_run_id = new_run_id("viewshed")
             viewshed_layer = QgsRasterLayer(final_output, layer_name)
             
             if viewshed_layer.isValid():
+                try:
+                    kind = "cumulative"
+                    if weighted_mode and normalize_weighted:
+                        kind = "weighted_percent"
+                    elif weighted_mode:
+                        kind = "weighted_cumulative"
+                    elif is_union_mode:
+                        kind = "union"
+                    elif is_count_mode:
+                        kind = "count"
+                    set_archtoolkit_layer_metadata(
+                        viewshed_layer,
+                        tool_id="viewshed",
+                        run_id=str(result_run_id),
+                        kind=kind,
+                        units="mask/count",
+                        params={"points_n": int(len(points))},
+                    )
+                except Exception:
+                    pass
                 # Apply result style
                 if weighted_mode:
                     try:
@@ -3820,6 +3959,18 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                     points,
                     weights=(weights if weighted_mode and weights and len(weights) == len(points) else None),
                 )
+                try:
+                    if observer_layer is not None and observer_layer.isValid():
+                        set_archtoolkit_layer_metadata(
+                            observer_layer,
+                            tool_id="viewshed",
+                            run_id=str(result_run_id),
+                            kind="observer_points",
+                            units="",
+                            params={"points_n": int(len(points))},
+                        )
+                except Exception:
+                    pass
                 
                 QgsProject.instance().addMapLayer(viewshed_layer)
                 self.last_result_layer_id = viewshed_layer.id()

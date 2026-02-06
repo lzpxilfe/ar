@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from typing import List, Optional
 
 from qgis.PyQt import QtWidgets
@@ -148,6 +149,12 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.iface = iface
         self._selected_layer_ids: List[str] = []
+        self._last_ctx: Optional[dict] = None
+        self._last_ctx_key = None
+        self._last_report_text: str = ""
+        self._last_provider: str = ""
+        self._last_model: str = ""
+        self._last_generated_at: str = ""
         self._setup_ui()
         self._update_provider_ui()
         self._refresh_key_status()
@@ -349,12 +356,18 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         btn_row = QtWidgets.QHBoxLayout()
         self.btnGenerate = QtWidgets.QPushButton("AI 요약 생성")
         self.btnGenerate.clicked.connect(self._on_generate)
+        self.btnBundle = QtWidgets.QPushButton("번들 저장…")
+        self.btnBundle.clicked.connect(self._on_export_bundle)
+        self.btnExportCsv = QtWidgets.QPushButton("통계 CSV…")
+        self.btnExportCsv.clicked.connect(self._on_export_stats_csv)
         self.btnExport = QtWidgets.QPushButton("저장…")
         self.btnExport.clicked.connect(self._on_export)
         self.btnClose = QtWidgets.QPushButton("닫기")
         self.btnClose.clicked.connect(self.reject)
 
         btn_row.addWidget(self.btnGenerate)
+        btn_row.addWidget(self.btnBundle)
+        btn_row.addWidget(self.btnExportCsv)
         btn_row.addWidget(self.btnExport)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btnClose)
@@ -544,6 +557,11 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             "당신은 한국의 고고학/문화유산 연구자를 돕는 GIS 분석 보조자입니다.\n"
             "아래 JSON은 QGIS 프로젝트에서 ‘조사지역(AOI) 반경’ 내의 레이어들을 요약한 것입니다.\n"
             "\n"
+            "중요: 각 레이어 항목에 `archtoolkit` 메타데이터가 포함될 수 있습니다.\n"
+            "- 가능하면 `archtoolkit.tool_id/kind/units/run_id`를 우선 사용해 레이어 의미를 해석하세요.\n"
+            "- 메타데이터가 있는 경우, 레이어 이름만 보고 임의로 의미를 추측하지 마세요.\n"
+            "- 동일 `run_id`는 같은 도구 실행(run)에서 나온 결과이므로 묶어서 설명해도 됩니다.\n"
+            "\n"
             "요청:\n"
             "1) 한국어로, 보고서/업무 메모 형태로 정리해 주세요.\n"
             "2) 과장/추측 금지: 수치가 없으면 단정하지 말고 '추정/참고'로 표시.\n"
@@ -560,6 +578,110 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             "JSON:\n"
             f"{ctx_json}\n"
         )
+
+    def _sanitize_filename(self, name: str, *, fallback: str = "aoi_report") -> str:
+        s = str(name or "").strip()
+        if not s:
+            return fallback
+        for ch in '<>:"/\\|?*':
+            s = s.replace(ch, "_")
+        s = s.replace("\r", " ").replace("\n", " ").strip().strip(".")
+        s = " ".join(s.split())
+        return (s or fallback)[:80]
+
+    def _make_ctx_key(
+        self,
+        *,
+        aoi_layer,
+        selected_only: bool,
+        radius_m: float,
+        only_arch: bool,
+        exclude_styling: bool,
+        scope: str,
+        target_group: str,
+        layer_ids,
+        max_layers: int,
+    ):
+        try:
+            aoi_id = str(aoi_layer.id() or "")
+        except Exception:
+            aoi_id = ""
+        try:
+            r0 = int(round(float(radius_m)))
+        except Exception:
+            r0 = radius_m
+        try:
+            lids = tuple([str(x or "").strip() for x in (layer_ids or []) if str(x or "").strip()])
+        except Exception:
+            lids = ()
+        return (
+            aoi_id,
+            bool(selected_only),
+            r0,
+            bool(only_arch),
+            bool(exclude_styling),
+            str(scope or ""),
+            str(target_group or ""),
+            lids,
+            int(max_layers),
+        )
+
+    def _get_or_build_ctx(self, *, max_layers: int = 40, prompt_select_layers: bool = True):
+        aoi_layer = self.cmbAoi.currentLayer()
+        if aoi_layer is None or not isinstance(aoi_layer, QgsVectorLayer):
+            return None, "조사지역(AOI) 폴리곤 레이어를 선택하세요."
+
+        radius_m = float(self.spinRadius.value())
+        selected_only = bool(self.chkSelectedOnly.isChecked())
+        only_arch = bool(self.chkOnlyArchToolkit.isChecked())
+        exclude_styling = bool(self.chkExcludeStyling.isChecked())
+
+        scope = self._get_layer_scope()
+        target_group = ""
+        layer_ids = None
+        if scope == "group":
+            target_group = self._get_target_group_path()
+            if not target_group:
+                return None, "대상 그룹을 선택하세요."
+            only_arch = False
+        elif scope == "layers":
+            if not self._selected_layer_ids and prompt_select_layers:
+                self._on_select_layers()
+            if not self._selected_layer_ids:
+                return None, "대상 레이어를 선택하세요."
+            layer_ids = list(self._selected_layer_ids)
+            only_arch = False
+
+        key = self._make_ctx_key(
+            aoi_layer=aoi_layer,
+            selected_only=selected_only,
+            radius_m=radius_m,
+            only_arch=only_arch,
+            exclude_styling=exclude_styling,
+            scope=scope,
+            target_group=target_group,
+            layer_ids=layer_ids,
+            max_layers=max_layers,
+        )
+        if self._last_ctx is not None and self._last_ctx_key == key:
+            return self._last_ctx, None
+
+        ctx, err = ai_aoi_summary.build_aoi_context(
+            aoi_layer=aoi_layer,
+            selected_only=selected_only,
+            radius_m=radius_m,
+            only_archtoolkit_layers=only_arch,
+            exclude_styling_layers=exclude_styling,
+            layer_ids=layer_ids,
+            group_path_prefix=target_group or None,
+            max_layers=int(max_layers),
+        )
+        if err:
+            return None, err
+        if ctx:
+            self._last_ctx = ctx
+            self._last_ctx_key = key
+        return ctx, None
 
     def _on_generate(self):
         aoi_layer = self.cmbAoi.currentLayer()
@@ -584,51 +706,29 @@ class AiAoiReportDialog(QtWidgets.QDialog):
 
             model = str(self.txtModel.text() or "").strip() or ai_gemini.get_configured_model()
 
-        radius_m = float(self.spinRadius.value())
-        selected_only = bool(self.chkSelectedOnly.isChecked())
-        only_arch = bool(self.chkOnlyArchToolkit.isChecked())
-        exclude_styling = bool(self.chkExcludeStyling.isChecked())
-
-        scope = self._get_layer_scope()
-        target_group = None
-        layer_ids = None
-        if scope == "group":
-            target_group = self._get_target_group_path()
-            if not target_group:
-                push_message(self.iface, "오류", "대상 그룹을 선택하세요. (또는 ‘자동’으로 변경)", level=2, duration=7)
-                return
-            only_arch = False
-        elif scope == "layers":
-            if not self._selected_layer_ids:
-                self._on_select_layers()
-            if not self._selected_layer_ids:
-                push_message(self.iface, "오류", "대상 레이어를 선택하세요. (또는 ‘자동’으로 변경)", level=2, duration=7)
-                return
-            layer_ids = list(self._selected_layer_ids)
-            only_arch = False
-
         try:
             ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
         except Exception:
             pass
 
         push_message(self.iface, "AI 요약", "AOI 주변 레이어 요약 생성 중…", level=0, duration=4)
-        ctx, err = ai_aoi_summary.build_aoi_context(
-            aoi_layer=aoi_layer,
-            selected_only=selected_only,
-            radius_m=radius_m,
-            only_archtoolkit_layers=only_arch,
-            exclude_styling_layers=exclude_styling,
-            layer_ids=layer_ids,
-            group_path_prefix=target_group,
-            max_layers=40,
-        )
-        if err:
-            push_message(self.iface, "오류", err, level=2, duration=8)
+        ctx, err = self._get_or_build_ctx(max_layers=40, prompt_select_layers=True)
+        if err or not ctx:
+            push_message(self.iface, "오류", err or "AOI 요약 컨텍스트를 만들 수 없습니다.", level=2, duration=8)
             return
-        if not ctx:
-            push_message(self.iface, "오류", "AOI 요약 컨텍스트를 만들 수 없습니다.", level=2, duration=8)
-            return
+
+        try:
+            self._last_provider = str(provider or "")
+        except Exception:
+            self._last_provider = ""
+        try:
+            self._last_model = str(model or "")
+        except Exception:
+            self._last_model = ""
+        try:
+            self._last_generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            self._last_generated_at = ""
 
         if not is_gemini:
             try:
@@ -638,6 +738,7 @@ class AiAoiReportDialog(QtWidgets.QDialog):
                 return
 
             self.txtOutput.setPlainText(text or "")
+            self._last_report_text = str(text or "")
             push_message(self.iface, "AI 요약", "완료 (로컬)", level=0, duration=4)
             return
 
@@ -669,12 +770,14 @@ class AiAoiReportDialog(QtWidgets.QDialog):
                     self.txtOutput.setPlainText(
                         "※ Gemini 호출 실패로 로컬 요약으로 대체했습니다.\n\n" + str(fallback)
                     )
+                    self._last_report_text = str(fallback or "")
                     push_message(self.iface, "AI 요약", "로컬 요약으로 대체 완료", level=1, duration=6)
             except Exception:
                 pass
             return
 
         self.txtOutput.setPlainText(text or "")
+        self._last_report_text = str(text or "")
         push_message(self.iface, "AI 요약", "완료", level=0, duration=4)
 
     def _on_help(self):
@@ -700,6 +803,8 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             "<b>팁</b><br>"
             "- AOI는 가능하면 <b>투영 CRS(미터)</b>에서 사용하세요.<br>"
             "- 대상 레이어가 너무 많거나 섞여 있으면, <b>대상 그룹/대상 레이어</b>를 지정해 범위를 좁히면 더 정확합니다.<br>"
+            "- <b>통계 CSV</b>는 AI 없이 AOI 주변 표준 통계를 CSV로 저장합니다.<br>"
+            "- <b>번들 저장</b>은 report.md + context.json + CSV + canvas.png + params.json을 한 폴더로 저장합니다.<br>"
             "- 레이어 이름/속성에 민감정보가 있으면 Gemini 모드 사용 시 전송될 수 있으니 주의하세요.<br>"
             "- 도면/Style 결과는 해석에 방해가 될 수 있어 기본적으로 제외(체크)하는 것을 권장합니다."
         )
@@ -728,3 +833,171 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             push_message(self.iface, "완료", f"저장했습니다: {path}", level=0, duration=5)
         except Exception as e:
             push_message(self.iface, "오류", f"저장 실패: {e}", level=2, duration=6)
+
+    def _on_export_stats_csv(self):
+        ctx, err = self._get_or_build_ctx(max_layers=40, prompt_select_layers=True)
+        if err or not ctx:
+            push_message(self.iface, "오류", err or "AOI 요약 컨텍스트를 만들 수 없습니다.", level=2, duration=8)
+            return
+
+        aoi = ctx.get("aoi") or {}
+        aoi_name = str(aoi.get("layer_name") or "").strip()
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        safe_aoi = self._sanitize_filename(aoi_name, fallback="AOI")
+        default_name = f"aoi_layers_summary_{safe_aoi}_{ts}.csv"
+
+        layers_path, _flt = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "통계 CSV 저장 (layers_summary)",
+            default_name,
+            "CSV (*.csv);;All Files (*.*)",
+        )
+        if not layers_path:
+            return
+
+        root, ext = os.path.splitext(str(layers_path))
+        if not ext:
+            layers_path = root + ".csv"
+        numeric_path = root + "_numeric_fields.csv"
+
+        err2 = ai_aoi_summary.export_aoi_context_csv(
+            ctx,
+            layers_csv_path=str(layers_path),
+            numeric_fields_csv_path=str(numeric_path),
+        )
+        if err2:
+            push_message(self.iface, "오류", f"CSV 저장 실패: {err2}", level=2, duration=8)
+            return
+        push_message(self.iface, "완료", f"CSV 저장 완료: {layers_path}, {numeric_path}", level=0, duration=6)
+
+    def _save_canvas_snapshot(self, path: str) -> Optional[str]:
+        try:
+            if self.iface is None:
+                return "iface is None"
+            canvas = self.iface.mapCanvas()
+            if canvas is None:
+                return "mapCanvas is None"
+
+            # Preferred (QGIS API)
+            try:
+                if hasattr(canvas, "saveAsImage"):
+                    canvas.saveAsImage(str(path))
+                    if os.path.exists(str(path)):
+                        return None
+            except Exception:
+                pass
+
+            # Fallback (Qt)
+            try:
+                pm = canvas.grab()
+                if pm is not None and (not pm.isNull()):
+                    ok = pm.save(str(path))
+                    if ok and os.path.exists(str(path)):
+                        return None
+            except Exception:
+                pass
+            return "snapshot failed"
+        except Exception as e:
+            return str(e)
+
+    def _on_export_bundle(self):
+        ctx, err = self._get_or_build_ctx(max_layers=40, prompt_select_layers=True)
+        if err or not ctx:
+            push_message(self.iface, "오류", err or "AOI 요약 컨텍스트를 만들 수 없습니다.", level=2, duration=8)
+            return
+
+        base_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "번들 저장 폴더 선택", "")
+        if not base_dir:
+            return
+
+        aoi = ctx.get("aoi") or {}
+        aoi_name = str(aoi.get("layer_name") or "").strip()
+        safe_aoi = self._sanitize_filename(aoi_name, fallback="AOI")
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        folder_base = f"ArchToolkit_AOI_Report_{safe_aoi}_{ts}"
+
+        bundle_dir = os.path.join(str(base_dir), folder_base)
+        try:
+            i = 1
+            while os.path.exists(bundle_dir):
+                bundle_dir = os.path.join(str(base_dir), f"{folder_base}_{i}")
+                i += 1
+            os.makedirs(bundle_dir, exist_ok=True)
+        except Exception as e:
+            push_message(self.iface, "오류", f"폴더 생성 실패: {e}", level=2, duration=8)
+            return
+
+        # Report text: use current UI text first, then last cached, else generate local.
+        report_text = ""
+        try:
+            report_text = str(self.txtOutput.toPlainText() or "")
+        except Exception:
+            report_text = ""
+        if not report_text.strip():
+            report_text = str(self._last_report_text or "")
+        if not report_text.strip():
+            try:
+                report_text = str(ai_local_summarizer.generate_report(ctx) or "")
+            except Exception:
+                report_text = ""
+
+        warnings: List[str] = []
+
+        try:
+            with open(os.path.join(bundle_dir, "report.md"), "w", encoding="utf-8") as f:
+                f.write(report_text)
+        except Exception as e:
+            warnings.append(f"report.md 저장 실패: {e}")
+
+        try:
+            with open(os.path.join(bundle_dir, "context.json"), "w", encoding="utf-8") as f:
+                f.write(json.dumps(ctx, ensure_ascii=False, indent=2))
+        except Exception as e:
+            warnings.append(f"context.json 저장 실패: {e}")
+
+        try:
+            params = {
+                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "provider": str(self._last_provider or self._get_provider() or ""),
+                "gemini_model": str(self._last_model or ""),
+                "aoi_layer_name": aoi_name,
+                "radius_m": ctx.get("radius_m"),
+                "options": ctx.get("options") or {},
+                "layers_count": int(len(ctx.get("layers") or [])),
+                "qgis_project_path": str(QgsProject.instance().fileName() or ""),
+            }
+            with open(os.path.join(bundle_dir, "params.json"), "w", encoding="utf-8") as f:
+                f.write(json.dumps(params, ensure_ascii=False, indent=2))
+        except Exception as e:
+            warnings.append(f"params.json 저장 실패: {e}")
+
+        try:
+            layers_csv_path = os.path.join(bundle_dir, "layers_summary.csv")
+            numeric_csv_path = os.path.join(bundle_dir, "numeric_fields.csv")
+            err2 = ai_aoi_summary.export_aoi_context_csv(
+                ctx,
+                layers_csv_path=str(layers_csv_path),
+                numeric_fields_csv_path=str(numeric_csv_path),
+            )
+            if err2:
+                warnings.append(f"CSV 저장 실패: {err2}")
+        except Exception as e:
+            warnings.append(f"CSV 저장 실패: {e}")
+
+        try:
+            snap_err = self._save_canvas_snapshot(os.path.join(bundle_dir, "canvas.png"))
+            if snap_err:
+                warnings.append(f"canvas.png 저장 실패: {snap_err}")
+        except Exception as e:
+            warnings.append(f"canvas.png 저장 실패: {e}")
+
+        if warnings:
+            push_message(self.iface, "번들 저장", f"완료(경고 {len(warnings)}개): {bundle_dir}", level=1, duration=10)
+            try:
+                for w in warnings[:8]:
+                    log_message(f"[bundle] {w}")
+            except Exception:
+                pass
+            return
+
+        push_message(self.iface, "번들 저장", f"완료: {bundle_dir}", level=0, duration=8)
