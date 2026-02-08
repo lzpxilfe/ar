@@ -44,6 +44,7 @@ from qgis.core import (
 from qgis.gui import QgsMapLayerComboBox
 
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 from .utils import (
     get_archtoolkit_layer_metadata,
     log_exception,
@@ -372,14 +373,46 @@ class AhpSuitabilityDialog(QtWidgets.QDialog):
         btn_row = QtWidgets.QHBoxLayout()
         self.btnRun = QtWidgets.QPushButton("실행")
         self.btnRun.clicked.connect(self._on_run)
+        self.btnHelp = QtWidgets.QPushButton("도움말")
+        self.btnHelp.clicked.connect(self._on_help)
         self.btnClose = QtWidgets.QPushButton("닫기")
         self.btnClose.clicked.connect(self.reject)
         btn_row.addWidget(self.btnRun)
         btn_row.addStretch(1)
+        btn_row.addWidget(self.btnHelp)
         btn_row.addWidget(self.btnClose)
         layout.addLayout(btn_row)
 
         self.resize(920, 720)
+
+    def _on_help(self):
+        html = """
+<h3>AHP 입지분석(적합도) 도움말</h3>
+<p>
+여러 환경 래스터(기준)를 AHP(쌍대비교) 가중치로 결합해 하나의 적합도 래스터를 만듭니다.
+</p>
+
+<h4>작업 흐름</h4>
+<ol>
+  <li><b>AOI</b>를 선택합니다(선택). 범위/해상도를 통일하고 싶을 때 유용합니다.</li>
+  <li><b>기준(criterion)</b>으로 사용할 래스터들을 추가하고, Benefit/Cost 방향을 지정합니다.</li>
+  <li><b>쌍대비교</b> 테이블에서 중요도를 입력합니다(사티(Saaty) 1–9 척도).</li>
+  <li><b>CR(일관성비율)</b>을 확인하고(권장 CR ≤ 0.10), 실행합니다.</li>
+  <li>(옵션) 결과를 0–100 스케일로 변환해 시각화/보고에 사용합니다.</li>
+</ol>
+
+<h4>주의/팁</h4>
+<ul>
+  <li>기준 래스터의 <b>CRS/해상도/NoData</b>가 다르면 결과가 왜곡될 수 있습니다.</li>
+  <li>값이 “낮을수록 유리”한 기준(예: 경사, 거리)은 <b>Cost(값↓)</b>로 지정하세요.</li>
+  <li>쌍대비교가 어려우면 먼저 3~5개 기준으로 시작해 점진적으로 늘리는 것을 권장합니다.</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="AHP 적합도 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            pass
 
     def _criterion_layer(self, crit: _Criterion) -> Optional[QgsRasterLayer]:
         try:

@@ -27,6 +27,7 @@ import processing
 import tempfile
 from .utils import new_run_id, push_message, restore_ui_focus, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -160,6 +161,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         self.iface = iface
         self.loaded_dxf_layers = []
         self._setup_kriging_controls()
+        self._setup_help_button()
         
         # Initialize UI
         self.populate_layers()
@@ -184,6 +186,55 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         if os.path.exists(icon_path):
             self.btnRun.setIcon(QIcon(icon_path))
             self.btnRun.setIconSize(QSize(32, 32))
+
+    def _setup_help_button(self):
+        """Add a Help button without editing the .ui file."""
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.clicked.connect(self._on_help)
+
+            layout = self.layout()
+            if layout is None:
+                return
+
+            idx = -1
+            try:
+                idx = int(layout.indexOf(self.btnClose))
+            except Exception:
+                idx = -1
+
+            if idx >= 0:
+                layout.insertWidget(idx, self.btnHelp)
+            else:
+                layout.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            html = (
+                "<h2>DEM 생성 (Generate DEM)</h2>"
+                "<p>등고선/표고점(벡터)에서 DEM(GeoTIFF)을 생성합니다.</p>"
+                "<h3>보간 방법</h3>"
+                "<ul>"
+                "<li><b>TIN</b>: 등고선(선) 데이터에 권장</li>"
+                "<li><b>IDW</b>: 포인트 데이터에 권장</li>"
+                "<li><b>Kriging (Lite)</b>: 포인트 + 값 필드(Z) 기반. 예측 DEM과 함께 "
+                "<code>_variance.tif</code>(불확실성)도 생성됩니다. (미터 단위 투영 CRS 권장)</li>"
+                "</ul>"
+                "<h3>팁</h3>"
+                "<ul>"
+                "<li>대상 범위가 넓으면 픽셀 크기를 키우면 더 안정적입니다.</li>"
+                "<li>출처/레퍼런스는 <code>REFERENCES.md</code>를 참고하세요.</li>"
+                "</ul>"
+            )
+            show_help_dialog(parent=self, title="DEM 생성 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            try:
+                QtWidgets.QMessageBox.information(self, "도움말", "README.md를 참고하세요.")
+            except Exception:
+                pass
     
     def setup_layer_list(self):
         """Setup multi-select layer list with checkboxes"""

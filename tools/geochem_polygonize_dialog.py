@@ -68,6 +68,7 @@ from .utils import (
     set_archtoolkit_layer_metadata,
 )
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 
 PARENT_GROUP_NAME = "ArchToolkit - GeoChem"
@@ -872,13 +873,16 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
         self.btnRun = QtWidgets.QPushButton("실행")
+        self.btnHelp = QtWidgets.QPushButton("도움말")
         self.btnClose = QtWidgets.QPushButton("닫기")
         btn_row.addWidget(self.btnRun)
+        btn_row.addWidget(self.btnHelp)
         btn_row.addWidget(self.btnClose)
         layout.addLayout(btn_row)
 
         self.btnClose.clicked.connect(self.reject)
         self.btnRun.clicked.connect(self.run)
+        self.btnHelp.clicked.connect(self._on_help)
         self.cmbPreset.currentIndexChanged.connect(self._on_preset_changed)
         self.chkMakePolygons.stateChanged.connect(self._update_polygon_ui)
         self.chkAddRasters.stateChanged.connect(self._on_add_rasters_changed)
@@ -962,6 +966,41 @@ class GeoChemPolygonizeDialog(QtWidgets.QDialog):
             pass
 
         self.resize(700, 650)
+
+    def _on_help(self):
+        html = """
+<h3>GeoChem (지구화학도) 도움말</h3>
+<p>
+이 도구는 RGB 지구화학도(WMS/래스터)에서 <b>범례 색상→값</b>을 역추정하여
+value/class 래스터와 폴리곤을 생성합니다.
+</p>
+
+<h4>입력/출력</h4>
+<ul>
+  <li><b>입력</b>: RGB 지구화학도 레이어, 조사지역(AOI) 폴리곤</li>
+  <li><b>출력</b>: value 래스터(추정값), class 래스터(구간), (옵션) 구간 폴리곤/라벨</li>
+  <li>(옵션) 중심점/가중중심, (옵션) Zonal 통계(행정구역/유적 폴리곤 등)</li>
+</ul>
+
+<h4>정확도/주의</h4>
+<ul>
+  <li>원자료가 아닌 “렌더링 이미지” 기반이라 텍스트/경계선/안티앨리어싱/압축에 의해 오차가 생길 수 있습니다.</li>
+  <li>클립은 폴리곤 자체가 아니라 <b>경계 사각형(extent)</b> 기준입니다.</li>
+  <li>가능하면 범례 이미지와 동일한 스타일(색상램프)로 보이는 WMS를 사용하세요.</li>
+</ul>
+
+<h4>팁</h4>
+<ul>
+  <li><b>Inpaint</b>: 검정 경계선/문자 때문에 값이 깨지면 켜고 <b>Fill distance</b>를 조절하세요.</li>
+  <li><b>고농도 스냅</b>: 마지막 구간이 잘 안 잡힐 때 사용하되, 과하면 고농도 영역이 과대평가될 수 있습니다.</li>
+  <li><b>프리셋 확장</b>: CSV(value,r,g,b)로 프리셋을 가져오면 다른 원소도 쉽게 추가할 수 있습니다.</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="GeoChem 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            pass
 
     def _on_preset_changed(self):
         try:

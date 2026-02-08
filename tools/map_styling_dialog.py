@@ -40,6 +40,7 @@ from qgis.core import (
     QgsRasterBandStats, QgsLayerTreeLayer
 )
 from .utils import new_run_id, restore_ui_focus, push_message, set_archtoolkit_layer_metadata
+from .help_dialog import show_help_dialog
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'map_styling_dialog_base.ui'))
@@ -104,6 +105,48 @@ class MapStylingDialog(QtWidgets.QDialog, FORM_CLASS):
             self.btnReloadCodeConfig.clicked.connect(self.reload_code_config)
         if hasattr(self, "btnExportPreset"):
             self.btnExportPreset.clicked.connect(self.export_qml_preset)
+        self._setup_help_button()
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.clicked.connect(self._on_help)
+
+            layout = self.layout()
+            if layout is None:
+                return
+
+            idx = -1
+            try:
+                idx = int(layout.indexOf(self.btnClose))
+            except Exception:
+                idx = -1
+
+            if idx >= 0:
+                layout.insertWidget(idx, self.btnHelp)
+            else:
+                layout.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            html = (
+                "<h2>도면 시각화 (Map Styling)</h2>"
+                "<p>한국 수치지형도(DXF) 레이어를 분류/집계하고, 도로·하천·건물 등 카토그래피 스타일을 적용합니다.</p>"
+                "<h3>커스터마이즈</h3>"
+                "<ul>"
+                "<li>DXF 코드 매핑은 <code>tools/map_styling_codes.json</code>에서 수정할 수 있습니다.</li>"
+                "<li>QML/프리셋 내보내기로 프로젝트 재사용성을 높일 수 있습니다.</li>"
+                "</ul>"
+            )
+            show_help_dialog(parent=self, title="Map Styling 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            try:
+                QtWidgets.QMessageBox.information(self, "도움말", "README.md를 참고하세요.")
+            except Exception:
+                pass
 
     def _code_config_path(self):
         return os.path.join(os.path.dirname(__file__), "map_styling_codes.json")

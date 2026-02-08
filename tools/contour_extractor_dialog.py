@@ -25,6 +25,7 @@ from qgis.core import QgsProject, QgsVectorLayer, QgsMapLayerProxyModel
 import processing
 from .utils import push_message, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -61,6 +62,51 @@ class ContourExtractorDialog(QtWidgets.QDialog, FORM_CLASS):
         # Initial state
         self.on_mode_changed()
         self.refresh_layer_list()
+        self._setup_help_button()
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.clicked.connect(self._on_help)
+
+            layout = self.layout()
+            if layout is None:
+                return
+            idx = -1
+            try:
+                idx = int(layout.indexOf(self.btnClose))
+            except Exception:
+                idx = -1
+            if idx >= 0:
+                layout.insertWidget(idx, self.btnHelp)
+            else:
+                layout.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            html = (
+                "<h2>등고선 추출 (Extract Contours)</h2>"
+                "<p>DXF 레이어에서 등고선(코드)만 필터링하거나, DEM 래스터에서 등고선을 생성합니다.</p>"
+                "<h3>모드</h3>"
+                "<ul>"
+                "<li><b>DXF 필터</b>: 선택한 DXF 레이어에 subsetString 필터를 적용합니다. 필요하면 <b>필터 초기화</b>로 되돌릴 수 있습니다.</li>"
+                "<li><b>DEM에서 생성</b>: GDAL <code>gdal:contour</code>로 등고선 벡터를 생성합니다.</li>"
+                "</ul>"
+                "<h3>팁</h3>"
+                "<ul>"
+                "<li>DEM 모드의 등고선 간격은 DEM의 높이 단위(보통 m)를 기준으로 합니다.</li>"
+                "<li>출처/레퍼런스는 <code>REFERENCES.md</code>를 참고하세요.</li>"
+                "</ul>"
+            )
+            show_help_dialog(parent=self, title="등고선 추출 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            try:
+                QtWidgets.QMessageBox.information(self, "도움말", "README.md를 참고하세요.")
+            except Exception:
+                pass
     
     def refresh_layer_list(self):
         """Populate the vector layer list"""

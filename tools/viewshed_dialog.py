@@ -47,6 +47,7 @@ from .utils import (
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 # Load the UI file
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
@@ -60,6 +61,7 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
         self.setupUi(self)
         self.iface = iface
         self.canvas = iface.mapCanvas()
+        self._setup_help_button()
         
         # Selected observer point(s)
         self.observer_point = None
@@ -288,6 +290,52 @@ class ViewshedDialog(QtWidgets.QDialog, FORM_CLASS):
                           layout.addWidget(self.spinRefraction)
 
         self._update_curvature_refraction_help()
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.setToolTip("도구 사용법/주의사항을 봅니다.")
+            self.btnHelp.clicked.connect(self._on_help)
+            if hasattr(self, "horizontalLayout_Buttons"):
+                try:
+                    idx = int(self.horizontalLayout_Buttons.indexOf(self.btnClose))
+                    if idx >= 0:
+                        self.horizontalLayout_Buttons.insertWidget(idx, self.btnHelp)
+                    else:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                except Exception:
+                    try:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _on_help(self):
+        html = """
+<h3>가시권 분석(Viewshed / LOS) 도움말</h3>
+<p>DEM과 관측점을 기반으로 “보이는 영역”을 계산하거나, 두 점 사이의 시야(LOS)를 확인합니다.</p>
+
+<h4>주요 모드</h4>
+<ul>
+  <li><b>단일 관측점 Viewshed</b>: 한 지점에서 보이는 영역(가시/비가시)을 래스터로 생성</li>
+  <li><b>다중 관측점 누적/가중 Viewshed</b>: 여러 관측점의 가시권을 합산(또는 가중)해 중요도 표현</li>
+  <li><b>Line of Sight(LOS)</b>: 두 지점 사이가 보이는지 단면(프로파일)로 확인</li>
+  <li>(옵션) <b>AOI 통계</b>: AOI(폴리곤) 안에서 가시 면적/비율 등의 요약값을 산출</li>
+</ul>
+
+<h4>주의/팁</h4>
+<ul>
+  <li>결과는 <b>DEM 품질</b>(해상도/NoData/수치오차)과 <b>관측/대상 높이</b>(m)에 크게 좌우됩니다.</li>
+  <li>곡률/대기굴절 옵션은 장거리 분석에서 영향이 있으며, 필요할 때만 켜는 것을 권장합니다.</li>
+  <li>결과 레이어를 많이 생성할 수 있으니, 필요하면 작업 전용 그룹에서 정리하세요.</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="Viewshed/LOS 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            pass
     
     def transform_point(self, point, source_crs, dest_crs):
         """Wrapper method to call the utility transform_point function"""

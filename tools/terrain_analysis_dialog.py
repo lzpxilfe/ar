@@ -33,6 +33,7 @@ from qgis.core import (
 import processing
 from .utils import cleanup_files, push_message, restore_ui_focus, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 # This tool uses only QGIS built-in libraries and GDAL processing algorithms.
 # No external plugins or libraries (like numpy, matplotlib) are required.
@@ -147,6 +148,55 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             self.chkAutoSD.stateChanged.connect(self.on_auto_sd_changed)
             # Apply initial state - disable inputs if auto-SD is checked
             self._apply_auto_sd_state(self.chkAutoSD.isChecked())
+
+        self._setup_help_button()
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.clicked.connect(self._on_help)
+
+            layout = self.layout()
+            if layout is None:
+                return
+
+            idx = -1
+            try:
+                idx = int(layout.indexOf(self.btnClose))
+            except Exception:
+                idx = -1
+            if idx >= 0:
+                layout.insertWidget(idx, self.btnHelp)
+            else:
+                layout.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            html = (
+                "<h2>지형 분석 (Terrain Analysis)</h2>"
+                "<p>DEM에서 지형 지표를 계산하고(경사/사면방향/TRI/TPI/Roughness/Slope Position) "
+                "분류·스타일을 적용합니다.</p>"
+                "<h3>출력</h3>"
+                "<ul>"
+                "<li>선택한 지표별 래스터 레이어</li>"
+                "<li>(옵션) 분류/색상표 적용</li>"
+                "</ul>"
+                "<h3>팁</h3>"
+                "<ul>"
+                "<li>DEM이 너무 거칠면(해상도 낮음) TPI/TRI가 과도하게 튈 수 있습니다.</li>"
+                "<li>TPI 자동 SD 모드는 입력 DEM 통계에 따라 임계값을 자동으로 잡습니다.</li>"
+                "<li>학술 출처는 <code>REFERENCES.md</code>를 참고하세요.</li>"
+                "</ul>"
+            )
+            show_help_dialog(parent=self, title="지형 분석 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            try:
+                QtWidgets.QMessageBox.information(self, "도움말", "README.md를 참고하세요.")
+            except Exception:
+                pass
     
     def on_auto_sd_changed(self, state):
         """Enable/disable manual TPI threshold inputs based on auto-SD checkbox"""

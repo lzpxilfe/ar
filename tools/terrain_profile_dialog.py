@@ -44,6 +44,7 @@ from .utils import (
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 PROFILE_LAYER_NAME = "Terrain Profile Lines"
 PROFILE_GROUP_NAME = "ArchToolkit - Terrain Profile"
@@ -814,6 +815,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btnExportCsv.clicked.connect(self.export_csv)
         self.btnExportImage.clicked.connect(self.export_image)
         self.btnClose.clicked.connect(self.cleanup_and_close)
+        self._setup_help_button()
 
         try:
             self.btnClear.setText("현재 초기화")
@@ -846,7 +848,7 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                     self.horizontalLayout.addWidget(self.chkSingleLayers)
             except Exception:
                 self.horizontalLayout.addWidget(self.chkSingleLayers)
-
+ 
             def _sync_single_layers(on: bool):
                 self._single_layers_enabled = bool(on)
 
@@ -890,6 +892,54 @@ class TerrainProfileDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._connect_profile_layer(layers[0])
         except Exception:
             pass
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.clicked.connect(self._on_help)
+
+            layout = self.layout()
+            if layout is None:
+                return
+
+            idx = -1
+            try:
+                idx = int(layout.indexOf(self.btnClose))
+            except Exception:
+                idx = -1
+
+            if idx >= 0:
+                layout.insertWidget(idx, self.btnHelp)
+            else:
+                layout.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            html = (
+                "<h2>지형 단면 (Terrain Profile)</h2>"
+                "<p>DEM 위에 단면선을 그려 고도 프로파일을 그래프로 표시하고, 통계/CSV/이미지로 내보냅니다.</p>"
+                "<h3>기본 흐름</h3>"
+                "<ol>"
+                "<li>DEM 선택</li>"
+                "<li>단면선 그리기(시작→끝)</li>"
+                "<li>(옵션) AOI/오버레이 레이어 표시</li>"
+                "<li>CSV/이미지 내보내기</li>"
+                "</ol>"
+                "<h3>팁</h3>"
+                "<ul>"
+                "<li>저장된 단면선 레이어에서 선을 선택하면 해당 단면이 자동으로 열립니다.</li>"
+                "<li>고정 길이 옵션은 여러 단면을 같은 길이로 비교할 때 유용합니다.</li>"
+                "</ul>"
+            )
+            show_help_dialog(parent=self, title="지형 단면 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            try:
+                QMessageBox.information(self, "도움말", "README.md를 참고하세요.")
+            except Exception:
+                pass
     
     def show_position_on_map(self, x, y):
         """Show hover position on map"""

@@ -45,6 +45,7 @@ from qgis.gui import QgsMapLayerComboBox
 from .live_log_dialog import ensure_live_log_dialog
 from .utils import log_message, push_message, restore_ui_focus
 from .utils import set_archtoolkit_layer_metadata
+from .help_dialog import show_help_dialog
 
 
 def _safe_make_valid(geom: QgsGeometry) -> QgsGeometry:
@@ -169,13 +170,16 @@ class CadastralOverlapDialog(QtWidgets.QDialog):
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
         self.btnRun = QtWidgets.QPushButton("실행")
+        self.btnHelp = QtWidgets.QPushButton("도움말")
         self.btnClose = QtWidgets.QPushButton("닫기")
         btn_row.addWidget(self.btnRun)
+        btn_row.addWidget(self.btnHelp)
         btn_row.addWidget(self.btnClose)
         layout.addLayout(btn_row)
 
         self.btnRun.clicked.connect(self.run)
         self.btnClose.clicked.connect(self.reject)
+        self.btnHelp.clicked.connect(self._on_help)
 
         # Tooltips (compact UI, detailed info on hover)
         self.cmbCadastral.setToolTip("조사 범위와 겹치는 지적도(필지) 폴리곤 레이어를 선택하세요.")
@@ -186,6 +190,39 @@ class CadastralOverlapDialog(QtWidgets.QDialog):
             "조사지역 레이어에 폴리곤 피처가 여러 개라면, 피처(폴리곤)마다 결과 레이어를 따로 생성합니다.\n"
             "해당 폴리곤별로 속성테이블을 분리해서 보고 싶을 때 사용하세요."
         )
+
+    def _on_help(self):
+        html = """
+<h3>지적도 중첩 면적표(Cadastral Overlap) 도움말</h3>
+<p>
+조사지역(AOI)과 지적도(필지) 폴리곤의 교차 면적을 계산해,
+필지별로 “전체면적 / AOI 포함면적 / 포함비율(%)”을 속성으로 저장한 결과 레이어를 생성합니다.
+</p>
+
+<h4>입력</h4>
+<ul>
+  <li><b>지적도(필지) 레이어</b>: 폴리곤</li>
+  <li><b>조사지역 레이어</b>: 폴리곤(AOI)</li>
+</ul>
+
+<h4>출력(속성 예시)</h4>
+<ul>
+  <li><code>parcel_m2</code>: 필지 전체면적(㎡)</li>
+  <li><code>in_aoi_m2</code>: AOI 포함면적(㎡)</li>
+  <li><code>in_aoi_pct</code>: 포함비율(%)</li>
+</ul>
+
+<h4>주의</h4>
+<ul>
+  <li>연속지적도/공간정보는 <b>참고용</b>입니다. 법적 효력이 필요한 경우 관공서(시청/구청 등)에서 발급받은 <b>공식 지적도</b>로 확인하세요.</li>
+  <li>면적 계산은 CRS/단위에 영향받습니다(가능하면 미터 단위 투영좌표계 권장).</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="Cadastral Overlap 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            pass
 
     def _validate_layer(self, layer, *, name: str) -> Optional[QgsVectorLayer]:
         if layer is None or (not layer.isValid()):

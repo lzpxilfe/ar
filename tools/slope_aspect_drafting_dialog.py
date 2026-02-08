@@ -68,6 +68,7 @@ import processing
 
 from .utils import cleanup_files, push_message, restore_ui_focus, set_archtoolkit_layer_metadata
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -87,6 +88,52 @@ class SlopeAspectDraftingDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btnCreateMask.clicked.connect(self.create_mask_layer)
         self.btnRun.clicked.connect(self.run_drafting)
         self.btnClose.clicked.connect(self.reject)
+        self._setup_help_button()
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.clicked.connect(self._on_help)
+
+            layout = self.layout()
+            if layout is None:
+                return
+
+            idx = -1
+            try:
+                idx = int(layout.indexOf(self.btnClose))
+            except Exception:
+                idx = -1
+
+            if idx >= 0:
+                layout.insertWidget(idx, self.btnHelp)
+            else:
+                layout.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            html = (
+                "<h2>경사도/사면방향 도면화 (Slope/Aspect Drafting)</h2>"
+                "<p>AOI(작업영역)를 기준으로 인쇄용 경사 래스터와 사면방향(방위각) 화살표 레이어를 생성합니다.</p>"
+                "<h3>입력</h3>"
+                "<ul>"
+                "<li>DEM 래스터</li>"
+                "<li>AOI 폴리곤(없으면 ‘작업영역(AOI) 폴리곤 생성’으로 생성)</li>"
+                "</ul>"
+                "<h3>팁</h3>"
+                "<ul>"
+                "<li>AOI 범위를 너무 크게 잡으면 출력이 무거워질 수 있습니다.</li>"
+                "</ul>"
+            )
+            show_help_dialog(parent=self, title="도면화(경사/사면방향) 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            try:
+                QtWidgets.QMessageBox.information(self, "도움말", "README.md를 참고하세요.")
+            except Exception:
+                pass
 
     def create_mask_layer(self):
         dem_layer = self.cmbDemLayer.currentLayer()

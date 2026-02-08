@@ -66,6 +66,7 @@ from .utils import (
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -1934,6 +1935,8 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+        self._setup_help_button()
+
         self.original_tool = None
         self.map_tool = None
 
@@ -2006,6 +2009,54 @@ class CostSurfaceDialog(QtWidgets.QDialog, FORM_CLASS):
                 self._on_friction_raster_toggled(bool(self.chkUseFrictionRaster.isChecked()))
             if hasattr(self, "chkUseFrictionVector"):
                 self._on_friction_vector_toggled(bool(self.chkUseFrictionVector.isChecked()))
+        except Exception:
+            pass
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.setToolTip("도구 사용법/주의사항을 봅니다.")
+            self.btnHelp.clicked.connect(self._on_help)
+            if hasattr(self, "horizontalLayout_Buttons"):
+                try:
+                    idx = self.horizontalLayout_Buttons.indexOf(self.btnClose)
+                    if idx >= 0:
+                        self.horizontalLayout_Buttons.insertWidget(idx, self.btnHelp)
+                    else:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                except Exception:
+                    self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+        except Exception:
+            pass
+
+    def _on_help(self):
+        html = """
+<h3>비용표면 / 최소비용경로(Cost Surface / LCP) 도움말</h3>
+<p>DEM을 기반으로 경사(및 선택한 모델)에 따라 이동 비용을 계산하고, 시작점→종료점의 최소비용경로를 생성합니다.</p>
+
+<h4>주요 출력</h4>
+<ul>
+  <li><b>누적 비용 래스터</b>(시간/에너지 등)</li>
+  <li><b>최소비용경로</b> 라인(옵션)</li>
+  <li>(옵션) 등비용면(isochrone/isoenergy), 회랑(corridor)</li>
+</ul>
+
+<h4>사용 순서</h4>
+<ol>
+  <li>DEM 레이어를 선택하고(권장: 미터 단위 투영좌표계), 모델을 선택합니다.</li>
+  <li>지도에서 시작/종료점을 지정합니다.</li>
+  <li>필요하면 마찰요인(추가 비용) 옵션을 켠 뒤 실행합니다.</li>
+</ol>
+
+<h4>팁</h4>
+<ul>
+  <li>DEM NoData/해상도/CRS가 결과 품질에 크게 영향합니다.</li>
+  <li>회랑(corridor)은 “최소경로 주변의 저비용 통로”를 표현하는 옵션입니다.</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="Cost Surface / LCP 도움말", html=html, plugin_dir=plugin_dir)
         except Exception:
             pass
 

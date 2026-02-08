@@ -61,6 +61,7 @@ from .utils import (
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -137,6 +138,7 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         # Extra widgets (created dynamically to avoid .ui editing regressions)
         self._ensure_extra_widgets()
+        self._setup_help_button()
 
         # PPA graph selector
         try:
@@ -179,6 +181,58 @@ class SpatialNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         self._on_site_layer_changed(self.cmbSiteLayer.currentLayer())
         self._on_mode_changed()
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.setToolTip("도구 사용법/주의사항을 봅니다.")
+            self.btnHelp.clicked.connect(self._on_help)
+            if hasattr(self, "horizontalLayout_Buttons"):
+                try:
+                    idx = int(self.horizontalLayout_Buttons.indexOf(self.btnClose))
+                    if idx >= 0:
+                        self.horizontalLayout_Buttons.insertWidget(idx, self.btnHelp)
+                    else:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                except Exception:
+                    try:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _on_help(self):
+        html = """
+<h3>근접/가시권 네트워크(Spatial / Visibility Network) 도움말</h3>
+<p>
+유적(노드) 레이어를 입력으로 받아, (1) 근접성 네트워크(PPA) 또는 (2) DEM 기반 가시성(LOS) 네트워크를 생성합니다.
+</p>
+
+<h4>모드</h4>
+<ul>
+  <li><b>PPA</b>: 직선거리 기반 k-NN/반경/삼각망(Delaunay) 등으로 간선을 생성합니다.</li>
+  <li><b>Visibility(LOS)</b>: DEM을 샘플링하여 두 노드가 서로 보이는지 판정해 간선을 생성합니다.</li>
+</ul>
+
+<h4>입력/출력</h4>
+<ul>
+  <li><b>입력</b>: 유적 레이어(포인트/폴리곤), (LOS 모드일 때) DEM</li>
+  <li><b>출력</b>: 네트워크 간선(라인) 레이어 + (옵션) 노드 지표(중심성/컴포넌트) 레이어</li>
+</ul>
+
+<h4>주의/팁</h4>
+<ul>
+  <li>LOS는 후보쌍 수가 급증할 수 있습니다. <b>후보 k</b>·<b>최대거리</b>로 제한하는 것을 권장합니다.</li>
+  <li>폴리곤 유적은 대표점을 사용합니다(표면상 점/중심점). 필요하면 경계 샘플링 옵션을 켜세요.</li>
+  <li>더 자세한 해석은 버튼행의 <b>해석 가이드</b>를 참고하세요.</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="Spatial / Visibility Network 도움말", html=html, plugin_dir=plugin_dir)
+        except Exception:
+            pass
 
     def _setup_tooltips(self):
         # Keep the main UI compact; provide detailed explanations via tooltips.

@@ -73,6 +73,7 @@ from .utils import (
     transform_point,
 )
 from .live_log_dialog import ensure_live_log_dialog
+from .help_dialog import show_help_dialog
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -1146,6 +1147,8 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
         except Exception:
             pass
 
+        self._setup_help_button()
+
         self._task = None
         self._task_running = False
 
@@ -1269,6 +1272,60 @@ class CostNetworkDialog(QtWidgets.QDialog, FORM_CLASS):
 
         try:
             self._apply_help_texts()
+        except Exception:
+            pass
+
+    def _setup_help_button(self):
+        try:
+            self.btnHelp = QtWidgets.QPushButton("도움말", self)
+            self.btnHelp.setToolTip("도구 사용법/주의사항을 봅니다.")
+            self.btnHelp.clicked.connect(self._on_help)
+            if hasattr(self, "horizontalLayout_Buttons"):
+                try:
+                    idx = int(self.horizontalLayout_Buttons.indexOf(self.btnClose))
+                    if idx >= 0:
+                        self.horizontalLayout_Buttons.insertWidget(idx, self.btnHelp)
+                    else:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                except Exception:
+                    try:
+                        self.horizontalLayout_Buttons.addWidget(self.btnHelp)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _on_help(self):
+        html = """
+<h3>최소비용 네트워크(Least-cost Network) 도움말</h3>
+<p>
+DEM 기반 비용모델로 유적(포인트/폴리곤) 간 최소비용경로(LCP)를 계산하고,
+MST/k-NN/Hub 네트워크를 생성합니다.
+</p>
+
+<h4>입력</h4>
+<ul>
+  <li><b>DEM</b>: 이동 비용을 계산할 래스터 (권장: 미터 단위 투영좌표계)</li>
+  <li><b>유적 레이어</b>: 포인트 또는 폴리곤</li>
+  <li>(옵션) <b>Hub</b> 필드/값: 특정 거점 중심 네트워크</li>
+</ul>
+
+<h4>출력</h4>
+<ul>
+  <li>네트워크 라인 레이어(간선): 비용/시간/거리 등의 속성 포함</li>
+  <li>(옵션) 노드 지표/중심성(SNA) 결과 레이어</li>
+</ul>
+
+<h4>주의/팁</h4>
+<ul>
+  <li>기본은 <b>경사 기반</b> 비용만 반영합니다(도로/하천/토지피복 등은 별도 입력 없으면 미반영).</li>
+  <li>노드 수가 많으면 계산량이 급증합니다. k/버퍼/모드 선택으로 규모를 조절하세요.</li>
+  <li>더 자세한 해석은 버튼행의 <b>해석 가이드</b>를 참고하세요.</li>
+</ul>
+"""
+        try:
+            plugin_dir = os.path.dirname(os.path.dirname(__file__))
+            show_help_dialog(parent=self, title="Least-cost Network 도움말", html=html, plugin_dir=plugin_dir)
         except Exception:
             pass
 
