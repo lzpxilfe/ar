@@ -767,7 +767,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         return selected_layers
 
     def run_process(self):
-        """Run the DEM generation process (v0.7.2: Merge → Filter → Interpolate)"""
+        """Run the DEM generation process (Merge → Filter → Interpolate)"""
         selected_layers = self.get_selected_layers()
         output_path = self.fileOutput.filePath()
         pixel_size = self.spinPixelSize.value()
