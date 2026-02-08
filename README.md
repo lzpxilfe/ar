@@ -17,12 +17,13 @@ If you find this repository useful, please consider giving it a star ⭐ and cit
   title = {ArchToolkit: Archaeology Toolkit for QGIS},
   year = {2026},
   url = {https://github.com/lzpxilfe/ar},
-  version = {1.0.0}
+  version = {0.1.0}
 }
 ```
 
 ## 한눈에 보기
 
+- 버전: **v0.1.0 (beta)**  *(이전 표기 정리: 필요하면 삭제 후 재설치)*
 - 권장 환경: **QGIS 3.40 LTR 이상**
 - 실행 중 진행상황/경고를 확인할 수 있는 **실시간 작업 로그 창** 제공
 - 결과 레이어는 가능하면 `ArchToolkit - ...` 그룹 아래에 정리해서 프로젝트가 덜 어지럽게 설계했습니다.
@@ -222,7 +223,7 @@ git push my --tags
 이 저장소는 “언제든 돌아갈 수 있는 집”을 `viridian-city` 태그로 관리합니다.
 
 - `viridian-city`: 최신 안정 상태를 가리키는 *움직이는 태그* (필요하면 `-f`로 갱신)
-- `viridian-city-YYYYMMDD-v1.0.0-N`: 그날의 스냅샷(되돌리기/비교용, 고정)
+- `viridian-city-YYYYMMDD-v0.1.0-N`: 그날의 스냅샷(되돌리기/비교용, 고정)
 
 > GitHub에서 보이는 README는 이 `README.md`입니다. 수정 후 `main`에 커밋/푸시하면 GitHub에 바로 반영됩니다.
 
@@ -232,8 +233,8 @@ git tag -a -f viridian-city -m "Viridian City home"
 git push -f origin viridian-city
 
 # (2) 스냅샷 태그 추가(예시)
-git tag -a viridian-city-20260206-v1.0.0-2 -m "Viridian City snapshot"
-git push origin viridian-city-20260206-v1.0.0-2
+git tag -a viridian-city-20260208-v0.1.0-1 -m "Viridian City snapshot"
+git push origin viridian-city-20260208-v0.1.0-1
 
 # (3) 복귀
 git switch main

@@ -2,7 +2,7 @@
 name=ArchToolkit
 qgisMinimumVersion=3.40
 description=고고학·문화유산 연구자를 위한 QGIS 종합 분석 툴킷 (Terrain/AHP/Viewshed/LOS/Cost/LCP/Network/DEM/Kriging/Contours/Profile/Styling/GeoChem/AI)
-version=1.0.0
+version=0.1.0
 author=balguljang2
 email=balguljang2@example.com
 license=GPL v3
@@ -50,4 +50,4 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
   Wang et al. (1996) viewshed, Higuchi (1975) view zones, Saaty (1980) AHP, Matheron (1963) Kriging 등. 자세한 목록: <code>REFERENCES.md</code>
   <br>
   버그/제안: GitHub Issues (<code>tracker</code> 링크)
-changelog=1.0.0 - 첫 공개 릴리즈 (AHP 입지적합도, AI 조사요약, Kriging(Lite) 포함)
+changelog=0.1.0 - 첫 공개(베타) 릴리즈 (AHP 입지적합도, AI 조사요약, Kriging(Lite) 포함)
