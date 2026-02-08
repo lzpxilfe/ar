@@ -127,15 +127,12 @@ class ArchToolkitLiveLogDialog(QtWidgets.QDialog):
 
     def write_header(self):
         meta = _read_metadata()
-        version = meta.get("version", "")
         tracker = meta.get("tracker", "")
         author = meta.get("author", "balguljang2")
         license_name = meta.get("license", "GPL v3")
 
         lines = []
         title = "ArchToolkit 작업 로그"
-        if version:
-            title = f"{title} (v{version})"
         lines.append(title)
         lines.append("- 진행상황/오류가 여기에 실시간으로 기록됩니다.")
         if tracker:
