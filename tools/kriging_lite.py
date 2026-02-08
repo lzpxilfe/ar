@@ -26,6 +26,7 @@ from qgis.core import (
     QgsRectangle,
     QgsSpatialIndex,
     QgsVectorLayer,
+    QgsWkbTypes,
 )
 
 from .utils import is_metric_crs, log_message
@@ -99,7 +100,7 @@ def _collect_point_samples(
     if layer is None or not layer.isValid():
         raise ValueError("Invalid layer")
 
-    if layer.geometryType() != layer.PointGeometry:
+    if layer.geometryType() != QgsWkbTypes.PointGeometry:
         raise ValueError("Kriging requires a point layer")
 
     field_name = (value_field or "").strip() or _auto_value_field(layer)
@@ -517,4 +518,3 @@ def ordinary_kriging_lite_to_geotiff(
         "nrows": nrows,
         "n_points": len(points_xy),
     }
-
