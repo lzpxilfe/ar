@@ -60,6 +60,11 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             'algorithm': 'qgis:idwinterpolation',
             'method': None,
             'desc': '💡 포인트 데이터에 적합, 등고선에는 비추천 [Shepard, 1968]'
+        },
+        'Kriging (Lite, Ordinary)': {
+            'algorithm': 'archtoolkit:kriging_lite',
+            'method': None,
+            'desc': '💡 포인트 기반 Ordinary Kriging(Lite). 자동 파라미터 + 분산(불확실성)도 함께 출력 [Matheron, 1963; Cressie, 1993]'
         }
     }
     
@@ -154,6 +159,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         self.setupUi(self)
         self.iface = iface
         self.loaded_dxf_layers = []
+        self._setup_kriging_controls()
         
         # Initialize UI
         self.populate_layers()
@@ -184,6 +190,82 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         self.listLayers.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.listLayers.itemChanged.connect(self.on_layer_item_changed)
         self._updating_checkboxes = False
+
+    def _setup_kriging_controls(self):
+        """Add Kriging-only controls without editing the .ui file (Lite mode)."""
+        try:
+            layout = getattr(self, "gridLayout", None)
+            if layout is None:
+                return
+
+            self.lblZField = QtWidgets.QLabel("값 필드(Z):", self)
+            self.cmbZField = QtWidgets.QComboBox(self)
+            self.cmbZField.setMinimumWidth(220)
+
+            self.lblKrigingNeighbors = QtWidgets.QLabel("Kriging 이웃점 수:", self)
+            self.spinKrigingNeighbors = QtWidgets.QSpinBox(self)
+            self.spinKrigingNeighbors.setRange(3, 64)
+            self.spinKrigingNeighbors.setValue(16)
+            try:
+                self.spinKrigingNeighbors.setToolTip("셀마다 가장 가까운 N개 점만 사용합니다. (N이 클수록 느리지만 매끈해질 수 있음)")
+            except Exception:
+                pass
+
+            # Place below interpolation method rows (existing rows: 0..3)
+            layout.addWidget(self.lblZField, 4, 0)
+            layout.addWidget(self.cmbZField, 4, 1)
+            layout.addWidget(self.lblKrigingNeighbors, 5, 0)
+            layout.addWidget(self.spinKrigingNeighbors, 5, 1)
+
+            # Fill initial items; shown only when Kriging is selected.
+            self._refresh_kriging_value_fields()
+            self.lblZField.hide()
+            self.cmbZField.hide()
+            self.lblKrigingNeighbors.hide()
+            self.spinKrigingNeighbors.hide()
+        except Exception:
+            # Never block dialog load due to optional UI widgets.
+            pass
+
+    def _is_kriging_selected(self) -> bool:
+        try:
+            method_name = self.cmbInterpolation.currentText()
+            info = self.INTERPOLATION_METHODS.get(method_name, {})
+            return str(info.get("algorithm") or "") == "archtoolkit:kriging_lite"
+        except Exception:
+            return False
+
+    def _refresh_kriging_value_fields(self):
+        """Populate the Z/value field dropdown from the currently checked layer (best-effort)."""
+        cmb = getattr(self, "cmbZField", None)
+        if cmb is None:
+            return
+
+        layers = []
+        try:
+            layers = self.get_selected_layers()
+        except Exception:
+            layers = []
+
+        cmb.blockSignals(True)
+        try:
+            cmb.clear()
+            cmb.addItem("자동(추천)", "")
+            cmb.addItem("Z 좌표(3D geometry)", "__geom_z__")
+
+            if len(layers) == 1 and layers[0] and layers[0].isValid():
+                layer = layers[0]
+                try:
+                    for f in layer.fields():
+                        try:
+                            if f.isNumeric():
+                                cmb.addItem(f.name(), f.name())
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+        finally:
+            cmb.blockSignals(False)
     
     def on_layer_item_changed(self, item):
         """When one checkbox is toggled, toggle all selected items too"""
@@ -200,6 +282,12 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
                 sel_item.setCheckState(new_state)
         
         self._updating_checkboxes = False
+
+        try:
+            if self._is_kriging_selected():
+                self._refresh_kriging_value_fields()
+        except Exception:
+            pass
     
     def populate_layers(self):
         """Populate layer list with vector layers (checkboxes)"""
@@ -218,6 +306,12 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             item = self.listLayers.item(i)
             if 'DEM용' in item.text() or '등고선' in item.text().lower():
                 item.setCheckState(Qt.Checked)
+
+        try:
+            if self._is_kriging_selected():
+                self._refresh_kriging_value_fields()
+        except Exception:
+            pass
     
     def setup_layer_table(self):
         """Setup the layer selection table with predefined DXF layers"""
@@ -573,6 +667,22 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         desc = method_info.get('desc', '')
         self.lblInterpDesc.setText(desc)
 
+        show_kriging = str(method_info.get("algorithm") or "") == "archtoolkit:kriging_lite"
+        for w_name in ("lblZField", "cmbZField", "lblKrigingNeighbors", "spinKrigingNeighbors"):
+            w = getattr(self, w_name, None)
+            if w is None:
+                continue
+            try:
+                w.setVisible(bool(show_kriging))
+            except Exception:
+                pass
+
+        if show_kriging:
+            try:
+                self._refresh_kriging_value_fields()
+            except Exception:
+                pass
+
     def get_selected_layers(self):
         """Get list of checked layers from the list widget"""
         selected_layers = []
@@ -666,6 +776,142 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             
             combined_extent = merged_layer.extent()
 
+            # Kriging (Lite) path: implemented in pure Python (numpy) + QGIS, no external providers.
+            if str(algorithm or "") == "archtoolkit:kriging_lite":
+                progress = None
+                try:
+                    from .kriging_lite import ordinary_kriging_lite_to_geotiff
+
+                    value_field = None
+                    try:
+                        v = getattr(self, "cmbZField", None)
+                        if v is not None:
+                            data = v.currentData()
+                            if data:
+                                value_field = str(data)
+                    except Exception:
+                        value_field = None
+
+                    neighbors = 16
+                    try:
+                        n0 = getattr(self, "spinKrigingNeighbors", None)
+                        if n0 is not None:
+                            neighbors = int(n0.value())
+                    except Exception:
+                        neighbors = 16
+
+                    base, ext = os.path.splitext(str(output_path))
+                    if not ext:
+                        ext = ".tif"
+                    variance_path = f"{base}_variance{ext}"
+
+                    progress = QtWidgets.QProgressDialog("Kriging 계산 중…", "취소", 0, 100, self.iface.mainWindow())
+                    try:
+                        progress.setWindowModality(Qt.WindowModal)
+                        progress.setMinimumDuration(0)
+                    except Exception:
+                        pass
+                    progress.show()
+
+                    def progress_cb(pct: int, msg: str):
+                        try:
+                            progress.setValue(int(pct))
+                            progress.setLabelText(str(msg))
+                        except Exception:
+                            pass
+                        try:
+                            QtWidgets.QApplication.processEvents()
+                        except Exception:
+                            pass
+
+                    def is_cancelled() -> bool:
+                        try:
+                            return bool(progress.wasCanceled())
+                        except Exception:
+                            return False
+
+                    push_message(self.iface, "처리 중", f"{method_name} 보간 실행 중...", level=0)
+                    info = ordinary_kriging_lite_to_geotiff(
+                        layer=merged_layer,
+                        value_field=value_field,
+                        extent=combined_extent,
+                        pixel_size=float(pixel_size),
+                        out_path=str(output_path),
+                        variance_path=str(variance_path),
+                        neighbors=int(neighbors),
+                        progress_cb=progress_cb,
+                        is_cancelled=is_cancelled,
+                    )
+
+                    try:
+                        progress.setValue(100)
+                        progress.close()
+                    except Exception:
+                        pass
+
+                    if os.path.exists(output_path):
+                        out_layer = self.iface.addRasterLayer(output_path, "생성된 DEM (Kriging)")
+                        try:
+                            if out_layer is not None:
+                                set_archtoolkit_layer_metadata(
+                                    out_layer,
+                                    tool_id="dem_generate",
+                                    run_id=str(run_id),
+                                    kind="dem",
+                                    units="m",
+                                    params={
+                                        "pixel_size_m": float(pixel_size),
+                                        "method": str(method_name or ""),
+                                        "algorithm": str(algorithm or ""),
+                                        "value_field": str(value_field or ""),
+                                        "kriging": dict(info.get("params") or {}),
+                                        "n_points": int(info.get("n_points") or 0),
+                                        "grid": {
+                                            "ncols": int(info.get("ncols") or 0),
+                                            "nrows": int(info.get("nrows") or 0),
+                                        },
+                                    },
+                                )
+                        except Exception:
+                            pass
+
+                        try:
+                            if variance_path and os.path.exists(variance_path):
+                                var_layer = self.iface.addRasterLayer(variance_path, "Kriging 분산 (Variance)")
+                                if var_layer is not None:
+                                    set_archtoolkit_layer_metadata(
+                                        var_layer,
+                                        tool_id="dem_generate",
+                                        run_id=str(run_id),
+                                        kind="kriging_variance",
+                                        units="m^2",
+                                        params={
+                                            "pixel_size_m": float(pixel_size),
+                                            "method": str(method_name or ""),
+                                            "algorithm": str(algorithm or ""),
+                                            "value_field": str(value_field or ""),
+                                            "kriging": dict(info.get("params") or {}),
+                                        },
+                                    )
+                        except Exception:
+                            pass
+
+                        push_message(self.iface, "완료", "Kriging 보간 완료!", level=0, duration=6)
+                        self.accept()
+                    else:
+                        push_message(self.iface, "오류", "Kriging 출력이 생성되지 않았습니다.", level=2)
+                        restore_ui_focus(self)
+                    return
+                except Exception as e:
+                    try:
+                        if progress is not None:
+                            progress.close()
+                    except Exception:
+                        pass
+                    push_message(self.iface, "오류", f"Kriging 처리 중 오류: {str(e)}", level=2, duration=10)
+                    restore_ui_focus(self)
+                    return
+
 
             
             params = {
@@ -677,7 +923,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             if method_param is not None:
                 params['METHOD'] = method_param
             
-            push_message(self.iface, "처리 중", "TIN 보간 실행 중...", level=0)
+            push_message(self.iface, "처리 중", f"{method_name} 보간 실행 중...", level=0)
             QtWidgets.QApplication.processEvents()
             
             # Step 4: Run TIN interpolation

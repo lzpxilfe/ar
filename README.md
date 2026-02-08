@@ -24,7 +24,7 @@ ArchToolkit은 한국의 고고학·문화유산 조사/연구 환경에서 자�
 분석 흐름 기준으로 묶었습니다.
 
 ### 기초 데이터
-- **DEM 생성 (Generate DEM)**: 등고선·표고점 기반 DEM 생성(TIN/IDW 등), 수치지형도(DXF) 코드 프리셋 지원.
+- **DEM 생성 (Generate DEM)**: 등고선·표고점 기반 DEM 생성(TIN/IDW 등) + (포인트 입력 시) **Kriging(Lite)** 지원(예측 DEM + `_variance.tif` 분산 래스터), 수치지형도(DXF) 코드 프리셋 지원.
 - **등고선 추출 (Extract Contours)**: (1) DXF 레이어 필터링 또는 (2) DEM에서 GDAL `gdal_contour` 기반 등고선 생성.
 
 ### 지형/단면
