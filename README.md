@@ -61,6 +61,7 @@ If you find this repository useful, please consider giving it a star ⭐ and cit
 - **지적도 중첩 면적표 (Cadastral Overlap)**: 조사지역×필지 중첩 면적/비율 계산 + 중첩(클립) 레이어 생성.
 - **도면 시각화 (Map Styling)**: 한국 수치지형도(DXF) 레이어 집계/분류 + 도로·하천·건물 카토그래피 스타일 + DEM 배경 스타일(옵션) + QML/프리셋 내보내기 + DXF 코드 매핑(JSON) 커스터마이즈.
 - **지구화학도 래스터 수치화 (GeoChem WMS → Raster)**: WMS RGB(범례 기반) 수치화 → value/class 래스터 + (옵션) 구간별 폴리곤/중심점 생성.
+- **지질도 도엽 ZIP 로더 (KIGAM 1:50,000)**: ZIP에서 SHP 자동 로드 + sym 스타일/라벨 적용 + 벡터→래스터(MaxEnt/예측모델) 변환.
 - **AI 조사요약 (AOI Report)**: 조사지역(AOI) + 반경(m) 내 레이어 요약 → 보고서/업무 메모 문장 생성(무료: 로컬 요약 / 옵션: Gemini API / 통계 CSV·번들 저장).
 
 ## Kriging(Lite) (DEM 생성에서)

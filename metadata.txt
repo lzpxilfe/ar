@@ -1,7 +1,7 @@
 [general]
 name=ArchToolkit
 qgisMinimumVersion=3.40
-description=고고학·문화유산 연구자를 위한 QGIS 종합 분석 툴킷 (Terrain/AHP/Viewshed/LOS/Cost/LCP/Network/DEM/Kriging/Contours/Profile/Styling/GeoChem/AI)
+description=고고학·문화유산 연구자를 위한 QGIS 종합 분석 툴킷 (Terrain/AHP/Viewshed/LOS/Cost/LCP/Network/DEM/Kriging/Contours/Profile/Styling/GeoChem/Geology/AI)
 version=0.1.0
 author=balguljang2
 email=balguljang2@example.com
@@ -10,7 +10,7 @@ repository=https://github.com/lzpxilfe/ar.git
 tracker=https://github.com/lzpxilfe/ar/issues
 homepage=https://github.com/lzpxilfe/ar
 category=Analysis
-tags=archaeology,cultural-heritage,dem,kriging,geostatistics,ahp,contour,dxf,viewshed,line-of-sight,terrain-profile,terrain-analysis,slope,aspect,cost-surface,least-cost-path,least-cost-network,network,ppa,visibility,wms,geochem,cadastral,overlap,map-styling,ai,고고학,문화유산,가시권,가시선,지형,단면,비용표면,최소비용경로,최소비용네트워크,근접성,지적도,중첩,지구화학도,크리깅,AHP,지오통계
+tags=archaeology,cultural-heritage,dem,kriging,geostatistics,ahp,contour,dxf,viewshed,line-of-sight,terrain-profile,terrain-analysis,slope,aspect,cost-surface,least-cost-path,least-cost-network,network,ppa,visibility,wms,geochem,geology,geological-map,kigam,cadastral,overlap,map-styling,ai,고고학,문화유산,가시권,가시선,지형,단면,비용표면,최소비용경로,최소비용네트워크,근접성,지적도,중첩,지구화학도,지질도,크리깅,AHP,지오통계
 icon=icon.png
 experimental=false
 deprecated=false
@@ -33,6 +33,7 @@ about=ArchToolkit은 한국 고고학·문화유산 연구 환경에 최적화�
     <li><b>근접/가시성 네트워크</b>: 근접성(PPA) 그래프 + DEM 기반 상호가시성(Visibility) 그래프
     <li><b>도면 시각화</b>: 한국 수치지형도(DXF) 레이어 분류/집계 + 카토그래피 스타일 + QML/프리셋 내보내기 + 코드 매핑(JSON) 커스터마이즈 + DEM 배경(옵션)
     <li><b>지구화학도 수치화</b>: WMS RGB → 범례 기반 value/class 래스터 + (옵션) 구간 폴리곤/중심점
+    <li><b>지질도 ZIP 로더</b>: KIGAM 1:50,000 도엽 ZIP을 불러와 스타일/라벨 적용 + 벡터→래스터 변환
     <li><b>AI 조사요약</b>: 조사지역(AOI) + 반경 내 결과 요약 → 보고서 형태 문장 생성 (무료: 로컬 요약 / 옵션: Gemini API) + 통계 CSV/번들 저장
   </ul>
   대부분의 도구는 실행 중 <b>실시간 작업 로그</b> 창을 통해 진행 상황을 확인할 수 있습니다.

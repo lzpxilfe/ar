@@ -33,6 +33,7 @@ class ArchToolkit:
         self.cost_dlg = None  # Persistent reference for temp/preview cleanup
         self.profile_dlg = None  # Persistent reference for multi-profile selection/view
         self.geochem_dlg = None  # Optional: keep reference if we later add temp cleanup
+        self.geology_zip_dlg = None
 
     def initGui(self):
         try:
@@ -105,6 +106,14 @@ class ArchToolkit:
                 self.iface.mainWindow(),
             )
             self.geochem_action.triggered.connect(self.run_geochem_tool)
+
+            # KIGAM 1:50,000 geology map ZIP loader + rasterize
+            self.geology_zip_action = QAction(
+                QIcon(geochem_icon or ""),
+                u"지질도 도엽 ZIP 불러오기/래스터 변환 (KIGAM)",
+                self.iface.mainWindow(),
+            )
+            self.geology_zip_action.triggered.connect(self.run_geology_zip_tool)
 
             # AI AOI Report (Local/Gemini)
             ai_icon = None
@@ -196,6 +205,7 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.terrain_action)
             self.iface.addPluginToMenu(self.menu_name, self.ahp_action)
             self.iface.addPluginToMenu(self.menu_name, self.geochem_action)
+            self.iface.addPluginToMenu(self.menu_name, self.geology_zip_action)
             self.iface.addPluginToMenu(self.menu_name, self.profile_action)
             self.iface.addPluginToMenu(self.menu_name, self.cost_action)
             self.iface.addPluginToMenu(self.menu_name, self.network_action)
@@ -223,6 +233,7 @@ class ArchToolkit:
             self.tool_menu.addAction(self.terrain_action)
             self.tool_menu.addAction(self.ahp_action)
             self.tool_menu.addAction(self.geochem_action)
+            self.tool_menu.addAction(self.geology_zip_action)
             self.tool_menu.addAction(self.profile_action)
             self.tool_menu.addAction(self.viewshed_action)
             self.tool_menu.addAction(self.cost_action)
@@ -246,7 +257,7 @@ class ArchToolkit:
             
             # Keep references for cleanup
             self.actions = [
-                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action, self.ahp_action, self.geochem_action,
+                self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action, self.ahp_action, self.geochem_action, self.geology_zip_action,
                 self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.viewshed_action,
                 self.ai_report_action,
                 self.main_action
@@ -397,6 +408,16 @@ class ArchToolkit:
             dlg.exec_()
         except Exception as e:
             log_exception("GeoChem tool error", e)
+            QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
+
+    def run_geology_zip_tool(self):
+        try:
+            from .tools.geology_zip_dialog import GeologyZipDialog
+
+            dlg = GeologyZipDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            log_exception("KIGAM geology tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
 
     def run_ai_report_tool(self):
