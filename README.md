@@ -6,6 +6,21 @@
 
 ArchToolkit은 한국의 고고학·문화유산 조사/연구 환경에서 자주 쓰이는 작업을 한데 묶은 QGIS 플러그인입니다. DEM 생성부터 지형·가시성·이동(비용)·네트워크·지구화학도 수치화·도면 스타일링까지, 연구자가 분석과 기록에 집중할 수 있도록 도구들을 정리했습니다.
 
+## 🌟 Citation & Star
+
+이 플러그인이 유용했다면 GitHub Star ⭐를 눌러주세요! 개발자에게 큰 힘이 됩니다.  
+If you find this repository useful, please consider giving it a star ⭐ and citing it in your work:
+
+```bibtex
+@software{ArchToolkit2026,
+  author = {lzpxilfe},
+  title = {ArchToolkit: Archaeology Toolkit for QGIS},
+  year = {2026},
+  url = {https://github.com/lzpxilfe/ar},
+  version = {1.0.0}
+}
+```
+
 ## 한눈에 보기
 
 - 권장 환경: **QGIS 3.40 LTR 이상**
