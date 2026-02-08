@@ -226,7 +226,8 @@ class AhpSuitabilityDialog(QtWidgets.QDialog):
         header = QtWidgets.QLabel(
             "<b>AHP 입지적합도</b><br>"
             "만들어진 환경변수(래스터)를 AHP(쌍대비교) 가중치로 통합해 적합도 래스터를 생성합니다.<br>"
-            "<i>Tip: AOI를 지정하고 ‘AOI 범위로 자르기’를 켜면 결과가 가벼워집니다.</i>"
+            "<i>Tip: AOI를 지정하고 ‘AOI 범위로 자르기’를 켜면 결과가 가벼워집니다.</i><br>"
+            "<span style='color:#455a64;'>Reference: Saaty (1980) The Analytic Hierarchy Process</span>"
         )
         header.setWordWrap(True)
         header.setStyleSheet("background:#f1f8e9; padding:10px; border:1px solid #dcedc8; border-radius:4px;")
@@ -332,6 +333,10 @@ class AhpSuitabilityDialog(QtWidgets.QDialog):
         self.btnResetPairwise.clicked.connect(self._on_reset_pairwise)
         self.lblConsistency = QtWidgets.QLabel("CR: -")
         self.lblConsistency.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        try:
+            self.lblConsistency.setToolTip("일관성비율(CR). 일반적으로 CR ≤ 0.10 권장 (Saaty, 1980).")
+        except Exception:
+            pass
         row_w.addWidget(self.btnResetPairwise)
         row_w.addStretch(1)
         row_w.addWidget(self.lblConsistency)

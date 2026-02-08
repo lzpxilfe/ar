@@ -64,7 +64,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         'Kriging (Lite, Ordinary)': {
             'algorithm': 'archtoolkit:kriging_lite',
             'method': None,
-            'desc': '💡 포인트 기반 Ordinary Kriging(Lite). 자동 파라미터 + 분산(불확실성)도 함께 출력 [Matheron, 1963; Cressie, 1993]'
+            'desc': '💡 포인트 기반 Ordinary Kriging(Lite). 자동 파라미터 + 예측 DEM + 분산(_variance.tif) 출력. 미터 단위 투영 CRS 권장 [Matheron, 1963; Cressie, 1993]'
         }
     }
     
@@ -201,6 +201,14 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             self.lblZField = QtWidgets.QLabel("값 필드(Z):", self)
             self.cmbZField = QtWidgets.QComboBox(self)
             self.cmbZField.setMinimumWidth(220)
+            try:
+                self.cmbZField.setToolTip(
+                    "포인트의 해발/값(Z) 필드를 선택하세요.\n"
+                    "- 자동(추천): Z_COORD/Elevation 등 흔한 필드를 자동 탐색\n"
+                    "- 3D geometry Z: 3차원 포인트의 Z값 사용"
+                )
+            except Exception:
+                pass
 
             self.lblKrigingNeighbors = QtWidgets.QLabel("Kriging 이웃점 수:", self)
             self.spinKrigingNeighbors = QtWidgets.QSpinBox(self)
@@ -217,12 +225,25 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
             layout.addWidget(self.lblKrigingNeighbors, 5, 0)
             layout.addWidget(self.spinKrigingNeighbors, 5, 1)
 
+            self.lblKrigingHint = QtWidgets.QLabel(
+                "<b>Kriging(Lite) 안내</b><br>"
+                "- 포인트 값(표고점 등) 기반 보간입니다. 등고선(선)에는 적합하지 않습니다.<br>"
+                "- 출력은 DEM과 함께 <code>_variance.tif</code>(불확실성)도 생성됩니다."
+            )
+            self.lblKrigingHint.setWordWrap(True)
+            try:
+                self.lblKrigingHint.setStyleSheet("background:#fff3e0; padding:8px; border-radius:3px;")
+            except Exception:
+                pass
+            layout.addWidget(self.lblKrigingHint, 6, 0, 1, 2)
+
             # Fill initial items; shown only when Kriging is selected.
             self._refresh_kriging_value_fields()
             self.lblZField.hide()
             self.cmbZField.hide()
             self.lblKrigingNeighbors.hide()
             self.spinKrigingNeighbors.hide()
+            self.lblKrigingHint.hide()
         except Exception:
             # Never block dialog load due to optional UI widgets.
             pass
@@ -668,7 +689,7 @@ class DemGeneratorDialog(QtWidgets.QDialog, FORM_CLASS):
         self.lblInterpDesc.setText(desc)
 
         show_kriging = str(method_info.get("algorithm") or "") == "archtoolkit:kriging_lite"
-        for w_name in ("lblZField", "cmbZField", "lblKrigingNeighbors", "spinKrigingNeighbors"):
+        for w_name in ("lblZField", "cmbZField", "lblKrigingNeighbors", "spinKrigingNeighbors", "lblKrigingHint"):
             w = getattr(self, w_name, None)
             if w is None:
                 continue

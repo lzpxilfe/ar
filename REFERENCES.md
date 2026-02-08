@@ -18,6 +18,13 @@
 
 > Shepard, D. (1968). "A two-dimensional interpolation function for irregularly-spaced data". *Proceedings of the 1968 23rd ACM National Conference*, pp. 517–524. DOI: 10.1145/800186.810616
 
+## 크리깅 보간 (Kriging / Geostatistical Interpolation)
+
+**지오통계/변동함수(variogram) 기반 보간:**
+> Matheron, G. (1963). "Principles of geostatistics." *Economic Geology*, 58(8), pp. 1246–1266.
+
+> Cressie, N. (1993). *Statistics for Spatial Data*. Wiley.
+
 ## 등고선 생성 (Contour Generation)
 
 **GDAL Contour:**
@@ -45,6 +52,11 @@
 
 **Llobera & Sluckin의 인지적 경사 연구:**
 > Llobera, M. & Sluckin, T.J. (2007). "Zigzagging: Theoretical insights on climbing strategies." *Journal of Theoretical Biology*, 249(2), pp. 206-217.
+
+## AHP (Analytic Hierarchy Process)
+
+**쌍대비교 기반 다기준 의사결정(가중치/일관성비율):**
+> Saaty, T.L. (1980). *The Analytic Hierarchy Process*. McGraw-Hill.
 
 ## 최소비용 네트워크 (Least-cost Network)
 
@@ -81,6 +93,14 @@
 > Gillings, M., & Wheatley, D. (2001). "Seeing is not believing: unresolved issues in archaeological visibility analysis." In: *On the Good Use of Geographical Information Systems in Archaeological Landscape Studies* (COST Action G2).
 
 > Turner, A., Doxa, M., O'Sullivan, D., & Penn, A. (2001). "From isovists to visibility graphs: a methodology for the analysis of architectural space." *Environment and Planning B: Planning and Design*, 28(1), pp. 103–121. DOI: 10.1068/b2684
+
+## 가시권 분석 (Viewshed / LOS)
+
+> Wang, J., Robinson, G. J., & White, K. (1996). "A Fast Solution to Local Viewshed Computation Using Grid-Based Digital Elevation Models." *Photogrammetric Engineering & Remote Sensing*, 62(10), pp. 1157–1164.
+
+## 히구치 거리대 (Higuchi view zones)
+
+> Higuchi, T. (1975). *The Visual and Spatial Structure of Landscapes*.
 
 ## 지형 거칠기 지수 TRI (Terrain Ruggedness Index)
 
