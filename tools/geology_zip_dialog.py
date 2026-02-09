@@ -23,6 +23,7 @@ from qgis.core import (
     QgsFeature,
     QgsField,
     QgsFillSymbol,
+    QgsLayerTreeGroup,
     QgsMarkerSymbol,
     QgsPalLayerSettings,
     QgsProject,
@@ -58,6 +59,26 @@ def _safe_name(name: str) -> str:
     base = re.sub(r"\s+", "_", base).strip("_")
     return base or "layer"
 
+
+def _ensure_output_extension(path: str, fmt: str) -> str:
+    p = str(path or "").strip()
+    if not p:
+        return p
+    fmt0 = str(fmt or "").strip().lower()
+    desired_ext = ".tif" if fmt0 == "tif" else ".asc" if fmt0 == "asc" else ""
+    if not desired_ext:
+        return p
+
+    # Strip known raster extensions repeatedly (handles accidental double extensions like ".tif.asc").
+    root = p
+    while True:
+        root2, ext = os.path.splitext(root)
+        if ext.lower() in (".tif", ".tiff", ".asc"):
+            root = root2
+            continue
+        break
+
+    return root + desired_ext
 
 class KigamZipProcessor:
     def __init__(self):
@@ -361,6 +382,22 @@ class GeologyZipDialog(QtWidgets.QDialog):
         grp_rst = QtWidgets.QGroupBox("2. 벡터 → 래스터 (MaxEnt/예측모델)")
         vbox = QtWidgets.QVBoxLayout(grp_rst)
         vbox.addWidget(QtWidgets.QLabel("변환할 벡터 레이어를 선택하세요:"))
+
+        row_filter = QtWidgets.QHBoxLayout()
+        row_filter.addWidget(QtWidgets.QLabel("필터:"))
+        self.chkKigamOnly = QtWidgets.QCheckBox("KIGAM ZIP 레이어만")
+        self.chkKigamOnly.setChecked(True)
+        self.chkKigamOnly.setToolTip("ArchToolkit의 KIGAM ZIP 로더로 불러온 레이어만 목록에 표시합니다.")
+        self.chkLithoOnly = QtWidgets.QCheckBox("Litho(폴리곤)만")
+        self.chkLithoOnly.setChecked(True)
+        self.chkLithoOnly.setToolTip("보통 예측모델링에는 Litho(암상/지층) 폴리곤만 있으면 충분합니다.")
+        self.chkKigamOnly.stateChanged.connect(self.refresh_layer_list)
+        self.chkLithoOnly.stateChanged.connect(self.refresh_layer_list)
+        row_filter.addWidget(self.chkKigamOnly)
+        row_filter.addWidget(self.chkLithoOnly)
+        row_filter.addStretch(1)
+        vbox.addLayout(row_filter)
+
         self.lstLayers = QtWidgets.QListWidget()
         self.lstLayers.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.lstLayers.itemChanged.connect(self._refresh_field_choices)
@@ -478,24 +515,93 @@ class GeologyZipDialog(QtWidgets.QDialog):
                 w.setEnabled(not is_merge)
         self.txtOutDir.setEnabled(not is_merge)
 
+    def _kigam_region_for_layer(self, layer: QgsVectorLayer) -> str:
+        try:
+            root = QgsProject.instance().layerTreeRoot()
+            node = root.findLayer(layer.id())
+            while node is not None:
+                parent = node.parent()
+                if parent is None:
+                    break
+                if isinstance(parent, QgsLayerTreeGroup):
+                    name = str(parent.name() or "").strip()
+                    if name.startswith("KIGAM_"):
+                        return name[len("KIGAM_") :].strip()
+                node = parent
+        except Exception:
+            pass
+        return ""
+
     def refresh_layer_list(self):
+        checked_ids = set()
+        try:
+            for i in range(self.lstLayers.count()):
+                it = self.lstLayers.item(i)
+                if it is not None and it.checkState() == Qt.Checked:
+                    checked_ids.add(it.data(Qt.UserRole))
+        except Exception:
+            checked_ids = set()
+
         self.lstLayers.blockSignals(True)
         self.lstLayers.clear()
         layers = list(QgsProject.instance().mapLayers().values())
+
+        kigam_only = True
+        litho_only = True
+        try:
+            kigam_only = bool(self.chkKigamOnly.isChecked())
+            litho_only = bool(self.chkLithoOnly.isChecked())
+        except Exception:
+            pass
+
+        scored = []
         for layer in layers:
             if not isinstance(layer, QgsVectorLayer):
                 continue
+            if kigam_only:
+                try:
+                    tool_id = str(layer.customProperty("archtoolkit/tool_id", "") or "").strip()
+                    if tool_id != "kigam_zip":
+                        continue
+                except Exception:
+                    continue
+
+            geom = layer.geometryType()
+            if litho_only:
+                if geom != QgsWkbTypes.PolygonGeometry:
+                    continue
+                try:
+                    lname = str(layer.name() or "").lower()
+                    fields_up = {str(f.name() or "").upper() for f in layer.fields()}
+                    if ("litho" not in lname) and ("LITHOIDX" not in fields_up) and ("LITHONAME" not in fields_up):
+                        continue
+                except Exception:
+                    continue
+
+            region = self._kigam_region_for_layer(layer)
+            scored.append((region, str(layer.name() or ""), layer, geom))
+
+        scored.sort(key=lambda x: (x[0], x[1]))
+        for region, layer_name, layer, geom in scored:
+            shown_name = layer_name
+            if region:
+                shown_name = f"[{region}] {layer_name}"
             item = QtWidgets.QListWidgetItem(layer.name())
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
+            item.setCheckState(Qt.Checked if layer.id() in checked_ids else Qt.Unchecked)
             item.setData(Qt.UserRole, layer.id())
-            geom = layer.geometryType()
+            tip = []
             if geom == QgsWkbTypes.PointGeometry:
-                item.setToolTip("포인트 레이어")
+                tip.append("포인트 레이어")
             elif geom == QgsWkbTypes.LineGeometry:
-                item.setToolTip("라인 레이어")
+                tip.append("라인 레이어")
             elif geom == QgsWkbTypes.PolygonGeometry:
-                item.setToolTip("폴리곤 레이어")
+                tip.append("폴리곤 레이어")
+            if region:
+                tip.append(f"지역/도엽: {region}")
+            if tip:
+                item.setToolTip(" / ".join(tip))
+            item.setText(shown_name)
             self.lstLayers.addItem(item)
         self.lstLayers.blockSignals(False)
         self._refresh_field_choices()
@@ -521,7 +627,13 @@ class GeologyZipDialog(QtWidgets.QDialog):
                 for f in lyr.fields():
                     fields.add(f.name())
         else:
-            for lyr in QgsProject.instance().mapLayers().values():
+            layer_map = QgsProject.instance().mapLayers()
+            for i in range(self.lstLayers.count()):
+                item = self.lstLayers.item(i)
+                if item is None:
+                    continue
+                lid = item.data(Qt.UserRole)
+                lyr = layer_map.get(lid)
                 if isinstance(lyr, QgsVectorLayer):
                     for f in lyr.fields():
                         fields.add(f.name())
@@ -741,7 +853,9 @@ class GeologyZipDialog(QtWidgets.QDialog):
                 rows.sort(key=lambda x: (x[0], x[1]))
                 for vv, code, label, cnt in rows:
                     w.writerow([code, vv, label, cnt])
-            return csv_path
+            if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+                return csv_path
+            return None
         except Exception:
             return None
 
@@ -752,19 +866,105 @@ class GeologyZipDialog(QtWidgets.QDialog):
         out_path: str,
         pixel_size: float,
         nodata: float,
-    ) -> None:
+    ) -> str:
+        rect = None
+        try:
+            rect = layer.extent()
+        except Exception:
+            rect = None
+        try:
+            authid = str(layer.crs().authid() or "").strip() if layer.crs().isValid() else ""
+        except Exception:
+            authid = ""
+
+        log_message(
+            "KIGAM rasterize: "
+            f"layer={layer.name()} field={field_name} out={out_path} "
+            f"px={pixel_size} nodata={nodata} crs={authid} extent={rect}",
+            level=Qgis.Info,
+        )
+
         params = {
             "INPUT": layer,
             "FIELD": field_name,
             "UNITS": 1,
             "WIDTH": float(pixel_size),
             "HEIGHT": float(pixel_size),
-            "EXTENT": layer.extent(),
+            "EXTENT": rect if rect is not None else layer.extent(),
             "NODATA": float(nodata),
-            "DATA_TYPE": 5,
+            # Categorical rasters should stay integer-coded for MaxEnt/ML workflows.
+            "DATA_TYPE": 4,  # Int32
             "OUTPUT": out_path,
         }
-        processing.run("gdal:rasterize", params)
+        try:
+            result = processing.run("gdal:rasterize", params)
+        except Exception as e:
+            log_message(f"gdal:rasterize 실패: {e}", level=Qgis.Warning)
+            raise
+
+        raster_path = out_path
+        try:
+            if isinstance(result, dict) and result.get("OUTPUT"):
+                raster_path = str(result.get("OUTPUT"))
+        except Exception:
+            raster_path = out_path
+
+        # Verify output actually exists (some Processing failures don't raise).
+        exists = False
+        size = 0
+        try:
+            exists = os.path.exists(raster_path)
+            size = os.path.getsize(raster_path) if exists else 0
+        except Exception:
+            exists = False
+            size = 0
+
+        log_message(
+            f"KIGAM rasterize result: OUTPUT={raster_path} exists={exists} size={size}",
+            level=Qgis.Info if exists and size > 0 else Qgis.Warning,
+        )
+        if exists and size > 0:
+            return raster_path
+
+        # Fallback: export memory layer to disk and retry (helps some GDAL/Processing edge cases).
+        try:
+            tmp_root = os.path.join(tempfile.gettempdir(), "ArchToolkit_KIGAM_Rasterize")
+            os.makedirs(tmp_root, exist_ok=True)
+            tmp_vec = os.path.join(tmp_root, f"atk_vec_{new_run_id('kigam')}.gpkg")
+            save_res = processing.run("native:savefeatures", {"INPUT": layer, "OUTPUT": tmp_vec})
+            vec_path = tmp_vec
+            if isinstance(save_res, dict) and save_res.get("OUTPUT"):
+                vec_path = str(save_res.get("OUTPUT"))
+
+            params2 = dict(params)
+            params2["INPUT"] = vec_path
+            result2 = processing.run("gdal:rasterize", params2)
+            raster_path2 = out_path
+            if isinstance(result2, dict) and result2.get("OUTPUT"):
+                raster_path2 = str(result2.get("OUTPUT"))
+
+            exists2 = os.path.exists(raster_path2)
+            size2 = os.path.getsize(raster_path2) if exists2 else 0
+            log_message(
+                f"KIGAM rasterize retry: INPUT={vec_path} OUTPUT={raster_path2} exists={exists2} size={size2}",
+                level=Qgis.Info if exists2 and size2 > 0 else Qgis.Warning,
+            )
+            if exists2 and size2 > 0:
+                try:
+                    if os.path.exists(vec_path):
+                        os.remove(vec_path)
+                except Exception:
+                    pass
+                return raster_path2
+        except Exception as e:
+            log_message(f"KIGAM rasterize 재시도 실패: {e}", level=Qgis.Warning)
+
+        # If we get here, we couldn't verify a raster file on disk.
+        try:
+            log_message(f"KIGAM rasterize raw result={result}", level=Qgis.Warning)
+        except Exception:
+            pass
+        raise RuntimeError("래스터 파일이 생성되지 않았습니다. 출력 경로/권한/로그를 확인하세요.")
 
     def _run_rasterize(self):
         layers = self._selected_vector_layers()
@@ -792,24 +992,23 @@ class GeologyZipDialog(QtWidgets.QDialog):
                     push_message(self.iface, "오류", "출력 파일을 지정하세요.", level=2)
                     restore_ui_focus(self)
                     return
-                if not out_path.lower().endswith(f".{fmt}"):
-                    out_path += f".{fmt}"
+                out_path = _ensure_output_extension(out_path, fmt)
 
                 merged_layer, mapping, labels, counts = self._build_numeric_merge_layer(layers, field)
                 if merged_layer is None or not merged_layer.isValid():
                     raise RuntimeError("병합 레이어 생성에 실패했습니다.")
 
-                self._rasterize_layer(merged_layer, "ATK_VAL", out_path, pixel, nodata)
-                csv_path = self._write_mapping_csv(mapping, out_path, labels=labels, counts=counts)
+                raster_path = self._rasterize_layer(merged_layer, "ATK_VAL", out_path, pixel, nodata)
+                csv_path = self._write_mapping_csv(mapping, raster_path, labels=labels, counts=counts)
 
                 try:
-                    r_name = os.path.splitext(os.path.basename(out_path))[0].strip() or f"Geology_{run_id}"
+                    r_name = os.path.splitext(os.path.basename(raster_path))[0].strip() or f"Geology_{run_id}"
                     if field:
                         r_name = f"{r_name} ({field})"
                 except Exception:
                     r_name = f"Geology_{run_id}"
 
-                rlayer = QgsRasterLayer(out_path, r_name)
+                rlayer = QgsRasterLayer(raster_path, r_name)
                 if rlayer and rlayer.isValid():
                     QgsProject.instance().addMapLayer(rlayer, False)
                     try:
@@ -832,7 +1031,7 @@ class GeologyZipDialog(QtWidgets.QDialog):
                     )
                 if csv_path:
                     log_message(f"코드 매핑 저장: {csv_path}", level=Qgis.Info)
-                push_message(self.iface, "완료", f"래스터 생성: {out_path}", level=0, duration=7)
+                push_message(self.iface, "완료", f"래스터 생성: {raster_path}", level=0, duration=7)
                 return
 
             # Per-layer mode
@@ -862,10 +1061,10 @@ class GeologyZipDialog(QtWidgets.QDialog):
                     continue
 
                 out_path = os.path.join(out_dir, f"{_safe_name(lyr.name())}.{fmt}")
-                self._rasterize_layer(merged_layer, "ATK_VAL", out_path, pixel, nodata)
-                csv_path = self._write_mapping_csv(mapping, out_path, labels=labels, counts=counts)
+                raster_path = self._rasterize_layer(merged_layer, "ATK_VAL", out_path, pixel, nodata)
+                csv_path = self._write_mapping_csv(mapping, raster_path, labels=labels, counts=counts)
 
-                rlayer = QgsRasterLayer(out_path, f"{lyr.name()}_raster")
+                rlayer = QgsRasterLayer(raster_path, f"{lyr.name()}_raster")
                 if rlayer and rlayer.isValid():
                     QgsProject.instance().addMapLayer(rlayer, False)
                     try:
@@ -940,20 +1139,31 @@ KIGAM 1:50,000 지질도 ZIP(도엽)을 바로 로드하고, 지질 코드 기�
 <ul>
   <li>KIGAM에서 받은 ZIP을 선택하면 SHP를 자동 로드하고, sym 폴더가 있으면 심볼을 적용합니다.</li>
   <li>LITHOIDX/LITHONAME 레이어는 라벨을 자동 적용할 수 있습니다.</li>
+  <li>레이어는 <code>ArchToolkit - Geology</code> 그룹 아래 <code>KIGAM_도엽명</code>으로 정리되고, 라인/포인트가 폴리곤(Litho) 위로 올라오도록 순서를 맞춥니다.</li>
 </ul>
 
 <h4>벡터 → 래스터</h4>
 <ul>
+  <li><b>기본 목록</b>: 보통 Litho(암상/지층) 폴리곤만 있으면 충분하므로, 기본은 <b>KIGAM ZIP 레이어 + Litho(폴리곤)</b>만 표시합니다.</li>
+  <li>레이어 이름 앞에 <code>[GF13_청주]</code>처럼 <b>도엽/지역</b> 정보가 함께 표시됩니다(여러 도엽을 불러온 경우 구분용).</li>
   <li>값 필드는 보통 <code>LITHOIDX</code>/<code>AGEIDX</code>를 사용합니다.</li>
   <li>문자 코드(예: Qa, Jbgr)일 경우 자동으로 정수 코드로 매핑하며, <code>*_mapping.csv</code>를 함께 저장합니다.</li>
   <li>숫자 코드(예: <code>LITHOIDX</code>)를 선택해도 가능한 경우 <code>LITHONAME</code>/<code>AGENAME</code>을 함께 매핑 CSV에 기록합니다.</li>
   <li>단일 래스터(병합) 또는 레이어별 출력 중 선택할 수 있습니다.</li>
+  <li>실행 후에는 <b>출력 파일이 실제로 생성되었는지</b> 확인하고, 문제가 있으면 로그에 원인을 남깁니다.</li>
 </ul>
 
 <h4>예측모델링 팁</h4>
 <ul>
   <li>지질 단위(지층/암상)는 보통 <b>범주형(categorical)</b> 변수입니다. 래스터는 숫자로 저장되며, 매핑 CSV로 해석합니다.</li>
   <li>MaxEnt를 쓴다면 해당 변수를 범주형으로 지정하는 방식을 권장합니다(연속형 숫자로 해석되면 왜곡될 수 있음).</li>
+  <li>다중 변수(예: 지질+지구화학+지형)로 모델을 만들 때는 모든 래스터의 <b>좌표계/해상도/Extent</b>를 맞추는 것이 중요합니다.</li>
+</ul>
+
+<h4>문제 해결</h4>
+<ul>
+  <li>CSV는 나오는데 래스터가 없으면: 출력 폴더 권한/경로(특수문자/보안 설정)를 확인하고, 다른 폴더(예: Downloads)로 다시 저장해보세요.</li>
+  <li>원인 파악: ArchToolkit 실시간 로그/로그 파일에서 <code>KIGAM rasterize result</code> 줄을 확인하세요.</li>
 </ul>
 """
         try:

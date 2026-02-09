@@ -131,5 +131,18 @@
 **Wilson et al. Geomorphometry:**
 > Wilson, J.P., & Gallant, J.C. (2000). "Terrain Analysis: Principles and Applications." *John Wiley & Sons*.
 
+## MaxEnt (Maximum Entropy) / 예측모델링
+
+**최대 엔트로피 기반 종 분포/입지 예측모델링:**
+> Phillips, S.J., Anderson, R.P., & Schapire, R.E. (2006). "Maximum entropy modeling of species geographic distributions." *Ecological Modelling*, 190(3–4), pp. 231–259.
+
+> Phillips, S.J., & Dudík, M. (2008). "Modeling of species distributions with Maxent: new extensions and a comprehensive evaluation." *Ecography*, 31(2), pp. 161–175.
+
+> Elith, J., Phillips, S.J., Hastie, T., Dudík, M., Chee, Y.E., & Yates, C.J. (2011). "A statistical explanation of MaxEnt for ecologists." *Diversity and Distributions*, 17(1), pp. 43–57.
+
+## 지질도 데이터 (KIGAM 1:50,000)
+
+> 한국지질자원연구원(KIGAM). 1:50,000 지질도 도엽(벡터 SHP, ZIP) 데이터.
+
 ---
 *ArchToolkit은 QGIS Processing Framework와 GDAL을 활용합니다.*

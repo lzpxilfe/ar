@@ -6,10 +6,10 @@
 
 ArchToolkit은 한국의 고고학·문화유산 조사/연구 환경에서 자주 쓰이는 작업을 한데 묶은 QGIS 플러그인입니다. DEM 생성부터 지형·가시성·이동(비용)·네트워크·지구화학도 수치화·도면 스타일링까지, 연구자가 분석과 기록에 집중할 수 있도록 도구들을 정리했습니다.
 
-## 🌟 Citation & Star
+## Citation & Star
 
-이 플러그인이 유용했다면 GitHub Star ⭐를 눌러주세요! 개발자에게 큰 힘이 됩니다.  
-If you find this repository useful, please consider giving it a star ⭐ and citing it in your work:
+이 플러그인이 유용했다면 GitHub Star를 눌러주세요! 개발자에게 큰 힘이 됩니다.  
+If you find this repository useful, please consider giving it a star and citing it in your work:
 
 ```bibtex
 @software{ArchToolkit2026,
@@ -77,6 +77,39 @@ If you find this repository useful, please consider giving it a star ⭐ and cit
 
 - DXF 코드/선폭/라벨 매핑은 `tools/map_styling_codes.json`에서 수정할 수 있습니다. (다이얼로그의 “다시 불러오기”로 즉시 반영)
 - `📦 QML/프리셋 내보내기...` 버튼으로 스타일 QML(도로/하천/건물)과 현재 코드 매핑 JSON을 폴더로 저장할 수 있습니다. (DEM 스타일은 DEM 선택+체크 시 함께 저장)
+
+## 지질도 도엽 ZIP 불러오기/래스터 변환 (KIGAM)
+
+KIGAM 1:50,000 지질도 도엽 ZIP(보통 SHP 묶음)을 프로젝트에 바로 불러오고, 예측모델링/MaxEnt 입력으로 쓸 수 있게 **범주형 래스터**로 변환합니다.
+
+### 1) ZIP 불러오기
+
+1. `지질도 도엽 ZIP 불러오기/래스터 변환 (KIGAM)` 실행
+2. ZIP 선택 → `ZIP 불러오기`
+3. 레이어가 `ArchToolkit - Geology` → `KIGAM_<도엽명>` 아래에 정리됩니다.
+   - 라인/포인트가 폴리곤(Litho) 위로 오도록 순서를 맞춰서, **Litho에 가려지지 않도록** 설계했습니다.
+   - `Frame`, `Crosssection` 같은 보조 레이어는 기본 숨김(필요할 때만 켜세요)
+
+### 2) 벡터 → 래스터
+
+- 기본 레이어 목록은 **KIGAM Litho(폴리곤)** 위주로 보여주고, 레이어 앞에 `[GF13_청주]`처럼 **도엽/지역**을 함께 표시합니다.
+- 값 필드 추천: `LITHOIDX` 또는 `AGEIDX`
+  - 문자 코드(예: `Qa`, `Jbgr`)는 자동으로 1,2,3… 정수로 매핑해서 래스터에 기록합니다.
+  - 같은 경로에 `*_mapping.csv`를 함께 저장합니다. (열: `code,int_value,label,feature_count`)
+- 여러 레이어를 선택했다면 `선택 레이어 병합 후 단일 래스터`(병합) 또는 `레이어별 래스터 출력` 중에서 선택할 수 있습니다.
+- 해상도(픽셀 크기)는 **미터 단위 투영 CRS**에서 설정하는 것을 권장합니다.
+
+### 3) 모델링 팁
+
+- 지질 단위는 보통 연속형이 아니라 **범주형 변수**입니다.
+  - MaxEnt를 쓴다면 해당 레이어를 categorical로 지정하세요.
+  - 다른 ML에서 one-hot이 필요하면 `*_mapping.csv`를 기준으로 더미 변수를 생성하세요.
+- 다중 변수(예: 지질 + 지구화학 + 지형)로 모델을 만들 때는 모든 래스터의 **좌표계/해상도/Extent**를 맞추는 것이 중요합니다.
+
+### 문제 해결
+
+- CSV는 나오는데 래스터가 안 보이면: 로그 파일 `%APPDATA%\QGIS\QGIS3\profiles\default\ArchToolkit\logs\archtoolkit.log`에서 `KIGAM rasterize result` 로그를 확인하세요.
+- 출력 폴더 권한/보안 설정에 따라 특정 폴더(예: Desktop/Documents)에서 쓰기 실패가 날 수 있습니다. 이 경우 다른 폴더(예: Downloads)에 저장해보세요.
 
 ## AHP 입지적합도 (AHP Suitability)
 
