@@ -109,6 +109,7 @@ KIGAM 1:50,000 지질도 도엽 ZIP(보통 SHP 묶음)을 프로젝트에 바로
 ### 문제 해결
 
 - CSV는 나오는데 래스터가 안 보이면: 로그 파일 `%APPDATA%\QGIS\QGIS3\profiles\default\ArchToolkit\logs\archtoolkit.log`에서 `KIGAM rasterize result` 로그를 확인하세요.
+- 지질도 레이어 CRS가 `EPSG:4326`(경위도)인 경우, 픽셀 크기(m)는 내부적으로 도(°) 단위로 **자동 환산**해 처리합니다. 정확한 미터 해상도가 중요하면 **투영 CRS(미터 단위)** 로 변환해서 작업하는 것을 권장합니다.
 - 출력 폴더 권한/보안 설정에 따라 특정 폴더(예: Desktop/Documents)에서 쓰기 실패가 날 수 있습니다. 이 경우 다른 폴더(예: Downloads)에 저장해보세요.
 
 ## AHP 입지적합도 (AHP Suitability)
