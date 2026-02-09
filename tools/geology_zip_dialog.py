@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import zipfile
 import csv
+import math
 from typing import Dict, List, Optional, Tuple
 
 import processing
@@ -31,6 +32,7 @@ from qgis.core import (
     QgsRasterMarkerSymbolLayer,
     QgsRendererCategory,
     QgsTextFormat,
+    QgsUnitTypes,
     QgsRasterLayer,
     QgsVectorLayer,
     QgsVectorLayerSimpleLabeling,
@@ -79,6 +81,37 @@ def _ensure_output_extension(path: str, fmt: str) -> str:
         break
 
     return root + desired_ext
+
+
+def _meters_to_degrees(pixel_m: float, lat_deg: float) -> Tuple[float, float]:
+    """Approx convert meters to degrees at latitude (lon_deg, lat_deg)."""
+    try:
+        lat = float(lat_deg)
+    except Exception:
+        lat = 0.0
+    try:
+        m = float(pixel_m)
+    except Exception:
+        m = 0.0
+    if m <= 0:
+        return 0.0, 0.0
+
+    r = math.radians(lat)
+    # Approx meters per degree (WGS84). Good enough for small extents / UX.
+    m_per_deg_lat = (
+        111132.92
+        - 559.82 * math.cos(2 * r)
+        + 1.175 * math.cos(4 * r)
+        - 0.0023 * math.cos(6 * r)
+    )
+    m_per_deg_lon = (
+        111412.84 * math.cos(r)
+        - 93.5 * math.cos(3 * r)
+        + 0.118 * math.cos(5 * r)
+    )
+    if m_per_deg_lat <= 0 or m_per_deg_lon <= 0:
+        return 0.0, 0.0
+    return (m / m_per_deg_lon), (m / m_per_deg_lat)
 
 class KigamZipProcessor:
     def __init__(self):
@@ -877,10 +910,57 @@ class GeologyZipDialog(QtWidgets.QDialog):
         except Exception:
             authid = ""
 
+        cell_w = float(pixel_size)
+        cell_h = float(pixel_size)
+        try:
+            crs = layer.crs()
+            units = None
+            try:
+                units = crs.mapUnits() if crs is not None and crs.isValid() else None
+            except Exception:
+                units = None
+
+            if crs is not None and crs.isValid() and (crs.isGeographic() or units == QgsUnitTypes.DistanceDegrees):
+                lat0 = 0.0
+                try:
+                    if rect is not None:
+                        lat0 = float((rect.yMinimum() + rect.yMaximum()) / 2.0)
+                except Exception:
+                    lat0 = 0.0
+                deg_w, deg_h = _meters_to_degrees(cell_w, lat0)
+                if deg_w > 0 and deg_h > 0:
+                    log_message(
+                        f"KIGAM rasterize: geographic CRS detected ({authid or 'unknown'}). "
+                        f"pixel {cell_w}m -> {deg_w:.8f}°(lon) {deg_h:.8f}°(lat) at lat={lat0:.4f}",
+                        level=Qgis.Warning,
+                    )
+                    cell_w, cell_h = float(deg_w), float(deg_h)
+        except Exception:
+            pass
+
+        try:
+            if rect is not None:
+                w = float(rect.width())
+                h = float(rect.height())
+                cols = int(math.ceil(w / cell_w)) if cell_w > 0 else 0
+                rows = int(math.ceil(h / cell_h)) if cell_h > 0 else 0
+                log_message(
+                    f"KIGAM rasterize grid: extent_w={w} extent_h={h} cell_w={cell_w} cell_h={cell_h} -> {cols}x{rows}",
+                    level=Qgis.Info,
+                )
+                if cols <= 0 or rows <= 0:
+                    raise RuntimeError(
+                        "출력 래스터 크기가 0입니다. (CRS 단위/해상도 불일치) "
+                        "투영 CRS(미터 단위)로 변환하거나 픽셀 크기를 조정하세요."
+                    )
+        except Exception as e:
+            log_message(f"KIGAM rasterize preflight 실패: {e}", level=Qgis.Warning)
+            raise
+
         log_message(
             "KIGAM rasterize: "
             f"layer={layer.name()} field={field_name} out={out_path} "
-            f"px={pixel_size} nodata={nodata} crs={authid} extent={rect}",
+            f"px={cell_w}x{cell_h} nodata={nodata} crs={authid} extent={rect}",
             level=Qgis.Info,
         )
 
@@ -888,8 +968,8 @@ class GeologyZipDialog(QtWidgets.QDialog):
             "INPUT": layer,
             "FIELD": field_name,
             "UNITS": 1,
-            "WIDTH": float(pixel_size),
-            "HEIGHT": float(pixel_size),
+            "WIDTH": float(cell_w),
+            "HEIGHT": float(cell_h),
             "EXTENT": rect if rect is not None else layer.extent(),
             "NODATA": float(nodata),
             # Categorical rasters should stay integer-coded for MaxEnt/ML workflows.
