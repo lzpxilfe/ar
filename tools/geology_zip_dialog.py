@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+import csv
 from typing import Dict, List, Optional, Tuple
 
 import processing
@@ -29,6 +30,7 @@ from qgis.core import (
     QgsRasterMarkerSymbolLayer,
     QgsRendererCategory,
     QgsTextFormat,
+    QgsRasterLayer,
     QgsVectorLayer,
     QgsVectorLayerSimpleLabeling,
     QgsWkbTypes,
@@ -244,27 +246,56 @@ class KigamZipProcessor:
             parent = root.insertGroup(0, PARENT_GROUP_NAME)
         run_group = parent.insertGroup(0, f"KIGAM_{group_name}")
 
-        points: List[QgsVectorLayer] = []
-        lines: List[QgsVectorLayer] = []
-        polygons: List[QgsVectorLayer] = []
-        reference: List[QgsVectorLayer] = []
+        def _priority(layer: QgsVectorLayer) -> int:
+            name = (layer.name() or "").lower()
+            geom = layer.geometryType()
 
-        for layer in layers:
-            name = layer.name().lower()
-            if "frame" in name or "crosssectionline" in name:
-                reference.append(layer)
-            elif layer.geometryType() == QgsWkbTypes.PointGeometry:
-                points.append(layer)
-            elif layer.geometryType() == QgsWkbTypes.LineGeometry:
-                lines.append(layer)
-            else:
-                polygons.append(layer)
+            # Reference / sheet helpers
+            if "frame" in name:
+                return 0
 
-        ordered = reference + polygons + lines + points
-        for layer in ordered:
-            node = run_group.addLayer(layer)
-            if layer in reference:
-                node.setItemVisibilityChecked(False)
+            # Polygons should sit below linework so labels/lines aren't hidden by fills.
+            if "litho" in name:
+                return 30
+            if geom == QgsWkbTypes.PolygonGeometry:
+                return 25
+
+            # Linework (top)
+            if geom == QgsWkbTypes.LineGeometry:
+                if "crosssection" in name:
+                    return 55
+                if "boundary" in name:
+                    return 50
+                if "foliation" in name:
+                    return 45
+                if "schistosity" in name:
+                    return 44
+                return 40
+
+            # Points (very top)
+            if geom == QgsWkbTypes.PointGeometry:
+                return 60
+
+            return 10
+
+        def _hide_by_default(layer: QgsVectorLayer) -> bool:
+            name = (layer.name() or "").lower()
+            return ("frame" in name) or ("crosssection" in name)
+
+        scored: List[Tuple[int, int, QgsVectorLayer]] = []
+        for i, layer in enumerate(layers):
+            scored.append((_priority(layer), i, layer))
+        # Display order (top->bottom): higher priority first, stable by original order.
+        scored.sort(key=lambda x: (-x[0], x[1]))
+
+        # insertLayer(0, ...) builds the list from bottom->top, so iterate reversed.
+        for _, __, layer in reversed(scored):
+            node = run_group.insertLayer(0, layer)
+            if _hide_by_default(layer):
+                try:
+                    node.setItemVisibilityChecked(False)
+                except Exception:
+                    pass
         run_group.setExpanded(True)
         parent.setExpanded(True)
 
@@ -526,6 +557,37 @@ class GeologyZipDialog(QtWidgets.QDialog):
                 return p
         return sorted(common)[0]
 
+    def _suggest_label_field(self, layer: QgsVectorLayer, field_name: str) -> Optional[str]:
+        try:
+            fields = [f.name() for f in (layer.fields() or [])]
+        except Exception:
+            fields = []
+        if not fields:
+            return None
+
+        up = {str(f).upper(): str(f) for f in fields if f}
+        base = str(field_name or "").strip()
+        base_up = base.upper()
+        if not base_up:
+            return None
+
+        if base_up.endswith("IDX"):
+            cand = base_up[:-3] + "NAME"
+            if cand in up:
+                return up[cand]
+
+        if base_up.endswith("ID"):
+            cand = base_up[:-2] + "NAME"
+            if cand in up:
+                return up[cand]
+
+        # Common KIGAM pairs / fallbacks
+        for cand in ("LITHONAME", "AGENAME", "NAME", "KOR_NAME", "ENG_NAME"):
+            if cand in up and up[cand] != base:
+                return up[cand]
+
+        return None
+
     def _is_numeric_field(self, layer: QgsVectorLayer, field_name: str) -> bool:
         try:
             f = layer.fields().field(field_name)
@@ -545,22 +607,53 @@ class GeologyZipDialog(QtWidgets.QDialog):
         self,
         layers: List[QgsVectorLayer],
         field_name: str,
-    ) -> Tuple[Optional[QgsVectorLayer], Dict[str, int]]:
+    ) -> Tuple[Optional[QgsVectorLayer], Dict[str, int], Dict[str, str], Dict[int, int]]:
         if not layers:
-            return None, {}
+            return None, {}, {}, {}
 
         target_crs = layers[0].crs()
-        geom_str = QgsWkbTypes.displayString(layers[0].wkbType())
-        geom_str = geom_str.replace("Z", "").replace("M", "")
+        try:
+            wkb = QgsWkbTypes.flatType(layers[0].wkbType())
+        except Exception:
+            wkb = layers[0].wkbType()
+        geom_str = QgsWkbTypes.displayString(wkb) or "Polygon"
 
-        out_layer = QgsVectorLayer(f"{geom_str}?crs={target_crs.authid()}", "merged_tmp", "memory")
+        authid = ""
+        try:
+            if target_crs is not None and target_crs.isValid():
+                authid = str(target_crs.authid() or "").strip()
+        except Exception:
+            authid = ""
+
+        uri = geom_str
+        if authid and authid.upper() != "EPSG:0":
+            uri = f"{geom_str}?crs={authid}"
+
+        out_layer = QgsVectorLayer(uri, "merged_tmp", "memory")
+        if out_layer is None or not out_layer.isValid():
+            # Best-effort fallback: omit CRS from URI (some layers may have unknown CRS/authid).
+            out_layer = QgsVectorLayer(geom_str, "merged_tmp", "memory")
+
+        if out_layer is None or not out_layer.isValid():
+            log_message(f"병합 레이어 생성 실패(메모리 레이어 초기화 실패): geom={geom_str}, crs={authid}", level=Qgis.Warning)
+            return None, {}, {}, {}
+
+        try:
+            if target_crs is not None and target_crs.isValid():
+                out_layer.setCrs(target_crs)
+        except Exception:
+            pass
+
         pr = out_layer.dataProvider()
         pr.addAttributes([QgsField("ATK_VAL", QVariant.Int)])
         out_layer.updateFields()
 
         mapping: Dict[str, int] = {}
+        labels: Dict[str, str] = {}
+        counts: Dict[int, int] = {}
         next_id = 1
         numeric = self._is_numeric_field(layers[0], field_name)
+        label_field = self._suggest_label_field(layers[0], field_name) if numeric else None
 
         for lyr in layers:
             if lyr.geometryType() != layers[0].geometryType():
@@ -585,15 +678,33 @@ class GeologyZipDialog(QtWidgets.QDialog):
                         continue
                     if numeric:
                         try:
-                            out_val = float(val)
+                            out_int = int(float(val))
                         except Exception:
                             continue
+                        code = str(out_int)
+                        mapping[code] = out_int
+                        if label_field and code not in labels:
+                            try:
+                                lbl = f[label_field]
+                                if lbl is not None and str(lbl).strip():
+                                    labels[code] = str(lbl).strip()
+                            except Exception:
+                                pass
+                        out_val = float(out_int)
                     else:
                         key = str(val)
                         if key not in mapping:
                             mapping[key] = next_id
                             next_id += 1
+                        if key not in labels:
+                            labels[key] = key
                         out_val = float(mapping[key])
+
+                    try:
+                        out_i = int(out_val)
+                        counts[out_i] = counts.get(out_i, 0) + 1
+                    except Exception:
+                        pass
 
                     nf = QgsFeature(out_layer.fields())
                     nf.setGeometry(geom)
@@ -603,18 +714,33 @@ class GeologyZipDialog(QtWidgets.QDialog):
                     continue
 
         out_layer.updateExtents()
-        return out_layer, mapping
+        return out_layer, mapping, labels, counts
 
-    def _write_mapping_csv(self, mapping: Dict[str, int], out_path: str) -> Optional[str]:
-        if not mapping:
+    def _write_mapping_csv(
+        self,
+        mapping: Dict[str, int],
+        out_path: str,
+        *,
+        labels: Optional[Dict[str, str]] = None,
+        counts: Optional[Dict[int, int]] = None,
+    ) -> Optional[str]:
+        if not mapping and not labels and not counts:
             return None
         try:
             base = os.path.splitext(out_path)[0]
             csv_path = base + "_mapping.csv"
-            with open(csv_path, "w", encoding="utf-8") as f:
-                f.write("code,int_value\n")
-                for k, v in sorted(mapping.items(), key=lambda x: x[1]):
-                    f.write(f"{k},{v}\n")
+            labels = labels or {}
+            counts = counts or {}
+            with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["code", "int_value", "label", "feature_count"])
+                rows = []
+                for code, v in (mapping or {}).items():
+                    vv = int(v)
+                    rows.append((vv, str(code), str(labels.get(str(code), "") or ""), int(counts.get(vv, 0))))
+                rows.sort(key=lambda x: (x[0], x[1]))
+                for vv, code, label, cnt in rows:
+                    w.writerow([code, vv, label, cnt])
             return csv_path
         except Exception:
             return None
@@ -669,15 +795,34 @@ class GeologyZipDialog(QtWidgets.QDialog):
                 if not out_path.lower().endswith(f".{fmt}"):
                     out_path += f".{fmt}"
 
-                merged_layer, mapping = self._build_numeric_merge_layer(layers, field)
+                merged_layer, mapping, labels, counts = self._build_numeric_merge_layer(layers, field)
                 if merged_layer is None or not merged_layer.isValid():
                     raise RuntimeError("병합 레이어 생성에 실패했습니다.")
 
                 self._rasterize_layer(merged_layer, "ATK_VAL", out_path, pixel, nodata)
-                csv_path = self._write_mapping_csv(mapping, out_path)
+                csv_path = self._write_mapping_csv(mapping, out_path, labels=labels, counts=counts)
 
-                rlayer = QgsProject.instance().addRasterLayer(out_path, f"Geology_{run_id}")
-                if rlayer:
+                try:
+                    r_name = os.path.splitext(os.path.basename(out_path))[0].strip() or f"Geology_{run_id}"
+                    if field:
+                        r_name = f"{r_name} ({field})"
+                except Exception:
+                    r_name = f"Geology_{run_id}"
+
+                rlayer = QgsRasterLayer(out_path, r_name)
+                if rlayer and rlayer.isValid():
+                    QgsProject.instance().addMapLayer(rlayer, False)
+                    try:
+                        root = QgsProject.instance().layerTreeRoot()
+                        parents = []
+                        for lyr in layers:
+                            node = root.findLayer(lyr.id())
+                            if node is not None and node.parent() is not None:
+                                parents.append(node.parent())
+                        target = parents[0] if parents and all(p is parents[0] for p in parents) else root.findGroup(PARENT_GROUP_NAME) or root
+                        target.insertLayer(0, rlayer)
+                    except Exception:
+                        QgsProject.instance().layerTreeRoot().insertLayer(0, rlayer)
                     set_archtoolkit_layer_metadata(
                         rlayer,
                         tool_id="kigam_raster",
@@ -686,7 +831,7 @@ class GeologyZipDialog(QtWidgets.QDialog):
                         params={"field": field, "pixel": pixel},
                     )
                 if csv_path:
-                    log_message(f"문자코드 매핑 저장: {csv_path}", level=Qgis.Info)
+                    log_message(f"코드 매핑 저장: {csv_path}", level=Qgis.Info)
                 push_message(self.iface, "완료", f"래스터 생성: {out_path}", level=0, duration=7)
                 return
 
@@ -712,16 +857,24 @@ class GeologyZipDialog(QtWidgets.QDialog):
                     log_message(f"{lyr.name()}: 필드 없음, 건너뜀", level=Qgis.Warning)
                     continue
 
-                merged_layer, mapping = self._build_numeric_merge_layer([lyr], field)
+                merged_layer, mapping, labels, counts = self._build_numeric_merge_layer([lyr], field)
                 if merged_layer is None or not merged_layer.isValid():
                     continue
 
                 out_path = os.path.join(out_dir, f"{_safe_name(lyr.name())}.{fmt}")
                 self._rasterize_layer(merged_layer, "ATK_VAL", out_path, pixel, nodata)
-                csv_path = self._write_mapping_csv(mapping, out_path)
+                csv_path = self._write_mapping_csv(mapping, out_path, labels=labels, counts=counts)
 
-                rlayer = QgsProject.instance().addRasterLayer(out_path, f"{lyr.name()}_raster")
-                if rlayer:
+                rlayer = QgsRasterLayer(out_path, f"{lyr.name()}_raster")
+                if rlayer and rlayer.isValid():
+                    QgsProject.instance().addMapLayer(rlayer, False)
+                    try:
+                        root = QgsProject.instance().layerTreeRoot()
+                        node = root.findLayer(lyr.id())
+                        target = node.parent() if node is not None and node.parent() is not None else root.findGroup(PARENT_GROUP_NAME) or root
+                        target.insertLayer(0, rlayer)
+                    except Exception:
+                        QgsProject.instance().layerTreeRoot().insertLayer(0, rlayer)
                     set_archtoolkit_layer_metadata(
                         rlayer,
                         tool_id="kigam_raster",
@@ -730,7 +883,7 @@ class GeologyZipDialog(QtWidgets.QDialog):
                         params={"field": field, "pixel": pixel},
                     )
                 if csv_path:
-                    log_message(f"문자코드 매핑 저장: {csv_path}", level=Qgis.Info)
+                    log_message(f"코드 매핑 저장: {csv_path}", level=Qgis.Info)
 
             push_message(self.iface, "완료", "레이어별 래스터 변환이 완료되었습니다.", level=0, duration=7)
         except Exception as e:
@@ -792,8 +945,15 @@ KIGAM 1:50,000 지질도 ZIP(도엽)을 바로 로드하고, 지질 코드 기�
 <h4>벡터 → 래스터</h4>
 <ul>
   <li>값 필드는 보통 <code>LITHOIDX</code>/<code>AGEIDX</code>를 사용합니다.</li>
-  <li>문자 코드일 경우 자동으로 정수 코드로 매핑하며, 매핑 CSV를 함께 저장합니다.</li>
+  <li>문자 코드(예: Qa, Jbgr)일 경우 자동으로 정수 코드로 매핑하며, <code>*_mapping.csv</code>를 함께 저장합니다.</li>
+  <li>숫자 코드(예: <code>LITHOIDX</code>)를 선택해도 가능한 경우 <code>LITHONAME</code>/<code>AGENAME</code>을 함께 매핑 CSV에 기록합니다.</li>
   <li>단일 래스터(병합) 또는 레이어별 출력 중 선택할 수 있습니다.</li>
+</ul>
+
+<h4>예측모델링 팁</h4>
+<ul>
+  <li>지질 단위(지층/암상)는 보통 <b>범주형(categorical)</b> 변수입니다. 래스터는 숫자로 저장되며, 매핑 CSV로 해석합니다.</li>
+  <li>MaxEnt를 쓴다면 해당 변수를 범주형으로 지정하는 방식을 권장합니다(연속형 숫자로 해석되면 왜곡될 수 있음).</li>
 </ul>
 """
         try:
