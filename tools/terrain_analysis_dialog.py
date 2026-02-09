@@ -67,7 +67,7 @@ class TerrainAnalysisDialog(QtWidgets.QDialog, FORM_CLASS):
             ]
         },
         'minetti': {
-            'name': 'Minetti 2002',
+            'name': 'Minetti 1995',
             'classes': [
                 {'max': 3, 'label': '1등급 | 0~3° | 일상', 'color': '#20b2aa'},
                 {'max': 9, 'label': '2등급 | 3~9° | 노동', 'color': '#ffff00'},

@@ -47,16 +47,30 @@
 **Herzog 이동 비용 함수(메타볼릭/차량) 구현 참고:**
 > Čučković, Z. (2024). *Movement Analysis* (QGIS plugin). https://github.com/zoran-cuckovic/QGIS-movement-analysis/
 
-**Minetti의 에너지 효율 연구:**
-> Minetti, A.E. (2002). "The three modes of terrestrial locomotion." In: *Running & Science*. Cambridge University Press.
+**Minetti의 경사-에너지 소비(최적 경사) 연구:**
+> Minetti, A.E. (1995). "Optimum gradient of mountain paths." *Journal of Applied Physiology*, 79(5), pp. 1698–1703. DOI: 10.1152/jappl.1995.79.5.1698
+
+**Pandolf의 운반 에너지(Load carriage) 모델:**
+> Pandolf, K.B., Givoni, B., & Goldman, R.F. (1977). "Predicting energy expenditure with loads while standing or walking very slowly." *Journal of Applied Physiology*, 43(4), pp. 577–581. DOI: 10.1152/jappl.1977.43.4.577
+
+**Llobera의 시각 경관 재구성(Visual landscapes):**
+> Llobera, M. (2007). "Reconstructing visual landscapes." *World Archaeology*, 39(1), pp. 51–69. DOI: 10.1080/00438240601136496
 
 **Llobera & Sluckin의 인지적 경사 연구:**
-> Llobera, M. & Sluckin, T.J. (2007). "Zigzagging: Theoretical insights on climbing strategies." *Journal of Theoretical Biology*, 249(2), pp. 206-217.
+> Llobera, M. & Sluckin, T.J. (2007). "Zigzagging: Theoretical insights on climbing strategies." *Journal of Theoretical Biology*, 249(2), pp. 206–217. DOI: 10.1016/j.jtbi.2007.07.020
 
 ## AHP (Analytic Hierarchy Process)
 
 **쌍대비교 기반 다기준 의사결정(가중치/일관성비율):**
 > Saaty, T.L. (1980). *The Analytic Hierarchy Process*. McGraw-Hill.
+
+## 최소비용경로 / 비용-거리 (Least-cost path / Cost-distance)
+
+**누적 비용(최단경로) 계산(Dijkstra):**
+> Dijkstra, E.W. (1959). "A note on two problems in connexion with graphs." *Numerische Mathematik*, 1(1), pp. 269–271. DOI: 10.1007/BF01386390
+
+**휴리스틱 최단경로(A*):**
+> Hart, P.E., Nilsson, N.J., & Raphael, B. (1968). "A Formal Basis for the Heuristic Determination of Minimum Cost Paths." *IEEE Transactions on Systems Science and Cybernetics*, 4(2), pp. 100–107. DOI: 10.1109/TSSC.1968.300136
 
 ## 최소비용 네트워크 (Least-cost Network)
 

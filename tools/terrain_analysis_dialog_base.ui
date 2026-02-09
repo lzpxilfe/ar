@@ -125,14 +125,14 @@
        </widget>
       </item>
       <item row="1" column="0">
-       <widget class="QRadioButton" name="radioMinetti">
-        <property name="text">
-         <string>Minetti(2002) - 에너지효율</string>
-        </property>
-        <property name="toolTip">
-         <string>&lt;html&gt;&lt;b&gt;Minetti 에너지 소비 함수&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Minetti, A. E. (2002). Optimum gradient of mountain paths. Journal of Applied Physiology 79(5):1698-1703.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;경사에 따른 에너지 소비량(J/kg/m) 변화를 분석합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 운반 경로 최적화 분석&lt;br/&gt;• 고대 노동력 추정&lt;/html&gt;</string>
-        </property>
-       </widget>
+        <widget class="QRadioButton" name="radioMinetti">
+         <property name="text">
+          <string>Minetti(1995) - 에너지효율</string>
+         </property>
+         <property name="toolTip">
+          <string>&lt;html&gt;&lt;b&gt;Minetti 에너지 소비 함수&lt;/b&gt;&lt;hr/&gt;&lt;i&gt;Minetti, A. E. (1995). Optimum gradient of mountain paths. Journal of Applied Physiology 79(5):1698-1703. DOI:10.1152/jappl.1995.79.5.1698.&lt;/i&gt;&lt;br/&gt;&lt;br/&gt;경사에 따른 에너지 소비량(J/kg/m) 변화를 분석합니다.&lt;br/&gt;&lt;br/&gt;&lt;b&gt;고고학 활용:&lt;/b&gt;&lt;br/&gt;• 운반 경로 최적화 분석&lt;br/&gt;• 고대 노동력 추정&lt;/html&gt;</string>
+         </property>
+        </widget>
       </item>
       <item row="1" column="1">
        <widget class="QRadioButton" name="radioLlobera">
