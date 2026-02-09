@@ -50,7 +50,7 @@ If you find this repository useful, please consider giving it a star ⭐ and cit
 - **지형 단면 (Terrain Profile)**: 단면선 그리기/저장, 다중 프로파일, 지도-차트 연동(hover), AOI/벡터 오버레이 + 경사/누적상승/구간 통계 + CSV/이미지(PNG/JPG) export.
 
 ### 가시성
-- **가시권/가시선 (Viewshed / LOS)**: 단일/누적/역방향/선형 가시권, 가시선(LOS) + 프로파일, 히구치 거리대, 곡률·굴절 옵션 + (옵션) AOI 가시 통계(가시면적/가시비율) + 가중 누적/표준화(0–100%).
+- **가시권 분석 (Viewshed Analysis)**: 단일/누적/역방향/선형 가시권 + 가시선(LOS) 단면(프로파일), 히구치 거리대, 곡률·굴절 옵션 + (옵션) AOI 가시 통계(가시면적/가시비율) + 가중 누적/표준화(0–100%).
 
 ### 이동/네트워크
 - **비용표면/최소비용경로 (Cost Surface / LCP)**: DEM 경사 기반 이동 시간/에너지 모델링 + LCP + Least-cost corridor(회랑) + 추가 마찰(래스터/벡터) + 등시간선/등에너지선(옵션).
@@ -61,7 +61,7 @@ If you find this repository useful, please consider giving it a star ⭐ and cit
 - **지적도 중첩 면적표 (Cadastral Overlap)**: 조사지역×필지 중첩 면적/비율 계산 + 중첩(클립) 레이어 생성.
 - **도면 시각화 (Map Styling)**: 한국 수치지형도(DXF) 레이어 집계/분류 + 도로·하천·건물 카토그래피 스타일 + DEM 배경 스타일(옵션) + QML/프리셋 내보내기 + DXF 코드 매핑(JSON) 커스터마이즈.
 - **지구화학도 래스터 수치화 (GeoChem WMS → Raster)**: WMS RGB(범례 기반) 수치화 → value/class 래스터 + (옵션) 구간별 폴리곤/중심점 생성.
-- **지질도 도엽 ZIP 로더 (KIGAM 1:50,000)**: ZIP에서 SHP 자동 로드 + sym 스타일/라벨 적용 + 벡터→래스터(MaxEnt/예측모델) 변환.
+- **지질도 도엽 ZIP 불러오기/래스터 변환 (KIGAM)**: KIGAM 1:50,000 지질도 ZIP에서 SHP 자동 로드 + sym 스타일/라벨 적용 + 벡터→래스터(MaxEnt/예측모델) 변환.
 - **AI 조사요약 (AOI Report)**: 조사지역(AOI) + 반경(m) 내 레이어 요약 → 보고서/업무 메모 문장 생성(무료: 로컬 요약 / 옵션: Gemini API / 통계 CSV·번들 저장).
 
 ## Kriging(Lite) (DEM 생성에서)
