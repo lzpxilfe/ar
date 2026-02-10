@@ -47,6 +47,7 @@ If you find this repository useful, please consider giving it a star and citing 
 - **지형 분석 (Terrain Analysis)**: 경사/사면방향/TRI/TPI/Roughness/Slope Position 분석 + 분류/스타일 적용.
 - **AHP 입지적합도 (AHP Suitability)**: 환경변수(래스터)들을 AHP(쌍대비교) 가중치로 통합해 입지 “적합도” 래스터를 생성(기본 0–1, 옵션 0–100). (CR>0.10이면 가중치 일관성 재검토 권장)
 - **경사도/사면방향 도면화 (Slope/Aspect Drafting)**: AOI 기준 인쇄용 경사 래스터 + 사면방향(방위각) 화살표 포인트 생성.
+- **트렌치 후보 제안 (Trench Suggestion)**: AOI 내 트렌치 폭/길이 조건으로 후보를 자동 제안(등고선 직교 기본, 평행 옵션, AHP/주변 유적 점수, 무덤/분묘 회피 보조).
 - **지형 단면 (Terrain Profile)**: 단면선 그리기/저장, 다중 프로파일, 지도-차트 연동(hover), AOI/벡터 오버레이 + 경사/누적상승/구간 통계 + CSV/이미지(PNG/JPG) export.
 
 ### 가시성

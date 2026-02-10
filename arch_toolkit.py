@@ -193,6 +193,17 @@ class ArchToolkit:
             )
             self.drafting_action.triggered.connect(self.run_drafting_tool)
 
+            # Trench suggestion (survey planning assistant)
+            trench_icon = os.path.join(plugin_dir, "trench.png")
+            if not os.path.exists(trench_icon):
+                trench_icon = os.path.join(plugin_dir, "icon.png")
+            self.trench_action = QAction(
+                QIcon(trench_icon),
+                u"트렌치 후보 제안 (Trench Suggestion)",
+                self.iface.mainWindow(),
+            )
+            self.trench_action.triggered.connect(self.run_trench_tool)
+
             # Viewshed Analysis
             viewshed_icon = os.path.join(plugin_dir, 'viewshed_icon.png')
             self.viewshed_action = QAction(QIcon(viewshed_icon), u"가시권 분석 (Viewshed Analysis)", self.iface.mainWindow())
@@ -213,7 +224,8 @@ class ArchToolkit:
             self.iface.addPluginToMenu(self.menu_name, self.style_action)
             self.iface.addPluginToMenu(self.menu_name, self.drafting_action)
             self.iface.addPluginToMenu(self.menu_name, self.viewshed_action)
-            # AI tools should sit at the bottom (separate from core analysis tools)
+            # AI/assistant tools should sit at the bottom.
+            self.iface.addPluginToMenu(self.menu_name, self.trench_action)
             self.iface.addPluginToMenu(self.menu_name, self.ai_report_action)
 
             # 3. Create Dedicated Toolbar for Visibility
@@ -243,6 +255,7 @@ class ArchToolkit:
             self.tool_menu.addAction(self.style_action)
             self.tool_menu.addAction(self.drafting_action)
             self.tool_menu.addSeparator()
+            self.tool_menu.addAction(self.trench_action)
             self.tool_menu.addAction(self.ai_report_action)
              
             self.main_action.setMenu(self.tool_menu)
@@ -258,7 +271,7 @@ class ArchToolkit:
             # Keep references for cleanup
             self.actions = [
                 self.dem_action, self.contour_action, self.cad_overlap_action, self.terrain_action, self.ahp_action, self.geochem_action, self.geology_zip_action,
-                self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.viewshed_action,
+                self.profile_action, self.cost_action, self.network_action, self.spatial_network_action, self.style_action, self.drafting_action, self.trench_action, self.viewshed_action,
                 self.ai_report_action,
                 self.main_action
             ]
@@ -447,6 +460,15 @@ class ArchToolkit:
         except Exception as e:
             log_exception("Slope/aspect drafting tool error", e)
             QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구를 여는 중 오류가 발생했습니다: {str(e)}")
+
+    def run_trench_tool(self):
+        try:
+            from .tools.trench_suggestion_dialog import TrenchSuggestionDialog
+            dlg = TrenchSuggestionDialog(self.iface)
+            dlg.exec_()
+        except Exception as e:
+            log_exception("Trench suggestion tool error", e)
+            QMessageBox.critical(self.iface.mainWindow(), "오류", f"도구 실행 중 오류가 발생했습니다: {str(e)}")
 
     def run_cost_tool(self):
         try:

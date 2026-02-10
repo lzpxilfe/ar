@@ -39,3 +39,7 @@ ENV/
 !tools/geochem.png
 temp_*/
 C:\Users\nuri9\.gemini\antigravity\scratch\fix_viewshed.py
+
+# Local private references (must never be committed)
+hidden/
+hidden/**
