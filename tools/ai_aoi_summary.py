@@ -416,6 +416,415 @@ def _vector_layer_stats_in_geom(
     return out
 
 
+def _pick_reference_name_field(layer: QgsVectorLayer, preferred: str = "") -> str:
+    if layer is None or not isinstance(layer, QgsVectorLayer):
+        return ""
+    pref = str(preferred or "").strip()
+    try:
+        if pref and layer.fields().indexFromName(pref) >= 0:
+            return pref
+    except Exception:
+        pass
+
+    try:
+        fields = [f.name() for f in layer.fields()]
+    except Exception:
+        fields = []
+    if not fields:
+        return ""
+
+    want = (
+        "name",
+        "site_name",
+        "title",
+        "label",
+        "유적명",
+        "명칭",
+        "문화재명",
+        "대상명",
+        "지명",
+    )
+    lower_map = {str(n).lower(): str(n) for n in fields}
+    for cand in want:
+        key = str(cand).lower()
+        if key in lower_map:
+            return lower_map[key]
+
+    try:
+        for f in layer.fields():
+            if int(f.type()) == int(QVariant.String):
+                return str(f.name() or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _feature_ref_name(feature, *, name_field: str) -> str:
+    if feature is None:
+        return ""
+    try:
+        if name_field:
+            v = feature[name_field]
+            if v is not None:
+                s = str(v).strip()
+                if s:
+                    return s
+    except Exception:
+        pass
+    try:
+        return f"FID {int(feature.id())}"
+    except Exception:
+        return "feature"
+
+
+def _extract_representative_point(geom: QgsGeometry) -> Optional[QgsPointXY]:
+    if geom is None or geom.isEmpty():
+        return None
+    try:
+        if geom.type() == QgsWkbTypes.PointGeometry:
+            if geom.isMultipart():
+                pts = geom.asMultiPoint()
+                if pts:
+                    return QgsPointXY(pts[0])
+            else:
+                return QgsPointXY(geom.asPoint())
+    except Exception:
+        pass
+
+    try:
+        p = geom.pointOnSurface()
+        if p is not None and (not p.isEmpty()):
+            return QgsPointXY(p.asPoint())
+    except Exception:
+        pass
+    try:
+        c = geom.centroid()
+        if c is not None and (not c.isEmpty()):
+            return QgsPointXY(c.asPoint())
+    except Exception:
+        pass
+    return None
+
+
+def _reference_sites_summary(
+    *,
+    layer: QgsVectorLayer,
+    aoi_geom: QgsGeometry,
+    buffer_geom: QgsGeometry,
+    aoi_centroid_pt: Optional[QgsPointXY],
+    aoi_crs,
+    selected_only: bool,
+    preferred_name_field: str = "",
+    max_features: int = 120,
+) -> Optional[Dict[str, Any]]:
+    if layer is None or not isinstance(layer, QgsVectorLayer):
+        return None
+    if aoi_geom is None or aoi_geom.isEmpty() or buffer_geom is None or buffer_geom.isEmpty():
+        return None
+
+    try:
+        g_aoi_on_layer = _transform_geom(aoi_geom, aoi_crs, layer.crs())
+        g_buf_on_layer = _transform_geom(buffer_geom, aoi_crs, layer.crs())
+    except Exception:
+        g_aoi_on_layer = None
+        g_buf_on_layer = None
+    if g_aoi_on_layer is None or g_aoi_on_layer.isEmpty() or g_buf_on_layer is None or g_buf_on_layer.isEmpty():
+        return None
+
+    # Small bbox pre-filter in source CRS.
+    try:
+        req = QgsFeatureRequest().setFilterRect(g_buf_on_layer.boundingBox())
+    except Exception:
+        req = QgsFeatureRequest()
+
+    selected_count = 0
+    try:
+        if selected_only:
+            selected_count = int(layer.selectedFeatureCount())
+            if selected_count > 0:
+                features = layer.selectedFeatures()
+            else:
+                # Respect "selected only": empty selection means empty result.
+                features = []
+        else:
+            features = layer.getFeatures(req)
+    except Exception:
+        try:
+            features = layer.getFeatures(req) if not selected_only else []
+        except Exception:
+            features = []
+
+    max_items = int(max(1, min(int(max_features), 2000)))
+    max_scan = int(max(max_items * 20, 500))
+
+    name_field = _pick_reference_name_field(layer, preferred=preferred_name_field)
+    da = _safe_distance_area(aoi_crs)
+
+    scanned = 0
+    kept = 0
+    counts = {
+        "inside_or_overlap_aoi": 0,
+        "inside_buffer_only": 0,
+        "outside_buffer": 0,
+        "inside_aoi": 0,
+        "crosses_aoi_boundary": 0,
+        "crosses_buffer_boundary": 0,
+    }
+    items: List[Dict[str, Any]] = []
+
+    for ft in features:
+        scanned += 1
+        if scanned > max_scan:
+            break
+
+        try:
+            g0 = ft.geometry()
+        except Exception:
+            continue
+        if g0 is None or g0.isEmpty():
+            continue
+
+        if not selected_only:
+            try:
+                if not g0.intersects(g_buf_on_layer):
+                    # When not using explicit selection, keep the scan focused around AOI.
+                    continue
+            except Exception:
+                pass
+
+        g = _transform_geom(g0, layer.crs(), aoi_crs)
+        if g is None or g.isEmpty():
+            continue
+
+        try:
+            intersects_aoi = bool(g.intersects(aoi_geom))
+        except Exception:
+            intersects_aoi = False
+        try:
+            within_aoi = bool(g.within(aoi_geom))
+        except Exception:
+            within_aoi = False
+        try:
+            intersects_buf = bool(g.intersects(buffer_geom))
+        except Exception:
+            intersects_buf = False
+        try:
+            within_buf = bool(g.within(buffer_geom))
+        except Exception:
+            within_buf = False
+
+        crosses_aoi_boundary = bool(intersects_aoi and (not within_aoi))
+        crosses_buffer_boundary = bool(intersects_buf and (not within_buf))
+
+        if within_aoi:
+            relation = "inside_aoi"
+            counts["inside_aoi"] += 1
+            counts["inside_or_overlap_aoi"] += 1
+        elif intersects_aoi:
+            relation = "crosses_aoi_boundary"
+            counts["crosses_aoi_boundary"] += 1
+            counts["inside_or_overlap_aoi"] += 1
+        elif within_buf:
+            relation = "inside_buffer_only"
+            counts["inside_buffer_only"] += 1
+        elif intersects_buf:
+            relation = "crosses_buffer_boundary"
+            counts["crosses_buffer_boundary"] += 1
+        else:
+            relation = "outside_buffer"
+            counts["outside_buffer"] += 1
+
+        try:
+            dist_to_aoi = 0.0 if intersects_aoi else float(g.distance(aoi_geom))
+            if not math.isfinite(dist_to_aoi):
+                dist_to_aoi = None
+        except Exception:
+            dist_to_aoi = None
+        try:
+            dist_to_buffer = 0.0 if intersects_buf else float(g.distance(buffer_geom))
+            if not math.isfinite(dist_to_buffer):
+                dist_to_buffer = None
+        except Exception:
+            dist_to_buffer = None
+
+        dist_to_centroid = None
+        if aoi_centroid_pt is not None:
+            try:
+                rp = _extract_representative_point(g)
+                if rp is not None:
+                    d0 = float(da.measureLine(aoi_centroid_pt, rp))
+                    if math.isfinite(d0):
+                        dist_to_centroid = d0
+            except Exception:
+                dist_to_centroid = None
+
+        feature_area_m2 = None
+        overlap_aoi_area_m2 = None
+        overlap_buffer_area_m2 = None
+        outside_aoi_area_m2 = None
+        outside_buffer_area_m2 = None
+        inside_aoi_area_pct = None
+        outside_aoi_area_pct = None
+        inside_buffer_area_pct = None
+        outside_buffer_area_pct = None
+
+        feature_length_m = None
+        overlap_aoi_length_m = None
+        overlap_buffer_length_m = None
+        outside_aoi_length_m = None
+        outside_buffer_length_m = None
+        inside_aoi_length_pct = None
+        outside_aoi_length_pct = None
+        inside_buffer_length_pct = None
+        outside_buffer_length_pct = None
+        try:
+            gt = int(g.type())
+        except Exception:
+            gt = -1
+        if gt == int(QgsWkbTypes.PolygonGeometry):
+            try:
+                feature_area_m2 = float(da.measureArea(g))
+            except Exception:
+                feature_area_m2 = None
+            try:
+                inter = g.intersection(aoi_geom)
+                if inter is not None and (not inter.isEmpty()):
+                    overlap_aoi_area_m2 = float(da.measureArea(inter))
+            except Exception:
+                overlap_aoi_area_m2 = None
+            try:
+                interb = g.intersection(buffer_geom)
+                if interb is not None and (not interb.isEmpty()):
+                    overlap_buffer_area_m2 = float(da.measureArea(interb))
+            except Exception:
+                overlap_buffer_area_m2 = None
+
+            try:
+                if feature_area_m2 is not None and feature_area_m2 > 0:
+                    in_aoi = float(overlap_aoi_area_m2 or 0.0)
+                    in_buf = float(overlap_buffer_area_m2 or 0.0)
+                    outside_aoi_area_m2 = max(0.0, float(feature_area_m2) - in_aoi)
+                    outside_buffer_area_m2 = max(0.0, float(feature_area_m2) - in_buf)
+                    inside_aoi_area_pct = max(0.0, min(100.0, (in_aoi / float(feature_area_m2)) * 100.0))
+                    outside_aoi_area_pct = max(0.0, min(100.0, (outside_aoi_area_m2 / float(feature_area_m2)) * 100.0))
+                    inside_buffer_area_pct = max(0.0, min(100.0, (in_buf / float(feature_area_m2)) * 100.0))
+                    outside_buffer_area_pct = max(0.0, min(100.0, (outside_buffer_area_m2 / float(feature_area_m2)) * 100.0))
+            except Exception:
+                pass
+        elif gt == int(QgsWkbTypes.LineGeometry):
+            try:
+                feature_length_m = float(da.measureLength(g))
+            except Exception:
+                feature_length_m = None
+            try:
+                inter = g.intersection(aoi_geom)
+                if inter is not None and (not inter.isEmpty()):
+                    overlap_aoi_length_m = float(da.measureLength(inter))
+            except Exception:
+                overlap_aoi_length_m = None
+            try:
+                interb = g.intersection(buffer_geom)
+                if interb is not None and (not interb.isEmpty()):
+                    overlap_buffer_length_m = float(da.measureLength(interb))
+            except Exception:
+                overlap_buffer_length_m = None
+
+            try:
+                if feature_length_m is not None and feature_length_m > 0:
+                    in_aoi_l = float(overlap_aoi_length_m or 0.0)
+                    in_buf_l = float(overlap_buffer_length_m or 0.0)
+                    outside_aoi_length_m = max(0.0, float(feature_length_m) - in_aoi_l)
+                    outside_buffer_length_m = max(0.0, float(feature_length_m) - in_buf_l)
+                    inside_aoi_length_pct = max(0.0, min(100.0, (in_aoi_l / float(feature_length_m)) * 100.0))
+                    outside_aoi_length_pct = max(0.0, min(100.0, (outside_aoi_length_m / float(feature_length_m)) * 100.0))
+                    inside_buffer_length_pct = max(0.0, min(100.0, (in_buf_l / float(feature_length_m)) * 100.0))
+                    outside_buffer_length_pct = max(0.0, min(100.0, (outside_buffer_length_m / float(feature_length_m)) * 100.0))
+            except Exception:
+                pass
+
+        item = {
+            "fid": int(ft.id()) if hasattr(ft, "id") else None,
+            "name": _feature_ref_name(ft, name_field=name_field),
+            "relation": relation,
+            "crosses_aoi_boundary": crosses_aoi_boundary,
+            "crosses_buffer_boundary": crosses_buffer_boundary,
+            "inside_or_overlap_aoi": bool(intersects_aoi or within_aoi),
+            "inside_or_overlap_buffer": bool(intersects_buf or within_buf),
+            "distance_to_aoi_m": dist_to_aoi,
+            "distance_to_buffer_m": dist_to_buffer,
+            "distance_to_aoi_centroid_m": dist_to_centroid,
+        }
+        try:
+            item["wkb"] = QgsWkbTypes.displayString(layer.wkbType())
+        except Exception:
+            pass
+        if overlap_aoi_area_m2 is not None:
+            item["overlap_aoi_area_m2"] = overlap_aoi_area_m2
+        if overlap_buffer_area_m2 is not None:
+            item["overlap_buffer_area_m2"] = overlap_buffer_area_m2
+        if feature_area_m2 is not None:
+            item["feature_area_m2"] = feature_area_m2
+        if outside_aoi_area_m2 is not None:
+            item["outside_aoi_area_m2"] = outside_aoi_area_m2
+        if outside_buffer_area_m2 is not None:
+            item["outside_buffer_area_m2"] = outside_buffer_area_m2
+        if inside_aoi_area_pct is not None:
+            item["inside_aoi_area_pct"] = inside_aoi_area_pct
+        if outside_aoi_area_pct is not None:
+            item["outside_aoi_area_pct"] = outside_aoi_area_pct
+        if inside_buffer_area_pct is not None:
+            item["inside_buffer_area_pct"] = inside_buffer_area_pct
+        if outside_buffer_area_pct is not None:
+            item["outside_buffer_area_pct"] = outside_buffer_area_pct
+        if overlap_aoi_length_m is not None:
+            item["overlap_aoi_length_m"] = overlap_aoi_length_m
+        if overlap_buffer_length_m is not None:
+            item["overlap_buffer_length_m"] = overlap_buffer_length_m
+        if feature_length_m is not None:
+            item["feature_length_m"] = feature_length_m
+        if outside_aoi_length_m is not None:
+            item["outside_aoi_length_m"] = outside_aoi_length_m
+        if outside_buffer_length_m is not None:
+            item["outside_buffer_length_m"] = outside_buffer_length_m
+        if inside_aoi_length_pct is not None:
+            item["inside_aoi_length_pct"] = inside_aoi_length_pct
+        if outside_aoi_length_pct is not None:
+            item["outside_aoi_length_pct"] = outside_aoi_length_pct
+        if inside_buffer_length_pct is not None:
+            item["inside_buffer_length_pct"] = inside_buffer_length_pct
+        if outside_buffer_length_pct is not None:
+            item["outside_buffer_length_pct"] = outside_buffer_length_pct
+
+        items.append(item)
+        kept += 1
+        if kept >= max_items:
+            break
+
+    try:
+        items.sort(
+            key=lambda d: (
+                float(d.get("distance_to_aoi_m")) if d.get("distance_to_aoi_m") is not None else float("inf"),
+                str(d.get("name") or ""),
+            )
+        )
+    except Exception:
+        pass
+
+    return {
+        "layer_id": str(layer.id() or ""),
+        "layer_name": str(layer.name() or ""),
+        "selected_only": bool(selected_only),
+        "selected_feature_count": int(selected_count),
+        "name_field": str(name_field or ""),
+        "feature_count": int(kept),
+        "scanned": int(scanned),
+        "counts": counts,
+        "items": items,
+        "max_features": int(max_items),
+        "truncated": bool(kept >= max_items),
+    }
+
+
 def _raster_stats_in_geom(
     raster_path: str,
     geom: QgsGeometry,
@@ -594,6 +1003,10 @@ def build_aoi_context(
     exclude_styling_layers: bool = False,
     layer_ids: Optional[List[str]] = None,
     group_path_prefix: Optional[str] = None,
+    reference_layer: Optional[QgsVectorLayer] = None,
+    reference_selected_only: bool = False,
+    reference_name_field: str = "",
+    reference_max_features: int = 120,
     max_layers: int = 40,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if aoi_layer is None or aoi_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
@@ -751,6 +1164,22 @@ def build_aoi_context(
         if len(summaries) >= int(max_layers):
             break
 
+    reference_sites = None
+    if reference_layer is not None and isinstance(reference_layer, QgsVectorLayer):
+        try:
+            reference_sites = _reference_sites_summary(
+                layer=reference_layer,
+                aoi_geom=aoi_geom,
+                buffer_geom=buf_geom,
+                aoi_centroid_pt=aoi_centroid_pt,
+                aoi_crs=aoi_crs,
+                selected_only=bool(reference_selected_only),
+                preferred_name_field=str(reference_name_field or ""),
+                max_features=int(reference_max_features),
+            )
+        except Exception:
+            reference_sites = None
+
     ctx: Dict[str, Any] = {
         "aoi": {
             "layer_name": aoi_layer.name(),
@@ -768,9 +1197,15 @@ def build_aoi_context(
             "layer_scope": "layers" if layer_ids else "group" if group_prefix else "auto",
             "group_path_prefix": group_prefix or None,
             "layer_ids_count": int(len(layer_ids)) if layer_ids else None,
+            "reference_sites_enabled": bool(reference_sites is not None),
+            "reference_selected_only": bool(reference_selected_only),
+            "reference_name_field": str(reference_name_field or ""),
+            "reference_max_features": int(reference_max_features),
             "max_layers": int(max_layers),
         },
     }
+    if reference_sites is not None:
+        ctx["reference_sites"] = reference_sites
 
     try:
         log_message(f"AI AOI summary: layers={len(summaries)} (archtoolkit_only={only_archtoolkit_layers})", level=Qgis.Info)

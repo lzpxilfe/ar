@@ -160,6 +160,7 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         self._refresh_key_status()
         self._refresh_group_list()
         self._update_layer_scope_ui()
+        self._update_reference_ui()
 
     def _settings_get(self, key: str, default=None):
         try:
@@ -193,6 +194,56 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             return str(v or "").strip()
         except Exception:
             return ""
+
+    def _reference_enabled(self) -> bool:
+        try:
+            return bool(self.chkReferenceSites.isChecked())
+        except Exception:
+            return False
+
+    def _get_reference_name_field(self) -> str:
+        try:
+            v = self.cmbReferenceNameField.currentData()
+            return str(v or "").strip()
+        except Exception:
+            return ""
+
+    def _set_busy_state(self, busy: bool, *, message: str = "") -> None:
+        try:
+            self.btnGenerate.setEnabled(not busy)
+            self.btnBundle.setEnabled(not busy)
+            self.btnExportCsv.setEnabled(not busy)
+            self.btnExport.setEnabled(not busy)
+            self.btnClose.setEnabled(not busy)
+        except Exception:
+            pass
+        try:
+            self.lblBusy.setVisible(bool(busy))
+            self.prgBusy.setVisible(bool(busy))
+        except Exception:
+            pass
+        if busy and message:
+            try:
+                self.lblBusy.setText(str(message))
+            except Exception:
+                pass
+        if (not busy) and hasattr(self, "lblBusy"):
+            try:
+                self.lblBusy.setText("")
+            except Exception:
+                pass
+        try:
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            pass
+
+    def _set_busy_message(self, message: str) -> None:
+        try:
+            if self.prgBusy.isVisible():
+                self.lblBusy.setText(str(message or "처리 중…"))
+                QtWidgets.QApplication.processEvents()
+        except Exception:
+            pass
 
     def _setup_ui(self):
         self.setWindowTitle("AI 조사요약 (AOI Report) - ArchToolkit")
@@ -297,6 +348,40 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         row_layers.addWidget(self.lblSelectedLayers, 1)
         form.addRow("대상 레이어:", w_layers)
 
+        self.chkReferenceSites = QtWidgets.QCheckBox("추가 유적(관계 분석) 포함")
+        saved_ref_on = str(self._settings_get("reference_enabled", "0") or "0").strip().lower() in ("1", "true", "yes", "on")
+        self.chkReferenceSites.setChecked(saved_ref_on)
+        self.chkReferenceSites.toggled.connect(self._on_reference_option_changed)
+        form.addRow("", self.chkReferenceSites)
+
+        self.cmbReferenceLayer = QgsMapLayerComboBox(grp_in)
+        try:
+            vec_filter = QgsMapLayerProxyModel.Filter.VectorLayer
+        except Exception:
+            vec_filter = QgsMapLayerProxyModel.VectorLayer
+        self.cmbReferenceLayer.setFilters(vec_filter)
+        self.cmbReferenceLayer.layerChanged.connect(self._on_reference_layer_changed)
+        form.addRow("추가 유적 레이어:", self.cmbReferenceLayer)
+
+        self.chkReferenceSelectedOnly = QtWidgets.QCheckBox("추가 유적: 선택 피처만 사용")
+        saved_ref_sel = str(self._settings_get("reference_selected_only", "0") or "0").strip().lower() in ("1", "true", "yes", "on")
+        self.chkReferenceSelectedOnly.setChecked(saved_ref_sel)
+        self.chkReferenceSelectedOnly.toggled.connect(self._on_reference_option_changed)
+        form.addRow("", self.chkReferenceSelectedOnly)
+
+        self.cmbReferenceNameField = QtWidgets.QComboBox()
+        self.cmbReferenceNameField.currentIndexChanged.connect(self._on_reference_option_changed)
+        form.addRow("추가 유적 이름 필드:", self.cmbReferenceNameField)
+
+        self.spinReferenceMax = QtWidgets.QSpinBox()
+        self.spinReferenceMax.setRange(1, 2000)
+        try:
+            self.spinReferenceMax.setValue(int(self._settings_get("reference_max_features", 120) or 120))
+        except Exception:
+            self.spinReferenceMax.setValue(120)
+        self.spinReferenceMax.valueChanged.connect(self._on_reference_option_changed)
+        form.addRow("추가 유적 최대 개수:", self.spinReferenceMax)
+
         layout.addWidget(grp_in)
 
         grp_ai = QtWidgets.QGroupBox("2. AI 설정")
@@ -350,6 +435,14 @@ class AiAoiReportDialog(QtWidgets.QDialog):
 
         grp_out = QtWidgets.QGroupBox("3. 결과")
         v = QtWidgets.QVBoxLayout(grp_out)
+        self.lblBusy = QtWidgets.QLabel("")
+        self.lblBusy.setStyleSheet("color:#455a64;")
+        self.lblBusy.setVisible(False)
+        v.addWidget(self.lblBusy)
+        self.prgBusy = QtWidgets.QProgressBar()
+        self.prgBusy.setRange(0, 0)
+        self.prgBusy.setVisible(False)
+        v.addWidget(self.prgBusy)
         self.txtOutput = QtWidgets.QTextEdit()
         self.txtOutput.setReadOnly(True)
         self.txtOutput.setPlaceholderText("여기에 AI 보고서가 생성됩니다.")
@@ -490,6 +583,56 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         self._selected_layer_ids = []
         self._update_selected_layers_label()
 
+    def _refresh_reference_name_fields(self):
+        keep = str(self._settings_get("reference_name_field", "") or "").strip()
+        layer = self.cmbReferenceLayer.currentLayer()
+        self.cmbReferenceNameField.blockSignals(True)
+        try:
+            self.cmbReferenceNameField.clear()
+            self.cmbReferenceNameField.addItem("(자동 선택)", "")
+            if layer is not None and isinstance(layer, QgsVectorLayer):
+                try:
+                    for f in layer.fields():
+                        fn = str(f.name() or "").strip()
+                        if fn:
+                            self.cmbReferenceNameField.addItem(fn, fn)
+                except Exception:
+                    pass
+            if keep:
+                idx = self.cmbReferenceNameField.findData(keep)
+                if idx >= 0:
+                    self.cmbReferenceNameField.setCurrentIndex(idx)
+        finally:
+            self.cmbReferenceNameField.blockSignals(False)
+
+    def _update_reference_ui(self):
+        enabled = self._reference_enabled()
+        try:
+            self.cmbReferenceLayer.setEnabled(enabled)
+            self.chkReferenceSelectedOnly.setEnabled(enabled)
+            self.cmbReferenceNameField.setEnabled(enabled)
+            self.spinReferenceMax.setEnabled(enabled)
+        except Exception:
+            pass
+        self._refresh_reference_name_fields()
+
+    def _on_reference_layer_changed(self, _layer=None):
+        self._refresh_reference_name_fields()
+        self._on_reference_option_changed()
+
+    def _on_reference_option_changed(self, *_args):
+        try:
+            self._settings_set("reference_enabled", "1" if self._reference_enabled() else "0")
+            self._settings_set(
+                "reference_selected_only",
+                "1" if bool(self.chkReferenceSelectedOnly.isChecked()) else "0",
+            )
+            self._settings_set("reference_name_field", self._get_reference_name_field())
+            self._settings_set("reference_max_features", int(self.spinReferenceMax.value()))
+        except Exception:
+            pass
+        self._update_reference_ui()
+
     def _on_provider_changed(self):
         provider = self._get_provider()
         self._settings_set("provider", provider)
@@ -563,6 +706,8 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             "- 가능하면 `archtoolkit.tool_id/kind/units/run_id`를 우선 사용해 레이어 의미를 해석하세요.\n"
             "- 메타데이터가 있는 경우, 레이어 이름만 보고 임의로 의미를 추측하지 마세요.\n"
             "- 동일 `run_id`는 같은 도구 실행(run)에서 나온 결과이므로 묶어서 설명해도 됩니다.\n"
+            "- JSON에 `reference_sites`가 있으면, AOI와 특정 유적 간 관계(내부/버퍼 내/거리/중첩)를 별도 소제목으로 설명하세요.\n"
+            "- 대형 폴리곤/선형 유적은 `inside/outside` 면적·길이 필드를 사용해 AOI 내부/외부를 분리해서 설명하세요.\n"
             "\n"
             "요청:\n"
             "1) 한국어로, 보고서/업무 메모 형태로 정리해 주세요.\n"
@@ -596,12 +741,18 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         *,
         aoi_layer,
         selected_only: bool,
+        aoi_selection_sig,
         radius_m: float,
         only_arch: bool,
         exclude_styling: bool,
         scope: str,
         target_group: str,
         layer_ids,
+        reference_layer_id: str,
+        reference_selected_only: bool,
+        reference_selection_sig,
+        reference_name_field: str,
+        reference_max_features: int,
         max_layers: int,
     ):
         try:
@@ -619,12 +770,18 @@ class AiAoiReportDialog(QtWidgets.QDialog):
         return (
             aoi_id,
             bool(selected_only),
+            aoi_selection_sig,
             r0,
             bool(only_arch),
             bool(exclude_styling),
             str(scope or ""),
             str(target_group or ""),
             lids,
+            str(reference_layer_id or ""),
+            bool(reference_selected_only),
+            reference_selection_sig,
+            str(reference_name_field or ""),
+            int(reference_max_features),
             int(max_layers),
         )
 
@@ -635,6 +792,12 @@ class AiAoiReportDialog(QtWidgets.QDialog):
 
         radius_m = float(self.spinRadius.value())
         selected_only = bool(self.chkSelectedOnly.isChecked())
+        aoi_selection_sig = None
+        if selected_only:
+            try:
+                aoi_selection_sig = tuple(sorted(int(x) for x in list(aoi_layer.selectedFeatureIds())))
+            except Exception:
+                aoi_selection_sig = None
         only_arch = bool(self.chkOnlyArchToolkit.isChecked())
         exclude_styling = bool(self.chkExcludeStyling.isChecked())
 
@@ -654,15 +817,52 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             layer_ids = list(self._selected_layer_ids)
             only_arch = False
 
+        reference_layer = None
+        reference_layer_id = ""
+        reference_selected_only = False
+        reference_selection_sig = None
+        reference_name_field = ""
+        reference_max_features = 120
+        if self._reference_enabled():
+            reference_layer = self.cmbReferenceLayer.currentLayer()
+            if reference_layer is None or not isinstance(reference_layer, QgsVectorLayer):
+                return None, "추가 유적(관계 분석) 레이어를 선택하세요."
+            try:
+                reference_layer_id = str(reference_layer.id() or "")
+            except Exception:
+                reference_layer_id = ""
+            reference_selected_only = bool(self.chkReferenceSelectedOnly.isChecked())
+            if reference_selected_only:
+                try:
+                    reference_selection_sig = tuple(sorted(int(x) for x in list(reference_layer.selectedFeatureIds())))
+                except Exception:
+                    reference_selection_sig = None
+            reference_name_field = self._get_reference_name_field()
+            try:
+                if reference_name_field and reference_layer.fields().indexFromName(reference_name_field) < 0:
+                    reference_name_field = ""
+            except Exception:
+                reference_name_field = ""
+            try:
+                reference_max_features = int(self.spinReferenceMax.value())
+            except Exception:
+                reference_max_features = 120
+
         key = self._make_ctx_key(
             aoi_layer=aoi_layer,
             selected_only=selected_only,
+            aoi_selection_sig=aoi_selection_sig,
             radius_m=radius_m,
             only_arch=only_arch,
             exclude_styling=exclude_styling,
             scope=scope,
             target_group=target_group,
             layer_ids=layer_ids,
+            reference_layer_id=reference_layer_id,
+            reference_selected_only=reference_selected_only,
+            reference_selection_sig=reference_selection_sig,
+            reference_name_field=reference_name_field,
+            reference_max_features=reference_max_features,
             max_layers=max_layers,
         )
         if self._last_ctx is not None and self._last_ctx_key == key:
@@ -676,6 +876,10 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             exclude_styling_layers=exclude_styling,
             layer_ids=layer_ids,
             group_path_prefix=target_group or None,
+            reference_layer=reference_layer,
+            reference_selected_only=reference_selected_only,
+            reference_name_field=reference_name_field,
+            reference_max_features=reference_max_features,
             max_layers=int(max_layers),
         )
         if err:
@@ -708,79 +912,83 @@ class AiAoiReportDialog(QtWidgets.QDialog):
 
             model = str(self.txtModel.text() or "").strip() or ai_gemini.get_configured_model()
 
+        self._set_busy_state(True, message="AOI 컨텍스트 수집 중… 잠시만 기다려주세요.")
         try:
-            ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
-        except Exception:
-            pass
-
-        push_message(self.iface, "AI 요약", "AOI 주변 레이어 요약 생성 중…", level=0, duration=4)
-        ctx, err = self._get_or_build_ctx(max_layers=40, prompt_select_layers=True)
-        if err or not ctx:
-            push_message(self.iface, "오류", err or "AOI 요약 컨텍스트를 만들 수 없습니다.", level=2, duration=8)
-            return
-
-        try:
-            self._last_provider = str(provider or "")
-        except Exception:
-            self._last_provider = ""
-        try:
-            self._last_model = str(model or "")
-        except Exception:
-            self._last_model = ""
-        try:
-            self._last_generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            self._last_generated_at = ""
-
-        if not is_gemini:
             try:
-                text = ai_local_summarizer.generate_report(ctx)
-            except Exception as e:
-                push_message(self.iface, "오류", f"로컬 요약 생성 실패: {e}", level=2, duration=8)
+                ensure_live_log_dialog(self.iface, owner=self, show=True, clear=True)
+            except Exception:
+                pass
+
+            push_message(self.iface, "AI 요약", "AOI 주변 레이어 요약 생성 중…", level=0, duration=4)
+            ctx, err = self._get_or_build_ctx(max_layers=40, prompt_select_layers=True)
+            if err or not ctx:
+                push_message(self.iface, "오류", err or "AOI 요약 컨텍스트를 만들 수 없습니다.", level=2, duration=8)
+                return
+
+            try:
+                self._last_provider = str(provider or "")
+            except Exception:
+                self._last_provider = ""
+            try:
+                self._last_model = str(model or "")
+            except Exception:
+                self._last_model = ""
+            try:
+                self._last_generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                self._last_generated_at = ""
+
+            if not is_gemini:
+                self._set_busy_message("로컬 요약 문장 생성 중…")
+                try:
+                    text = ai_local_summarizer.generate_report(ctx)
+                except Exception as e:
+                    push_message(self.iface, "오류", f"로컬 요약 생성 실패: {e}", level=2, duration=8)
+                    return
+
+                self.txtOutput.setPlainText(text or "")
+                self._last_report_text = str(text or "")
+                push_message(self.iface, "AI 요약", "완료 (로컬)", level=0, duration=4)
+                return
+
+            prompt = self._build_prompt(ctx)
+            self._set_busy_message("Gemini 호출 중… (최대 약 45초)")
+            push_message(self.iface, "AI 요약", "Gemini 호출 중…(데이터 요약/레이어명만 전송)", level=0, duration=5)
+            QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                text, api_err = ai_gemini.generate_text(
+                    api_key=str(api_key or ""),
+                    model=str(model or ""),
+                    prompt=prompt,
+                    temperature=0.2,
+                    max_output_tokens=1400,
+                    timeout_ms=45000,
+                )
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+
+            if api_err:
+                log_message(f"Gemini error: {api_err}", level=2)
+                push_message(self.iface, "오류", f"Gemini 호출 실패: {api_err}", level=2, duration=10)
+                # Fallback to local report so user still gets something usable.
+                self._set_busy_message("Gemini 실패 → 로컬 요약으로 대체 중…")
+                try:
+                    fallback = ai_local_summarizer.generate_report(ctx)
+                    if fallback:
+                        self.txtOutput.setPlainText(
+                            "※ Gemini 호출 실패로 로컬 요약으로 대체했습니다.\n\n" + str(fallback)
+                        )
+                        self._last_report_text = str(fallback or "")
+                        push_message(self.iface, "AI 요약", "로컬 요약으로 대체 완료", level=1, duration=6)
+                except Exception:
+                    pass
                 return
 
             self.txtOutput.setPlainText(text or "")
             self._last_report_text = str(text or "")
-            push_message(self.iface, "AI 요약", "완료 (로컬)", level=0, duration=4)
-            return
-
-        prompt = self._build_prompt(ctx)
-
-        push_message(self.iface, "AI 요약", "Gemini 호출 중…(데이터 요약/레이어명만 전송)", level=0, duration=5)
-        self.setEnabled(False)
-        QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            text, api_err = ai_gemini.generate_text(
-                api_key=str(api_key or ""),
-                model=str(model or ""),
-                prompt=prompt,
-                temperature=0.2,
-                max_output_tokens=1400,
-                timeout_ms=45000,
-            )
+            push_message(self.iface, "AI 요약", "완료", level=0, duration=4)
         finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
-            self.setEnabled(True)
-
-        if api_err:
-            log_message(f"Gemini error: {api_err}", level=2)
-            push_message(self.iface, "오류", f"Gemini 호출 실패: {api_err}", level=2, duration=10)
-            # Fallback to local report so user still gets something usable.
-            try:
-                fallback = ai_local_summarizer.generate_report(ctx)
-                if fallback:
-                    self.txtOutput.setPlainText(
-                        "※ Gemini 호출 실패로 로컬 요약으로 대체했습니다.\n\n" + str(fallback)
-                    )
-                    self._last_report_text = str(fallback or "")
-                    push_message(self.iface, "AI 요약", "로컬 요약으로 대체 완료", level=1, duration=6)
-            except Exception:
-                pass
-            return
-
-        self.txtOutput.setPlainText(text or "")
-        self._last_report_text = str(text or "")
-        push_message(self.iface, "AI 요약", "완료", level=0, duration=4)
+            self._set_busy_state(False)
 
     def _on_help(self):
         html = (
@@ -797,6 +1005,9 @@ class AiAoiReportDialog(QtWidgets.QDialog):
             "- 현재 QGIS 프로젝트의 레이어 중 AOI 버퍼와 겹치는 레이어를 스캔합니다.<br>"
             "- 벡터: 피처 수, (가능하면) 길이/면적 합, 일부 필드 분포(상위 값).<br>"
             "- 래스터: min/mean/max 등 단순 통계(가능하면).<br><br>"
+            "<b>추가 유적(관계 분석)</b><br>"
+            "- AOI 외에 특정 유적 레이어를 추가하면, AOI 대비 내부/버퍼 내/거리/중첩 정보를 함께 요약합니다.<br>"
+            "- 특정 유적만 보고 싶다면 지도에서 해당 피처를 선택한 뒤 `추가 유적: 선택 피처만 사용`을 켜세요.<br><br>"
             "<b>모든 분석을 AI가 답변할 수 있나요?</b><br>"
             "원칙적으로 ‘결과가 레이어(래스터/벡터)로 존재’하면 요약에 포함될 수 있습니다. "
             "다만 현재는 <b>도구별 의미(예: 가시비율, corridor 면적 등)를 완벽히 해석하는 단계까지는 아닙니다</b> — "

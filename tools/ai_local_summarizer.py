@@ -119,6 +119,97 @@ def _layer_stats_lines(layer: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _reference_sites_lines(ctx: Dict[str, Any]) -> List[str]:
+    ref = ctx.get("reference_sites") or {}
+    if not isinstance(ref, dict) or not ref:
+        return ["- (추가 유적 관계 분석 미사용)"]
+
+    layer_name = str(ref.get("layer_name") or "").strip()
+    feature_count = int(ref.get("feature_count") or 0)
+    scanned = int(ref.get("scanned") or 0)
+    name_field = str(ref.get("name_field") or "").strip()
+    counts = ref.get("counts") or {}
+    if not isinstance(counts, dict):
+        counts = {}
+    items = ref.get("items") or []
+    if not isinstance(items, list):
+        items = []
+
+    out: List[str] = []
+    out.append(f"- 레이어: `{layer_name or '(이름 없음)'}`")
+    out.append(f"- 유적 수: {_fmt_int(feature_count)} (스캔 {_fmt_int(scanned)})")
+    if name_field:
+        out.append(f"- 이름 필드: `{name_field}`")
+    out.append(
+        "- 분류: AOI 내부/중첩="
+        f"{_fmt_int(counts.get('inside_or_overlap_aoi'))}, "
+        "AOI 내부="
+        f"{_fmt_int(counts.get('inside_aoi'))}, "
+        "AOI 경계걸침="
+        f"{_fmt_int(counts.get('crosses_aoi_boundary'))}, "
+        "AOI 버퍼 내(외부)="
+        f"{_fmt_int(counts.get('inside_buffer_only'))}, "
+        "버퍼 경계걸침="
+        f"{_fmt_int(counts.get('crosses_buffer_boundary'))}, "
+        "버퍼 밖="
+        f"{_fmt_int(counts.get('outside_buffer'))}"
+    )
+
+    if not items:
+        out.append("- (관계 계산된 유적이 없습니다)")
+        return out
+
+    out.append("- 주요 유적 관계(가까운 순):")
+    for d in items[:20]:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name") or "").strip() or "(이름 없음)"
+        rel = str(d.get("relation") or "").strip()
+        rel_ko = {
+            "inside_or_overlap_aoi": "AOI 내부/중첩",
+            "inside_aoi": "AOI 내부",
+            "crosses_aoi_boundary": "AOI 경계 걸침(내/외부 혼합)",
+            "inside_buffer_only": "AOI 버퍼 내(외부)",
+            "crosses_buffer_boundary": "AOI 버퍼 경계 걸침",
+            "outside_buffer": "AOI 버퍼 밖",
+        }.get(rel, rel or "-")
+        dist = _fmt_float(d.get("distance_to_aoi_m"), digits=1)
+        dc = _fmt_float(d.get("distance_to_aoi_centroid_m"), digits=1)
+        extra = []
+        if "overlap_aoi_area_m2" in d:
+            extra.append(f"AOI중첩면적={_fmt_float(d.get('overlap_aoi_area_m2'), digits=1)}㎡")
+        if "overlap_aoi_length_m" in d:
+            extra.append(f"AOI중첩길이={_fmt_float(d.get('overlap_aoi_length_m'), digits=1)}m")
+        if "feature_area_m2" in d:
+            extra.append(
+                "AOI내부="
+                f"{_fmt_float(d.get('overlap_aoi_area_m2'), digits=1)}㎡"
+                f"({ _fmt_float(d.get('inside_aoi_area_pct'), digits=1) }%)"
+            )
+            extra.append(
+                "AOI외부="
+                f"{_fmt_float(d.get('outside_aoi_area_m2'), digits=1)}㎡"
+                f"({ _fmt_float(d.get('outside_aoi_area_pct'), digits=1) }%)"
+            )
+        if "feature_length_m" in d:
+            extra.append(
+                "AOI내부길이="
+                f"{_fmt_float(d.get('overlap_aoi_length_m'), digits=1)}m"
+                f"({ _fmt_float(d.get('inside_aoi_length_pct'), digits=1) }%)"
+            )
+            extra.append(
+                "AOI외부길이="
+                f"{_fmt_float(d.get('outside_aoi_length_m'), digits=1)}m"
+                f"({ _fmt_float(d.get('outside_aoi_length_pct'), digits=1) }%)"
+            )
+        suffix = f" / {', '.join(extra)}" if extra else ""
+        out.append(f"  - {name}: {rel_ko}, AOI경계거리={dist}m, AOI중심거리={dc}m{suffix}")
+
+    if bool(ref.get("truncated")):
+        out.append("- (표시 개수 제한으로 일부 유적은 생략됨)")
+    return out
+
+
 def generate_report(ctx: Dict[str, Any]) -> str:
     aoi = ctx.get("aoi") or {}
     layers = ctx.get("layers") or []
@@ -213,8 +304,13 @@ def generate_report(ctx: Dict[str, Any]) -> str:
             out.extend(_layer_stats_lines(lyr))
             out.append("")
 
-    # 3) Key observations (heuristic)
-    out.append("## 3) 핵심 관찰(로컬 자동 요약)")
+    # 3) Optional reference-site relation
+    out.append("## 3) 추가 유적 관계")
+    out.extend(_reference_sites_lines(ctx))
+    out.append("")
+
+    # 4) Key observations (heuristic)
+    out.append("## 4) 핵심 관찰(로컬 자동 요약)")
     observations: List[str] = []
     try:
         # Find the biggest vector layer by feature count
@@ -252,15 +348,15 @@ def generate_report(ctx: Dict[str, Any]) -> str:
     out.extend(observations)
     out.append("")
 
-    # 4) Limits
-    out.append("## 4) 한계/주의")
+    # 5) Limits
+    out.append("## 5) 한계/주의")
     out.append("- 이 보고서는 **외부 AI를 호출하지 않는 로컬 요약**입니다(문장 품질/해석은 제한적).")
     out.append("- 통계는 AOI 버퍼와의 교차/표본 기반이며, 레이어 품질(좌표계/해상도/NoData)에 따라 달라질 수 있습니다.")
     out.append("- 레이어가 많거나(레이어 cap), 피처가 매우 많으면(스캔 cap) 일부만 반영되었을 수 있습니다.")
     out.append("")
 
-    # 5) Next steps
-    out.append("## 5) 다음 단계 제안")
+    # 6) Next steps
+    out.append("## 6) 다음 단계 제안")
     out.append("- 필요하면 `AI 모드: Gemini(API)`로 전환해 더 자연어 중심의 보고서 문장을 생성합니다.")
     out.append("- 해석에 중요한 레이어는 이름/그룹을 정리하고(민감정보 제거) 다시 요약을 생성합니다.")
     out.append("- 최종 보고서에는 원자료/방법/좌표계/해상도 등을 함께 기록하세요.")
